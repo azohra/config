@@ -1,0 +1,137 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"slices"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+
+	config "github.com/azohra/config/internal/config"
+	"github.com/azohra/config/internal/ui"
+)
+
+const usage = `config — keep this Mac and its snapshot in sync
+
+Usage:
+  config
+  config --status
+  config --version
+  config update
+  config bootstrap <repository>
+
+Config inspects first, proposes a plan, requires explicit choices for app state,
+then offers to commit and push the resulting snapshot.
+
+Bootstrap clones an authenticated Git repository into Config's managed storage
+and restores it only when that clone was created by the current invocation.
+
+Update asks the canonical mise to update itself, declared tools, packages, and
+clean repositories. It runs only when explicitly invoked.`
+
+var version = "dev"
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Println("config", version)
+		return nil
+	}
+	if len(args) > 0 && slices.Contains([]string{"-h", "--help", "help"}, args[0]) {
+		if len(args) != 1 {
+			return errors.New("help takes no arguments")
+		}
+		fmt.Println(usage)
+		return nil
+	}
+	paths, err := config.NewPaths("", "")
+	if err != nil {
+		return err
+	}
+	var machine config.Machine
+	fresh := false
+	if len(args) > 0 && args[0] == "bootstrap" {
+		if len(args) != 2 {
+			return errors.New("usage: config bootstrap <repository>")
+		}
+		machine, fresh, err = config.MaterializeRepository(paths, args[1], os.Stdout, os.Stderr)
+		args = nil
+	} else {
+		machine, err = config.LoadMachine(paths)
+	}
+	if err != nil {
+		return err
+	}
+	runner := config.NewMachineRunner(paths)
+	if fresh {
+		return config.RestoreFresh(paths, machine, os.Stdout)
+	}
+	if len(args) > 0 {
+		switch args[0] {
+		case "--status":
+			if len(args) != 1 {
+				return fmt.Errorf("unknown option: %s", args[1])
+			}
+			report := config.NewInspector(paths, machine, runner).Inspect()
+			config.WriteStatus(os.Stdout, report)
+			failures, decisions, _ := report.Counts()
+			if failures > 0 || decisions > 0 {
+				return errors.New("configuration needs attention")
+			}
+			return nil
+		case "--apply":
+			if len(args) != 2 {
+				return errors.New("invalid apply plan")
+			}
+			selections, err := config.DecodeSelections(args[1])
+			if err != nil {
+				return err
+			}
+			report := config.NewInspector(paths, machine, runner).Inspect()
+			if err := config.ValidateSelections(report, selections); err != nil {
+				return err
+			}
+			return config.NewApplier(paths, machine, os.Stdout).Apply(selections)
+		case "--snapshot":
+			if len(args) != 2 {
+				return errors.New("invalid snapshot request")
+			}
+			return config.NewSnapshotter(paths, machine, os.Stdout).Save(args[1])
+		case "update":
+			if len(args) != 1 {
+				return errors.New("usage: config update")
+			}
+			return config.NewUpdater(paths, os.Stdout).Update()
+		default:
+			if !strings.HasPrefix(args[0], "-") {
+				return errors.New("unknown command; run config, config --status, config update, or config bootstrap <repository>")
+			}
+			return fmt.Errorf("unknown option: %s", args[0])
+		}
+	}
+	if !terminal(os.Stdin) || !terminal(os.Stdout) {
+		report := config.NewInspector(paths, machine, runner).Inspect()
+		config.WriteStatus(os.Stdout, report)
+		return nil
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	_, err = tea.NewProgram(ui.New(paths, machine, executable)).Run()
+	return err
+}
+
+func terminal(file *os.File) bool {
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}

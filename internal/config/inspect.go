@@ -1,0 +1,178 @@
+package config
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+type Inspector struct {
+	Paths   Paths
+	Machine Machine
+	Runner  Runner
+}
+
+func NewInspector(paths Paths, machine Machine, runner Runner) Inspector {
+	return Inspector{Paths: paths, Machine: machine, Runner: runner}
+}
+
+func yes(label string) Check {
+	return Check{Label: label, OK: true}
+}
+
+func no(label string, severity Severity, detail string) Check {
+	return Check{Label: label, OK: false, Severity: severity, Detail: detail}
+}
+
+func authoritativeResource(id, name string, checks []Check) Resource {
+	resource := Resource{ID: id, Name: name, Checks: checks}
+	switch {
+	case resource.Failed() > 0:
+		resource.State = Drift
+		resource.Summary = FormatCount(resource.Failed(), "issue", "issues")
+	case resource.Warned() > 0:
+		resource.State = Warning
+		resource.Summary = FormatCount(resource.Warned(), "advisory", "advisories")
+	default:
+		resource.State = Current
+		resource.Summary = FormatCount(len(checks), "check current", "checks current")
+	}
+	if resource.State != Current {
+		resource.Actions = []Action{Apply}
+	}
+	return resource
+}
+
+func (i Inspector) substrateChecks() []Check {
+	if i.Runner.Exists("git") {
+		return []Check{yes("git")}
+	}
+	return []Check{no("git unavailable", Failure, "install Git")}
+}
+
+func (i Inspector) miseChecks() []Check {
+	if !i.Runner.Exists("mise") {
+		return []Check{no("mise unavailable at ~/.local/bin/mise", Failure, "install the standalone mise binary")}
+	}
+	version := run(i.Runner, "mise", "--version")
+	currentVersion, parsed := miseVersion(version.Stdout)
+	if version.Err != nil || !parsed {
+		return []Check{no("mise version unreadable", Failure, "replace the standalone mise binary")}
+	}
+	if !miseVersionAtLeast(version.Stdout, minimumMiseVersion) {
+		return []Check{no("mise "+currentVersion+" is too old", Failure, "install "+minimumMiseVersion+" or newer at ~/.local/bin/mise")}
+	}
+	checks := []Check{yes("mise " + currentVersion)}
+	// Mise owns the vocabulary below its bootstrap command. Config consumes the
+	// aggregate result instead of learning about each resource category.
+	result := run(i.Runner, "mise", "bootstrap", "status", "--missing")
+	switch {
+	case result.Err == nil:
+		checks = append(checks, yes("mise bootstrap state"))
+	case result.ExitCode() == 1:
+		checks = append(checks, no("mise bootstrap state needs attention", Failure, "mise bootstrap status"))
+	default:
+		checks = append(checks, no("mise bootstrap unavailable", Failure, "mise doctor"))
+	}
+	return append(checks, setupChecks(i.Paths, i.Runner, miseFacts(i.Machine))...)
+}
+
+func (i Inspector) setup() Resource {
+	checks := i.substrateChecks()
+	checks = append(checks, i.miseChecks()...)
+	return authoritativeResource(setupID, setupName, checks)
+}
+
+// snapshotStatus is the one derivation of repository snapshot facts; the
+// inspector reports it and the snapshotter saves against it.
+func snapshotStatus(paths Paths, machine Machine, runner Runner) SnapshotStatus {
+	status := SnapshotStatus{Branch: "detached", Commit: "none", Destination: machine.Repository.Destination()}
+	if branch := run(runner, "git", "symbolic-ref", "--quiet", "--short", "HEAD"); branch.Err == nil {
+		status.Branch = branch.Output()
+	}
+	if commit := run(runner, "git", "rev-parse", "--short", "HEAD"); commit.Err == nil {
+		status.Commit = commit.Output()
+	}
+	porcelain := run(runner, "git", "status", "--porcelain=v1", "--untracked-files=all")
+	for _, line := range strings.Split(strings.TrimSpace(porcelain.Stdout), "\n") {
+		if line != "" {
+			status.Changes = append(status.Changes, line)
+		}
+	}
+	status.Dirty = len(status.Changes)
+	upstream := run(runner, "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	if upstream.Err == nil {
+		status.Upstream = upstream.Output()
+		if ahead := run(runner, "git", "rev-list", "--count", status.Upstream+"..HEAD"); ahead.Err == nil {
+			status.Ahead, _ = strconv.Atoi(ahead.Output())
+		}
+		if behind := run(runner, "git", "rev-list", "--count", "HEAD.."+status.Upstream); behind.Err == nil {
+			status.Behind, _ = strconv.Atoi(behind.Output())
+		}
+	}
+	status.PolicyError = snapshotPolicyError(paths, machine, runner, status)
+	return status
+}
+
+func snapshotPolicyError(paths Paths, machine Machine, runner Runner, status SnapshotStatus) string {
+	top := run(runner, "git", "rev-parse", "--show-toplevel")
+	if top.Err != nil || !samePath(top.Output(), paths.Root) {
+		return "repository root does not match Config's managed checkout"
+	}
+	if status.Branch != machine.Repository.Branch {
+		return fmt.Sprintf("branch is %s; expected %s", status.Branch, machine.Repository.Branch)
+	}
+	wantUpstream := machine.Repository.Destination()
+	if status.Upstream != wantUpstream {
+		if status.Upstream == "" {
+			return "branch has no upstream; expected " + wantUpstream
+		}
+		return fmt.Sprintf("upstream is %s; expected %s", status.Upstream, wantUpstream)
+	}
+	remote := run(runner, "git", "remote", "get-url", managedRemote)
+	if remote.Err != nil {
+		return "remote " + managedRemote + " is unavailable"
+	}
+	if !sameRepositoryLocator(remote.Output(), machine.Repository.URL) {
+		return fmt.Sprintf("remote %s is not %s", managedRemote, machine.Repository.URL)
+	}
+	return ""
+}
+
+func (i Inspector) Inspect() Report {
+	bidir := NewBidirectional(i.Paths, i.Runner)
+	var setup, chromePWAs, dock Resource
+	preferences := make([]Resource, len(i.Machine.Preferences))
+	var snapshot SnapshotStatus
+	tasks := []func(){
+		func() { setup = i.setup() },
+		func() { snapshot = snapshotStatus(i.Paths, i.Machine, i.Runner) },
+	}
+	if i.Machine.ChromePWAs {
+		tasks = append(tasks, func() { chromePWAs = bidir.InspectChromePWAs() })
+	}
+	if i.Machine.Dock {
+		tasks = append(tasks, func() { dock = bidir.InspectDock() })
+	}
+	for index, preference := range i.Machine.Preferences {
+		tasks = append(tasks, func() { preferences[index] = preference.Inspect(i.Paths) })
+	}
+	var wg sync.WaitGroup
+	for _, task := range tasks {
+		wg.Add(1)
+		go func(task func()) {
+			defer wg.Done()
+			task()
+		}(task)
+	}
+	wg.Wait()
+	resources := append([]Resource{setup}, preferences...)
+	if i.Machine.ChromePWAs {
+		resources = append(resources, chromePWAs)
+	}
+	if i.Machine.Dock {
+		resources = append(resources, dock)
+	}
+	return Report{Resources: resources, Snapshot: snapshot}
+}

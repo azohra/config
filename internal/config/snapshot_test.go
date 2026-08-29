@@ -1,0 +1,216 @@
+package config
+
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func gitTest(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func snapshotFixture(t *testing.T) (Snapshotter, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	gitTest(t, root, "init", "--quiet", "--initial-branch=main")
+	gitTest(t, root, "config", "user.name", "Config Test")
+	gitTest(t, root, "config", "user.email", "config@example.com")
+	gitTest(t, root, "config", "commit.gpgsign", "false")
+	gitTest(t, t.TempDir(), "init", "--quiet", "--bare", remote)
+	gitTest(t, root, "remote", "add", "origin", remote)
+
+	paths, err := NewPaths(root, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"settings": "initial\n",
+	}
+	for name, content := range files {
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(name, ".sh") || strings.Contains(name, "pre-commit") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(paths.InRoot(filepath.FromSlash(name)), []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := OSRunner{Dir: root}
+	gitTest(t, root, "add", "-A")
+	gitTest(t, root, "commit", "--quiet", "-m", "Initial snapshot")
+	gitTest(t, root, "push", "--quiet", "--set-upstream", "origin", "main")
+
+	var output bytes.Buffer
+	live := NewLiveRunner(root)
+	live.Stdout, live.Stderr = &output, &output
+	machine := testMachine()
+	machine.Repository.URL = remote
+	snapshotter := Snapshotter{Paths: paths, Machine: machine, Runner: runner, Live: live, Log: Logger{Out: &output}}
+	return snapshotter, root, remote
+}
+
+func TestSnapshotSaveAndIdempotence(t *testing.T) {
+	snapshotter, root, remote := snapshotFixture(t)
+	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotter.Save("Update settings"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitTest(t, root, "log", "-1", "--format=%s"); got != "Update settings" {
+		t.Fatalf("commit subject = %q", got)
+	}
+	if got := gitTest(t, root, "status", "--short"); got != "" {
+		t.Fatalf("worktree dirty: %s", got)
+	}
+	if local, upstream := gitTest(t, root, "rev-parse", "HEAD"), gitTest(t, remote, "rev-parse", "refs/heads/main"); local != upstream {
+		t.Fatal("remote does not match local HEAD")
+	}
+	if err := snapshotter.Save(""); err != nil {
+		t.Fatalf("idempotent save: %v", err)
+	}
+}
+
+func TestSnapshotRequiresMessageBeforeCommit(t *testing.T) {
+	snapshotter, root, _ := snapshotFixture(t)
+	before := gitTest(t, root, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotter.Save(""); err == nil {
+		t.Fatal("save accepted dirty state without a message")
+	}
+	if after := gitTest(t, root, "rev-parse", "HEAD"); after != before {
+		t.Fatal("missing message created a commit")
+	}
+	if staged := gitTest(t, root, "diff", "--cached", "--name-only"); staged != "" {
+		t.Fatalf("missing message staged files: %s", staged)
+	}
+}
+
+func TestSnapshotRefusesAnythingButTheDeclaredMainUpstream(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(t *testing.T, snapshotter *Snapshotter, root string)
+		want   string
+	}{
+		{
+			name: "branch",
+			mutate: func(t *testing.T, _ *Snapshotter, root string) {
+				gitTest(t, root, "switch", "--quiet", "-c", "feature")
+			},
+			want: "branch is feature; expected main",
+		},
+		{
+			name: "missing upstream",
+			mutate: func(t *testing.T, _ *Snapshotter, root string) {
+				gitTest(t, root, "config", "--unset", "branch.main.remote")
+				gitTest(t, root, "config", "--unset", "branch.main.merge")
+			},
+			want: "branch has no upstream; expected origin/main",
+		},
+		{
+			name: "wrong remote",
+			mutate: func(_ *testing.T, snapshotter *Snapshotter, _ string) {
+				snapshotter.Machine.Repository.URL = "https://example.com/owner/machine.git"
+			},
+			want: "remote origin is not https://example.com/owner/machine.git",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshotter, root, _ := snapshotFixture(t)
+			before := gitTest(t, root, "rev-parse", "HEAD")
+			test.mutate(t, &snapshotter, root)
+			if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := snapshotter.Save("Must not save")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("save error = %v, want %q", err, test.want)
+			}
+			if after := gitTest(t, root, "rev-parse", "HEAD"); after != before {
+				t.Fatal("rejected target created a commit")
+			}
+		})
+	}
+}
+
+func TestSnapshotRefusesARunnerInAnotherRepository(t *testing.T) {
+	snapshotter, root, _ := snapshotFixture(t)
+	other := t.TempDir()
+	gitTest(t, other, "init", "--quiet", "--initial-branch=main")
+	snapshotter.Paths.Root = other
+	if err := snapshotter.Save(""); err == nil || !strings.Contains(err.Error(), "repository root does not match Config's managed checkout") {
+		t.Fatalf("wrong-root error = %v", err)
+	}
+	if got := gitTest(t, root, "status", "--short"); got != "" {
+		t.Fatalf("wrong-root check changed the real repository: %s", got)
+	}
+}
+
+func TestSnapshotRejectedPushLeavesLocalCommit(t *testing.T) {
+	snapshotter, root, remote := snapshotFixture(t)
+	hook := filepath.Join(remote, "hooks", "pre-receive")
+	if err := os.WriteFile(hook, []byte("#!/usr/bin/env bash\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("rejected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotter.Save("Rejected snapshot"); err == nil {
+		t.Fatal("rejected push succeeded")
+	}
+	if got := gitTest(t, root, "status", "--short"); got != "" {
+		t.Fatalf("rejected push left a dirty worktree: %s", got)
+	}
+	if ahead := gitTest(t, root, "rev-list", "--count", "origin/main..HEAD"); ahead != "1" {
+		t.Fatalf("ahead count = %s, want 1", ahead)
+	}
+}
+
+func TestSnapshotSaveKeepsCommandsQuiet(t *testing.T) {
+	snapshotter, root, _ := snapshotFixture(t)
+	var chatter bytes.Buffer
+	live := NewLiveRunner(root)
+	live.Stdout, live.Stderr = &chatter, &chatter
+	snapshotter.Live = live
+	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("quiet\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotter.Save("Quiet snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	if chatter.Len() > 0 {
+		t.Fatalf("save leaked command output: %q", chatter.String())
+	}
+}
+
+func TestSnapshotHonorsRepositoryCommitHooks(t *testing.T) {
+	snapshotter, root, _ := snapshotFixture(t)
+	hook := filepath.Join(root, ".git", "hooks", "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := gitTest(t, root, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("blocked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotter.Save("Blocked snapshot"); err == nil {
+		t.Fatal("repository commit hook was bypassed")
+	}
+	if after := gitTest(t, root, "rev-parse", "HEAD"); after != before {
+		t.Fatal("rejected commit advanced HEAD")
+	}
+}

@@ -1,0 +1,89 @@
+[tool_config]
+locked = true
+
+[tools]
+go = "1.27.0"
+gitleaks = "8.30.0"
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.7.0"
+
+[tasks.format]
+description = "Format Go source"
+run = "gofmt -w cmd internal"
+
+[tasks.build]
+description = "Build Config for the current platform"
+run = "mkdir -p .build && go build -trimpath -o .build/config ./cmd/config"
+sources = ["go.mod", "go.sum", "cmd/**/*.go", "internal/**/*.go"]
+outputs = [".build/config"]
+
+[tasks.check]
+description = "Prove formatting, behavior, dependencies, and repository safety"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+unformatted=$(gofmt -l cmd internal)
+[[ -z $unformatted ]] || { printf 'Run gofmt on:\n%s\n' "$unformatted" >&2; exit 1; }
+go vet ./...
+go test -race ./...
+govulncheck ./...
+go mod verify
+gitleaks dir --no-banner --redact .
+"""
+
+[tasks."build:release"]
+description = "Build release binaries and checksums without publishing"
+depends = ["check"]
+usage = 'arg "<tag>" help="The release tag, e.g. v1.2.3"'
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+tag="${usage_tag:?build:release: a release tag is required}"
+[[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+  echo "build:release: $tag is not a release tag" >&2
+  exit 1
+}
+rm -rf -- dist
+mkdir -p dist
+for arch in arm64 amd64; do
+  output="dist/config-darwin-$arch"
+  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" \
+    go build -trimpath -ldflags "-s -w -X main.version=$tag" -o "$output" ./cmd/config
+done
+printf '%s\n' "$tag" > dist/version.txt
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd dist && sha256sum config-darwin-* > checksums.txt)
+else
+  (cd dist && shasum -a 256 config-darwin-* > checksums.txt)
+fi
+"""
+
+[tasks.release]
+description = "Publish the release tag at HEAD"
+usage = 'arg "<tag>" help="The release tag, e.g. v1.2.3"'
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+tag="${usage_tag:?release: a release tag is required}"
+refuse() { echo "release: refusing — $*" >&2; exit 1; }
+[[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || refuse "$tag is not a release tag"
+[ -z "$(git status --porcelain)" ] || refuse "the tree is dirty"
+origin=$(git remote get-url origin)
+case "$origin" in
+  git@github.com:azohra/config.git|https://github.com/azohra/config|https://github.com/azohra/config.git) ;;
+  *) refuse "origin is not azohra/config" ;;
+esac
+[ "$(git describe --tags --exact-match 2>/dev/null || true)" = "$tag" ] || refuse "$tag is not the tag at HEAD"
+[ -n "${GITHUB_TOKEN:-}" ] || refuse "GITHUB_TOKEN is unset"
+command -v gh >/dev/null 2>&1 || refuse "GitHub CLI is unavailable"
+gh release view "$tag" >/dev/null 2>&1 && refuse "$tag already has a release"
+(test -f dist/config-darwin-arm64 && test -f dist/config-darwin-amd64 && test -f dist/checksums.txt) ||
+  refuse "release artifacts are missing; run mise run build:release $tag"
+[ "$(cat dist/version.txt 2>/dev/null || true)" = "$tag" ] || refuse "release artifacts were not built for $tag"
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd dist && sha256sum -c checksums.txt)
+else
+  (cd dist && shasum -a 256 -c checksums.txt)
+fi
+gh release create "$tag" dist/config-darwin-* dist/checksums.txt dist/version.txt \
+  --generate-notes --title "Config $tag" --verify-tag
+"""

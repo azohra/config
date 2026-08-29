@@ -1,0 +1,219 @@
+package ui
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+
+	config "github.com/azohra/config/internal/config"
+)
+
+type planChoice struct {
+	resource config.Resource
+	options  []config.Action
+	choice   int
+}
+
+type dashboardAction int
+
+const (
+	dashboardReview dashboardAction = iota
+	dashboardSave
+	dashboardUpdate
+	dashboardInspect
+	dashboardQuit
+)
+
+func (p planChoice) action() config.Action {
+	if len(p.options) == 0 {
+		return config.Skip
+	}
+	return p.options[p.choice]
+}
+
+func (m Model) dashboardActions() []dashboardAction {
+	var actions []dashboardAction
+	if len(buildPlan(m.report)) > 0 {
+		actions = append(actions, dashboardReview)
+	}
+	if m.report.Snapshot.NeedsSave() {
+		actions = append(actions, dashboardSave)
+	}
+	actions = append(actions, dashboardInspect, dashboardUpdate, dashboardQuit)
+	return actions
+}
+
+func attentionResources(report config.Report) []config.Resource {
+	var resources []config.Resource
+	for _, resource := range report.Resources {
+		if resource.State != config.Current || resource.Failed() > 0 || resource.Warned() > 0 {
+			resources = append(resources, resource)
+		}
+	}
+	return resources
+}
+
+func (m Model) refreshInto(destination screen) (tea.Model, tea.Cmd) {
+	m.afterInspect = destination
+	m.loading = true
+	return m, tea.Batch(m.inspectCmd(), m.spinner.Tick)
+}
+
+func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	actions := m.dashboardActions()
+	switch key.String() {
+	case "q", "esc":
+		return m, tea.Quit
+	case "up", "k":
+		m.dashboardCursor = max(0, m.dashboardCursor-1)
+	case "down", "j":
+		m.dashboardCursor = min(max(0, len(actions)-1), m.dashboardCursor+1)
+	case "enter":
+		if m.dashboardCursor < 0 || m.dashboardCursor >= len(actions) {
+			return m, nil
+		}
+		switch actions[m.dashboardCursor] {
+		case dashboardReview:
+			return m.refreshInto(screenPlan)
+		case dashboardSave:
+			return m.beginSnapshot()
+		case dashboardUpdate:
+			return m.startOperation("Update", m.executable, "update")
+		case dashboardInspect:
+			m.scroll = 0
+			m.screen = screenInventory
+		case dashboardQuit:
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateInventory(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc", "q":
+		m.screen = screenDashboard
+	case "up", "k":
+		m.scroll = max(0, m.scroll-1)
+	case "down", "j":
+		m.scroll++
+	case "pgup":
+		m.scroll = max(0, m.scroll-10)
+	case "pgdown":
+		m.scroll += 10
+	}
+	return m, nil
+}
+
+func buildPlan(report config.Report) []planChoice {
+	var choices []planChoice
+	for _, resource := range report.Resources {
+		if len(resource.Actions) == 0 {
+			continue
+		}
+		options := slices.Clone(resource.Actions)
+		if resource.Bidirectional {
+			options = append([]config.Action{config.Skip}, options...)
+		} else {
+			options = append(options, config.Skip)
+		}
+		choices = append(choices, planChoice{resource: resource, options: options})
+	}
+	return choices
+}
+
+func planSelections(choices []planChoice) []config.Selection {
+	var selections []config.Selection
+	for _, choice := range choices {
+		if choice.action() != config.Skip {
+			selections = append(selections, config.Selection{ID: choice.resource.ID, Action: choice.action()})
+		}
+	}
+	return selections
+}
+
+func (m Model) planItemCount() int {
+	count := len(m.choices)
+	if len(planSelections(m.choices)) > 0 {
+		count++
+	}
+	return count
+}
+
+func (m *Model) cycleChoice(delta int) {
+	if m.planCursor < 0 || m.planCursor >= len(m.choices) {
+		return
+	}
+	choice := &m.choices[m.planCursor]
+	choice.choice = (choice.choice + delta + len(choice.options)) % len(choice.options)
+}
+
+func (m Model) updatePlan(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.screen = screenDashboard
+	case "up", "k":
+		m.planCursor = max(0, m.planCursor-1)
+	case "down", "j":
+		m.planCursor = min(max(0, m.planItemCount()-1), m.planCursor+1)
+	case "left", "h":
+		m.cycleChoice(-1)
+	case "right", "l", " ":
+		m.cycleChoice(1)
+	case "enter":
+		if m.planCursor < len(m.choices) {
+			m.planCursor = min(max(0, m.planItemCount()-1), m.planCursor+1)
+			return m, nil
+		}
+		selections := planSelections(m.choices)
+		if len(selections) == 0 {
+			return m, nil
+		}
+		encoded, err := config.EncodeSelections(selections)
+		if err != nil {
+			m.last = operationResult{label: "Apply", err: err}
+			m.screen = screenDashboard
+			return m, nil
+		}
+		return m.startOperation("Apply", m.executable, "--apply", encoded)
+	}
+	return m, nil
+}
+
+func (m Model) beginSnapshot() (tea.Model, tea.Cmd) {
+	m.scroll = 0
+	return m.refreshInto(screenSnapshot)
+}
+
+func (m Model) updateSnapshot(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.input.Blur()
+		m.input.Err = nil
+		m.screen = screenDashboard
+		return m, nil
+	case "pgup":
+		m.scroll = max(0, m.scroll-10)
+		return m, nil
+	case "pgdown":
+		m.scroll += 10
+		return m, nil
+	case "enter":
+		message := ""
+		if m.report.Snapshot.Dirty > 0 {
+			message = strings.TrimSpace(m.input.Value())
+			if message == "" {
+				m.input.Err = fmt.Errorf("message required")
+				return m, nil
+			}
+			m.input.Blur()
+		}
+		return m.startOperation("Save", m.executable, "--snapshot", message)
+	}
+	m.input.Err = nil
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(key)
+	return m, cmd
+}
