@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestMiseVersionContract(t *testing.T) {
@@ -28,14 +29,19 @@ func TestMiseVersionContract(t *testing.T) {
 }
 
 type bootstrapStateRunner struct {
-	status Result
+	status          Result
+	statusHasBudget *bool
 }
 
-func (r bootstrapStateRunner) Run(_ context.Context, name string, args ...string) Result {
+func (r bootstrapStateRunner) Run(ctx context.Context, name string, args ...string) Result {
 	switch {
 	case name == "mise" && slices.Equal(args, []string{"--version"}):
 		return Result{Stdout: minimumMiseVersion}
 	case name == "mise" && slices.Equal(args, []string{"bootstrap", "status", "--missing"}):
+		if r.statusHasBudget != nil {
+			deadline, ok := ctx.Deadline()
+			*r.statusHasBudget = ok && time.Until(deadline) > 4*time.Minute
+		}
 		return r.status
 	default:
 		return Result{Err: fmt.Errorf("unexpected command: %s %v", name, args)}
@@ -63,5 +69,13 @@ func TestMiseChecksConsumeTheAggregateBootstrapContract(t *testing.T) {
 				t.Fatalf("miseChecks() = %+v", checks)
 			}
 		})
+	}
+}
+
+func TestMiseStatusAllowsAFullMachineInspection(t *testing.T) {
+	hasBudget := false
+	checks := (Inspector{Runner: bootstrapStateRunner{statusHasBudget: &hasBudget}}).miseChecks()
+	if !hasBudget || !checks[1].OK {
+		t.Fatalf("miseChecks() = %+v, has budget = %t", checks, hasBudget)
 	}
 }

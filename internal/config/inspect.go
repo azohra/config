@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Inspector struct {
@@ -66,7 +67,7 @@ func (i Inspector) miseChecks() []Check {
 	checks := []Check{yes("mise " + currentVersion)}
 	// Mise owns the vocabulary below its bootstrap command. Config consumes the
 	// aggregate result instead of learning about each resource category.
-	result := run(i.Runner, "mise", "bootstrap", "status", "--missing")
+	result := runWithTimeout(i.Runner, 5*time.Minute, "mise", "bootstrap", "status", "--missing")
 	switch {
 	case result.Err == nil:
 		checks = append(checks, yes("mise bootstrap state"))
