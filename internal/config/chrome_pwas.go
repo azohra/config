@@ -145,7 +145,10 @@ func iconDigest(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func chromePWAFromPlist(data, icon []byte) (chromePWA, bool, error) {
+// chromePWAIdentity answers whether a bundle is one of Chrome's PWAs, from
+// its plist alone. The icon completes the record but cannot identify it, so
+// a bundle Config does not manage is never opened for one.
+func chromePWAIdentity(data []byte) (chromePWA, bool, error) {
 	values, err := decodePlist(data)
 	if err != nil {
 		return chromePWA{}, false, err
@@ -172,11 +175,7 @@ func chromePWAFromPlist(data, icon []byte) (chromePWA, bool, error) {
 			}
 		}
 	}
-	app := chromePWA{Name: name, ID: id, URL: shortcutURL, Schemes: schemes, IconSHA256: iconDigest(icon)}
-	if err := validateChromePWA(app); err != nil {
-		return chromePWA{}, true, err
-	}
-	return app, true, nil
+	return chromePWA{Name: name, ID: id, URL: shortcutURL, Schemes: schemes}, true, nil
 }
 
 func (b Bidirectional) chromePWASaved() (json.RawMessage, []chromePWA, bool, error) {
@@ -212,16 +211,21 @@ func (b Bidirectional) chromePWASaved() (json.RawMessage, []chromePWA, bool, err
 	return canonical, apps, true, nil
 }
 
-func (b Bidirectional) chromePWALive() (json.RawMessage, []liveChromePWA, error) {
+// chromePWALive reads the installed collection. Anything Config cannot
+// identify as a Chrome PWA is not Config's to manage and is passed over; a
+// PWA Config can identify but not read is named, so one damaged bundle
+// reports itself instead of hiding every other app.
+func (b Bidirectional) chromePWALive() (json.RawMessage, []liveChromePWA, []string, error) {
 	entries, err := os.ReadDir(chromePWALiveDir(b.Paths))
 	if errors.Is(err, os.ErrNotExist) {
 		canonical, _, canonicalErr := canonicalChromePWAs(nil)
-		return canonical, nil, canonicalErr
+		return canonical, nil, nil, canonicalErr
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var live []liveChromePWA
+	var damaged []string
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".app") {
 			continue
@@ -229,20 +233,24 @@ func (b Bidirectional) chromePWALive() (json.RawMessage, []liveChromePWA, error)
 		bundle := filepath.Join(chromePWALiveDir(b.Paths), entry.Name())
 		info, readErr := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist"))
 		if readErr != nil {
-			return nil, nil, fmt.Errorf("read %s: %w", entry.Name(), readErr)
+			continue
+		}
+		app, isPWA, parseErr := chromePWAIdentity(info)
+		if parseErr != nil || !isPWA {
+			continue
 		}
 		iconPath := filepath.Join(bundle, "Contents", "Resources", "app.icns")
 		icon, readErr := os.ReadFile(iconPath)
 		if readErr != nil {
-			return nil, nil, fmt.Errorf("read icon for %s: %w", entry.Name(), readErr)
+			damaged = append(damaged, entry.Name()+": icon unreadable")
+			continue
 		}
-		app, isPWA, parseErr := chromePWAFromPlist(info, icon)
-		if parseErr != nil {
-			return nil, nil, fmt.Errorf("inspect %s: %w", entry.Name(), parseErr)
+		app.IconSHA256 = iconDigest(icon)
+		if err := validateChromePWA(app); err != nil {
+			damaged = append(damaged, entry.Name()+": "+err.Error())
+			continue
 		}
-		if isPWA {
-			live = append(live, liveChromePWA{chromePWA: app, Path: bundle, IconPath: iconPath})
-		}
+		live = append(live, liveChromePWA{chromePWA: app, Path: bundle, IconPath: iconPath})
 	}
 	apps := make([]chromePWA, len(live))
 	for index := range live {
@@ -250,7 +258,7 @@ func (b Bidirectional) chromePWALive() (json.RawMessage, []liveChromePWA, error)
 	}
 	canonical, normalized, err := canonicalChromePWAs(apps)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, damaged, err
 	}
 	// normalizeChromePWAs rejects duplicate ids rather than dropping them, and
 	// sorts by id, so sorting live the same way pairs the two by index.
@@ -260,7 +268,7 @@ func (b Bidirectional) chromePWALive() (json.RawMessage, []liveChromePWA, error)
 	for index := range live {
 		live[index].chromePWA = normalized[index]
 	}
-	return canonical, live, nil
+	return canonical, live, damaged, nil
 }
 
 func chromePWADiff(saved []chromePWA, live []liveChromePWA) []string {
@@ -293,7 +301,7 @@ func chromePWADiff(saved []chromePWA, live []liveChromePWA) []string {
 func (b Bidirectional) InspectChromePWAs() Resource {
 	resource := Resource{ID: chromePWAsID, Name: chromePWAsName, Bidirectional: true}
 	saved, savedApps, hasSaved, savedErr := b.chromePWASaved()
-	live, liveApps, liveErr := b.chromePWALive()
+	live, liveApps, damaged, liveErr := b.chromePWALive()
 	if savedErr != nil || liveErr != nil {
 		resource.State = Unavailable
 		resource.Summary = "PWA state unavailable"
@@ -304,6 +312,9 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 			resource.Checks = append(resource.Checks, no("installed PWAs readable", Failure, liveErr.Error()))
 		}
 		return resource
+	}
+	for _, problem := range damaged {
+		resource.Checks = append(resource.Checks, no("installed PWA readable", Failure, problem))
 	}
 	resource.Details = chromePWADiff(savedApps, liveApps)
 	switch {
@@ -346,9 +357,14 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 }
 
 func (b Bidirectional) CaptureChromePWAs() error {
-	_, live, err := b.chromePWALive()
+	_, live, damaged, err := b.chromePWALive()
 	if err != nil {
 		return err
+	}
+	// Backing up a collection with a bundle missing from it would drop that
+	// PWA's saved icon and manifest entry.
+	if len(damaged) > 0 {
+		return fmt.Errorf("cannot back up an incomplete collection: %s", strings.Join(damaged, "; "))
 	}
 	apps := make([]chromePWA, len(live))
 	for index, app := range live {
@@ -390,8 +406,8 @@ func (b Bidirectional) CaptureChromePWAs() error {
 
 func (b Bidirectional) MarkChromePWAsIfCurrent() error {
 	saved, _, hasSaved, savedErr := b.chromePWASaved()
-	live, _, liveErr := b.chromePWALive()
-	if savedErr != nil || liveErr != nil || !hasSaved || !bytes.Equal(saved, live) {
+	live, _, damaged, liveErr := b.chromePWALive()
+	if savedErr != nil || liveErr != nil || len(damaged) > 0 || !hasSaved || !bytes.Equal(saved, live) {
 		return fmt.Errorf("%s are not synchronized", chromePWAsName)
 	}
 	return b.Baselines.Save(chromePWAsID, saved)
@@ -479,7 +495,7 @@ func (e Applier) applyChromePWAs() error {
 	if !hasSaved {
 		return advisoryError{"no saved PWA backup; Chrome PWAs left untouched"}
 	}
-	liveCanonical, live, err := e.Bidir.chromePWALive()
+	liveCanonical, live, _, err := e.Bidir.chromePWALive()
 	if err != nil {
 		return err
 	}

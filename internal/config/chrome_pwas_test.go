@@ -12,6 +12,20 @@ import (
 	"howett.net/plist"
 )
 
+// chromePWAFromPlist reads a written bundle back the way Config identifies
+// one, so a round trip can be compared against what was written.
+func chromePWAFromPlist(data, icon []byte) (chromePWA, bool, error) {
+	app, isPWA, err := chromePWAIdentity(data)
+	if err != nil || !isPWA {
+		return chromePWA{}, isPWA, err
+	}
+	app.IconSHA256 = iconDigest(icon)
+	if err := validateChromePWA(app); err != nil {
+		return chromePWA{}, true, err
+	}
+	return app, true, nil
+}
+
 func testChromePWA(name, id, shortcutURL string, icon []byte) chromePWA {
 	return chromePWA{Name: name, ID: id, URL: shortcutURL, IconSHA256: iconDigest(icon)}
 }
@@ -286,5 +300,106 @@ func TestChromePWARestoreInstallsTheSavedBundle(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), ".config-pwas") {
 			t.Fatalf("restore left staging directory %s behind", entry.Name())
 		}
+	}
+}
+
+// writeTestBundle writes a bare .app beside the managed PWAs. A nil icon
+// leaves the bundle without one, the way an ordinary Mac application dropped
+// into this folder would be.
+func writeTestBundle(t *testing.T, paths Paths, name string, info map[string]any, icon []byte) {
+	t.Helper()
+	contents := filepath.Join(chromePWALiveDir(paths), name+".app", "Contents")
+	data, err := plist.Marshal(info, plist.XMLFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(filepath.Join(contents, "Info.plist"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if icon != nil {
+		if err := atomicWrite(filepath.Join(contents, "Resources", "app.icns"), icon, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Anything in this folder that is not a Chrome PWA is not Config's to manage.
+// It must not cost the user the PWAs that are.
+func TestChromePWAsSurviveAForeignBundle(t *testing.T) {
+	paths := testPaths(t)
+	icon := []byte("icon")
+	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
+	writeTestLivePWA(t, paths, app, icon)
+
+	// An ordinary application: real Info.plist, no Chrome shortcut, no app.icns.
+	writeTestBundle(t, paths, "Foreign", map[string]any{"CFBundleName": "Foreign"}, nil)
+	// A directory that only looks like a bundle.
+	if err := os.MkdirAll(filepath.Join(chromePWALiveDir(paths), "Broken.app", "Contents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	_, live, damaged, err := bidir.chromePWALive()
+	if err != nil {
+		t.Fatalf("a foreign bundle broke the collection: %v", err)
+	}
+	if len(damaged) != 0 {
+		t.Fatalf("a foreign bundle was reported as damaged: %v", damaged)
+	}
+	if len(live) != 1 || live[0].Name != "Gmail" {
+		t.Fatalf("live PWAs = %+v, want only Gmail", live)
+	}
+	if err := bidir.CaptureChromePWAs(); err != nil {
+		t.Fatalf("capture with a foreign bundle present: %v", err)
+	}
+	if resource := bidir.InspectChromePWAs(); resource.State != Current || resource.Failed() != 0 {
+		t.Fatalf("resource with a foreign bundle = %#v", resource)
+	}
+}
+
+// A PWA Config can identify but not trust is named, and the rest of the
+// collection stays readable.
+func TestChromePWAsNameADamagedBundleWithoutLosingTheRest(t *testing.T) {
+	paths := testPaths(t)
+	icon := []byte("icon")
+	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
+	writeTestLivePWA(t, paths, app, icon)
+	writeTestBundle(t, paths, "Damaged", map[string]any{
+		"CrAppModeShortcutID":   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"CrAppModeShortcutName": "Damaged",
+		"CrAppModeShortcutURL":  "not a url",
+	}, icon)
+
+	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	_, live, damaged, err := bidir.chromePWALive()
+	if err != nil {
+		t.Fatalf("a damaged PWA broke the collection: %v", err)
+	}
+	if len(live) != 1 || live[0].Name != "Gmail" {
+		t.Fatalf("live PWAs = %+v, want only Gmail", live)
+	}
+	if len(damaged) != 1 || !strings.Contains(damaged[0], "Damaged.app") {
+		t.Fatalf("damaged = %v, want the damaged bundle named", damaged)
+	}
+
+	resource := bidir.InspectChromePWAs()
+	if resource.Failed() != 1 {
+		t.Fatalf("a damaged PWA was not reported: %#v", resource)
+	}
+	if !strings.Contains(resource.Checks[0].Detail, "Damaged.app") {
+		t.Fatalf("the failing check does not name the bundle: %+v", resource.Checks)
+	}
+
+	// Capture would write a manifest without the damaged app and delete the
+	// icon saved for it, so it must refuse while the collection is incomplete.
+	saved := chromePWAIconPath(paths, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err := atomicWrite(saved, icon, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := bidir.CaptureChromePWAs(); err == nil {
+		t.Fatal("capture recorded an incomplete collection")
+	}
+	if _, err := os.Stat(saved); err != nil {
+		t.Fatalf("a refused capture still removed the saved icon: %v", err)
 	}
 }
