@@ -134,6 +134,13 @@ const (
 	dockName = "Dock"
 )
 
+var dockWords = bidirectionalWords{
+	saved:   "the saved layout",
+	live:    "the Dock on this Mac",
+	capture: "Save this Mac's layout",
+	restore: "Restore the saved layout",
+}
+
 func (b Bidirectional) InspectDock() Resource {
 	resource := Resource{ID: dockID, Name: dockName, Bidirectional: true}
 	if !b.Runner.Exists("dockutil") {
@@ -164,17 +171,7 @@ func (b Bidirectional) InspectDock() Resource {
 	}
 	missing := len(all) - len(present)
 	baseline, hasBaseline, _ := b.Baselines.Load(resource.ID)
-	resource.State = Classify(saved, live, baseline, hasBaseline)
-	if resource.State != Current {
-		resource.ActionLabels = map[Action]string{Capture: "Save this Mac's layout", Apply: "Restore the saved layout"}
-		if missing > 0 {
-			resource.Actions = []Action{Capture}
-		} else if resource.State == LiveChanged {
-			resource.Actions = []Action{Capture, Apply}
-		} else {
-			resource.Actions = []Action{Apply, Capture}
-		}
-	}
+	dockWords.offer(&resource, Classify(saved, live, baseline, hasBaseline))
 	resource.Details = dockDiff(present, liveApps)
 	if missing > 0 {
 		resource.Checks = append(resource.Checks, Check{
@@ -186,19 +183,9 @@ func (b Bidirectional) InspectDock() Resource {
 			}
 		}
 	}
-	switch resource.State {
-	case Current:
-		resource.Summary = "this Mac matches the saved layout"
-	case SavedChanged:
-		resource.Summary = "the saved layout changed"
-	case LiveChanged:
-		resource.Summary = "the Dock on this Mac changed"
-	case Conflict:
-		resource.Summary = "the saved layout and this Mac both changed"
-	case Unknown:
-		resource.Summary = "this Mac and the saved layout differ"
-	}
 	if missing > 0 && resource.State != Current {
+		// A layout cannot be restored around an app this Mac does not have.
+		resource.Actions = []Action{Capture}
 		resource.Summary += " · " + FormatCount(missing, "saved app unavailable", "saved apps unavailable")
 	}
 	return resource

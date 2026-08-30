@@ -25,6 +25,13 @@ const (
 	chromeBundleID   = "com.google.Chrome"
 )
 
+var chromePWAWords = bidirectionalWords{
+	saved:   "the saved PWAs",
+	live:    "PWAs on this Mac",
+	capture: "Back up this Mac's PWAs",
+	restore: "Restore the saved PWAs",
+}
+
 var (
 	chromePWAIDPattern     = regexp.MustCompile(`^[a-p]{32}$`)
 	chromePWASchemePattern = regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`)
@@ -351,27 +358,7 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 		return resource
 	}
 	baseline, hasBaseline, _ := b.Baselines.Load(resource.ID)
-	resource.State = Classify(saved, live, baseline, hasBaseline)
-	if resource.State != Current {
-		resource.ActionLabels = map[Action]string{Capture: "Back up this Mac's PWAs", Apply: "Restore the saved PWAs"}
-		if resource.State == LiveChanged {
-			resource.Actions = []Action{Capture, Apply}
-		} else {
-			resource.Actions = []Action{Apply, Capture}
-		}
-	}
-	switch resource.State {
-	case Current:
-		resource.Summary = "this Mac matches the saved PWAs"
-	case SavedChanged:
-		resource.Summary = "the saved PWAs changed"
-	case LiveChanged:
-		resource.Summary = "PWAs on this Mac changed"
-	case Conflict:
-		resource.Summary = "the saved PWAs and this Mac both changed"
-	case Unknown:
-		resource.Summary = "this Mac and the saved PWAs differ"
-	}
+	chromePWAWords.offer(&resource, Classify(saved, live, baseline, hasBaseline))
 	return resource
 }
 
