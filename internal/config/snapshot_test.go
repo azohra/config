@@ -39,11 +39,7 @@ func snapshotFixture(t *testing.T) (Snapshotter, string, string) {
 		"settings": "initial\n",
 	}
 	for name, content := range files {
-		mode := os.FileMode(0o644)
-		if strings.HasSuffix(name, ".sh") || strings.Contains(name, "pre-commit") {
-			mode = 0o755
-		}
-		if err := os.WriteFile(paths.InRoot(filepath.FromSlash(name)), []byte(content), mode); err != nil {
+		if err := os.WriteFile(paths.InRoot(filepath.FromSlash(name)), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -199,7 +195,7 @@ func TestSnapshotSaveKeepsCommandsQuiet(t *testing.T) {
 
 func TestSnapshotHonorsRepositoryCommitHooks(t *testing.T) {
 	snapshotter, root, _ := snapshotFixture(t)
-	hook := filepath.Join(root, ".git", "hooks", "pre-commit")
+	hook := filepath.Join(root, ".git", "hooks", "commit-msg")
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
