@@ -181,6 +181,14 @@ func (r Report) Counts() (failures, decisions, advisories int) {
 // PreflightError is the gate Save runs before it commits. It asks only
 // whether the state this snapshot would record is describable: a resource
 // that owns no snapshot content cannot make the commit wrong.
+// NeedsAttention is the verdict behind an unsuccessful exit: a check that
+// failed, or a bidirectional resource still waiting on a choice. Every status
+// surface answers it the same way, whichever way Config was invoked.
+func (r Report) NeedsAttention() bool {
+	failures, decisions, _ := r.Counts()
+	return failures > 0 || decisions > 0
+}
+
 func (r Report) PreflightError() error {
 	var problems []string
 	for _, resource := range r.Resources {

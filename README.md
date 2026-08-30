@@ -147,10 +147,12 @@ config update
 config --version
 ```
 
-`--status` exits unsuccessfully when a failed check or unresolved bidirectional
-choice needs attention. It reports a declared repository that is not checked
-out, and one whose checkout holds a different repository. Both answers are
-local. It says nothing about how far a checkout has drifted from its remote:
+Config prints the status report whenever it is asked for one and whenever it
+is given no terminal, and it exits unsuccessfully either way when a failed
+check or unresolved bidirectional choice needs attention. It reports a
+declared repository that is not checked out, and one whose checkout holds a
+different repository. Both answers are local. It says nothing about how far a
+checkout has drifted from its remote:
 that costs a network round trip each, and `update` already owns it. `update`
 is explicit and unscheduled: it updates the standalone mise binary, declared
 tools and packages, then fast-forwards clean declared repositories. Dirty

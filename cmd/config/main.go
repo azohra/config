@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/term"
 
 	config "github.com/azohra/config/internal/config"
 	"github.com/azohra/config/internal/ui"
@@ -81,13 +82,7 @@ func run() error {
 			if len(args) != 1 {
 				return fmt.Errorf("unknown option: %s", args[1])
 			}
-			report := config.NewInspector(paths, machine, runner).Inspect()
-			config.WriteStatus(os.Stdout, report)
-			failures, decisions, _ := report.Counts()
-			if failures > 0 || decisions > 0 {
-				return errors.New("configuration needs attention")
-			}
-			return nil
+			return status(paths, machine, runner)
 		case "--apply":
 			if len(args) != 2 {
 				return errors.New("invalid apply plan")
@@ -119,9 +114,7 @@ func run() error {
 		}
 	}
 	if !terminal(os.Stdin) || !terminal(os.Stdout) {
-		report := config.NewInspector(paths, machine, runner).Inspect()
-		config.WriteStatus(os.Stdout, report)
-		return nil
+		return status(paths, machine, runner)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -131,7 +124,21 @@ func run() error {
 	return err
 }
 
+// status is the one status surface. Without a terminal Config prints the same
+// report it prints for --status, so it owes the same answer about whether the
+// machine needs attention.
+func status(paths config.Paths, machine config.Machine, runner config.Runner) error {
+	report := config.NewInspector(paths, machine, runner).Inspect()
+	config.WriteStatus(os.Stdout, report)
+	if report.NeedsAttention() {
+		return errors.New("configuration needs attention")
+	}
+	return nil
+}
+
+// terminal asks whether a stream is a terminal, not whether it is a character
+// device: /dev/null is a character device, and redirecting to it must not
+// start the interactive interface.
 func terminal(file *os.File) bool {
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(file.Fd())
 }
