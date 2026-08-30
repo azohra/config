@@ -259,18 +259,21 @@ func (notInstalledRunner) Exists(string) bool                            { retur
 
 // sequencedDockRunner reads the Dock differently on each probe, so a test can
 // model the live Dock actually changing between apply and its verification.
+// Everything else it answers as already converged.
 type sequencedDockRunner struct {
 	listings []string
 	reads    int
 }
 
-func (r *sequencedDockRunner) Run(_ context.Context, name string, args ...string) Result {
+func (r *sequencedDockRunner) Run(ctx context.Context, name string, args ...string) Result {
 	if name == "dockutil" && slices.Equal(args, []string{"--list"}) {
 		listing := r.listings[min(r.reads, len(r.listings)-1)]
 		r.reads++
 		return Result{Stdout: listing}
 	}
-	return Result{}
+	// Machine setup converges, so a test of what follows it is not answering
+	// for the macOS facts as well.
+	return converged{}.Run(ctx, name, args...)
 }
 
 func (*sequencedDockRunner) Exists(string) bool { return true }

@@ -63,8 +63,12 @@ or forged plan cannot invoke an action the current state no longer allows.
 A declared capability without its canonical snapshot is `uncaptured`. Capture
 reads live state and atomically creates the repository artifact. That first
 capture establishes the tracked configuration; later inspections can compare
-saved and live state. A fresh clone restores only artifacts already present and
-leaves missing ones uncaptured.
+saved and live state. A fresh clone restores only artifacts already present
+and leaves missing ones uncaptured. It reports an artifact it cannot read
+rather than stopping, because this machine has no earlier state to fall back
+on and the capabilities beside it would restore perfectly well. Converging
+mise stays the one deliberate stop: it installs the applications every later
+step restores into.
 
 Apply first converges mise with:
 
