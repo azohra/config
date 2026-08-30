@@ -2,10 +2,13 @@ package config
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -208,5 +211,73 @@ func TestSnapshotHonorsRepositoryCommitHooks(t *testing.T) {
 	}
 	if after := gitTest(t, root, "rev-parse", "HEAD"); after != before {
 		t.Fatal("rejected commit advanced HEAD")
+	}
+}
+
+// recordingRunner answers nothing and remembers what it was asked.
+type recordingRunner struct {
+	mu       sync.Mutex
+	commands []string
+}
+
+func (r *recordingRunner) Run(_ context.Context, name string, args ...string) Result {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
+	return Result{}
+}
+
+func (*recordingRunner) Exists(string) bool { return true }
+
+// Save gates on the resources a snapshot records, and PreflightError skips
+// machine setup entirely. Computing it anyway makes every save wait on mise's
+// bootstrap probe for an answer that is then thrown away.
+func TestSnapshotValidationSkipsMachineSetup(t *testing.T) {
+	runner := &recordingRunner{}
+	report := NewInspector(testPaths(t), testMachine(), runner).InspectSnapshot()
+
+	if _, found := report.Resource(setupID); found {
+		t.Fatalf("the snapshot gate inspected machine setup: %+v", report.Resources)
+	}
+	for _, command := range runner.commands {
+		if strings.HasPrefix(command, "mise ") {
+			t.Fatalf("the snapshot gate ran %q", command)
+		}
+	}
+	// The resources it does gate on still have to be there.
+	for _, id := range []string{dockID, chromePWAsID, testMachine().Preferences[0].ID} {
+		if _, found := report.Resource(id); !found {
+			t.Fatalf("%s is missing from the snapshot gate: %+v", id, report.Resources)
+		}
+	}
+	// A full inspection still reports everything.
+	if _, found := NewInspector(testPaths(t), testMachine(), runner).Inspect().Resource(setupID); !found {
+		t.Fatal("a full inspection dropped machine setup")
+	}
+}
+
+// The gate NewSnapshotter installs is the one Save runs, so the choice of
+// inspection has to hold there and not only in InspectSnapshot.
+func TestNewSnapshotterGateNeverReachesForMise(t *testing.T) {
+	paths := testPaths(t)
+	canonical := misePath(paths)
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	invocations := filepath.Join(t.TempDir(), "mise-calls")
+	script := "#!/bin/sh\nprintf 'called\\n' >> " + invocations + "\n"
+	if err := os.WriteFile(canonical, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshotter := NewSnapshotter(paths, testMachine(), io.Discard)
+	if snapshotter.Validate == nil {
+		t.Fatal("NewSnapshotter installed no gate")
+	}
+	_ = snapshotter.Validate()
+
+	if _, err := os.Stat(invocations); !os.IsNotExist(err) {
+		data, _ := os.ReadFile(invocations)
+		t.Fatalf("the snapshot gate ran mise %d time(s)", strings.Count(string(data), "called"))
 	}
 }

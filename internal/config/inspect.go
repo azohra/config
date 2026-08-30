@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -141,14 +142,23 @@ func snapshotPolicyError(paths Paths, machine Machine, runner Runner, status Sna
 	return ""
 }
 
-func (i Inspector) Inspect() Report {
+func (i Inspector) Inspect() Report { return i.inspect(true) }
+
+// InspectSnapshot reports only the resources whose state the repository
+// snapshot records. Save's gate discards machine setup, and machine setup is
+// the probe that reaches the network, so a save should not wait for it.
+func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
+
+func (i Inspector) inspect(machineSetup bool) Report {
 	bidir := NewBidirectional(i.Paths, i.Runner)
 	var setup, chromePWAs, dock Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
-		func() { setup = i.setup() },
 		func() { snapshot = snapshotStatus(i.Paths, i.Machine, i.Runner) },
+	}
+	if machineSetup {
+		tasks = append(tasks, func() { setup = i.setup() })
 	}
 	if i.Machine.ChromePWAs {
 		tasks = append(tasks, func() { chromePWAs = bidir.InspectChromePWAs() })
@@ -168,7 +178,10 @@ func (i Inspector) Inspect() Report {
 		}(task)
 	}
 	wg.Wait()
-	resources := append([]Resource{setup}, preferences...)
+	resources := slices.Clone(preferences)
+	if machineSetup {
+		resources = append([]Resource{setup}, resources...)
+	}
 	if i.Machine.ChromePWAs {
 		resources = append(resources, chromePWAs)
 	}
