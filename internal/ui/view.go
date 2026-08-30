@@ -334,14 +334,11 @@ func (m Model) renderSnapshot() string {
 	lines = visibleLines(lines, m.scroll, available)
 	blocks := []string{title.Render("SNAPSHOT"), strings.Join(lines, "\n")}
 	hints := []string{"enter save", "esc back"}
-	if m.report.Snapshot.Dirty > 0 {
-		blocks = append(blocks, m.input.View())
-		if m.input.Err != nil {
-			blocks = append(blocks, bad.Render(m.input.Err.Error()))
-		}
-	} else {
-		blocks = append(blocks, focusRow(true, accent.Render("Publish snapshot")))
+	action := "Save snapshot"
+	if m.report.Snapshot.Dirty == 0 {
+		action = "Publish snapshot"
 	}
+	blocks = append(blocks, focusRow(true, accent.Render(action)))
 	if scrollable {
 		hints = append([]string{"pgup/pgdown review"}, hints...)
 	}

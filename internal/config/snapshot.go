@@ -3,8 +3,9 @@ package config
 import (
 	"fmt"
 	"io"
-	"strings"
 )
+
+const snapshotCommitSubject = "Update machine snapshot"
 
 type Snapshotter struct {
 	Paths    Paths
@@ -30,16 +31,13 @@ func NewSnapshotter(paths Paths, machine Machine, out io.Writer) Snapshotter {
 	}
 }
 
-func (s Snapshotter) Save(message string) error {
+func (s Snapshotter) Save() error {
 	s.Log.Section("Snapshot")
 	status := snapshotStatus(s.Paths, s.Machine, s.Runner)
 	if status.PolicyError != "" {
 		return fmt.Errorf("cannot save: %s", status.PolicyError)
 	}
 	dirty := status.Dirty > 0
-	if dirty && strings.TrimSpace(message) == "" {
-		return fmt.Errorf("a snapshot message is required")
-	}
 	destination := s.Machine.Repository.Destination()
 	pushArgs := []string{"push", "--quiet", managedRemote, s.Machine.Repository.Branch}
 	if status.Behind > 0 {
@@ -60,7 +58,7 @@ func (s Snapshotter) Save(message string) error {
 		if err := s.Live.Command("git", "add", "-A"); err != nil {
 			return err
 		}
-		if err := s.Live.Command("git", "commit", "--quiet", "-m", message); err != nil {
+		if err := s.Live.Command("git", "commit", "--quiet", "-m", snapshotCommitSubject); err != nil {
 			return err
 		}
 		s.Log.OK("commit created")

@@ -3,11 +3,16 @@ package config
 type Bidirectional struct {
 	Paths     Paths
 	Runner    Runner
+	Dock      dockStore
 	Baselines Baselines
 }
 
 func NewBidirectional(paths Paths, runner Runner) Bidirectional {
-	return Bidirectional{Paths: paths, Runner: runner, Baselines: Baselines{Dir: paths.StateDir}}
+	return Bidirectional{
+		Paths: paths, Runner: runner,
+		Dock:      defaultsDockStore{Runner: runner, Live: NewMachineLiveRunner(paths)},
+		Baselines: Baselines{Dir: paths.StateDir},
+	}
 }
 
 // bidirectionalWords name one capability's two sides. The rest of a

@@ -18,6 +18,9 @@ chrome_pwas = true
 branch = "main"
 url = "https://example.com/owner/machine.git"
 
+[finder_favorite]
+name = "Machine config"
+
 [macos]
 current_host_tap_to_click = true
 clear_user_key_mapping = true
@@ -52,7 +55,8 @@ func TestLoadMachineReadsStrictContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Repository.Destination() != "origin/main" || !machine.Dock || !machine.ChromePWAs {
+	if machine.Repository.Destination() != "origin/main" || !machine.Dock || !machine.ChromePWAs ||
+		machine.FinderFavorite == nil || machine.FinderFavorite.Name != "Machine config" {
 		t.Fatalf("unexpected machine contract: %+v", machine)
 	}
 	if len(machine.Preferences) != 1 {
@@ -70,6 +74,7 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 		{"wrong kind", strings.Replace(validMachineTOML(), MachineKind, "another.machine", 1), "kind is"},
 		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 1", "schema = 2", 1), "schema is 2"},
 		{"unknown field", strings.Replace(validMachineTOML(), "schema = 1", "schema = 1\ntyop = true", 1), "strict mode"},
+		{"padded favorite name", strings.Replace(validMachineTOML(), `name = "Machine config"`, `name = " Machine config"`, 1), "surrounding whitespace"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := LoadMachine(writeMachineTOML(t, test.content)); err == nil || !strings.Contains(err.Error(), test.want) {
@@ -92,7 +97,7 @@ url = "https://example.com/owner/machine.git"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Dock || machine.ChromePWAs || len(machine.Preferences) != 0 {
+	if machine.Dock || machine.ChromePWAs || machine.FinderFavorite != nil || len(machine.Preferences) != 0 {
 		t.Fatalf("undeclared capabilities were enabled: %+v", machine)
 	}
 }
@@ -154,17 +159,21 @@ func TestMiseEnvironmentNamesTheSelectedRootWithoutMutatingTheProcess(t *testing
 	t.Setenv("MISE_CONFIG_DIR", "before")
 	t.Setenv("MISE_GLOBAL_CONFIG_ROOT", "before")
 	t.Setenv("MISE_CEILING_PATHS", "before")
+	t.Setenv("MISE_AUTO_UPDATE", "before")
 	environment := MiseEnvironment(paths)
-	if got := environment[0]; got != "MISE_CONFIG_DIR="+filepath.Join(paths.Root, "mise") {
+	if got := environment[0]; got != "MISE_AUTO_UPDATE=0" {
 		t.Fatalf("machine environment = %v", environment)
 	}
-	if got := environment[1]; got != "MISE_GLOBAL_CONFIG_ROOT="+paths.Root {
+	if got := environment[1]; got != "MISE_CONFIG_DIR="+filepath.Join(paths.Root, "mise") {
 		t.Fatalf("machine environment = %v", environment)
 	}
-	if got := environment[2]; got != "MISE_CEILING_PATHS="+paths.Root {
+	if got := environment[2]; got != "MISE_GLOBAL_CONFIG_ROOT="+paths.Root {
 		t.Fatalf("machine environment = %v", environment)
 	}
-	if os.Getenv("MISE_CONFIG_DIR") != "before" || os.Getenv("MISE_GLOBAL_CONFIG_ROOT") != "before" || os.Getenv("MISE_CEILING_PATHS") != "before" {
+	if got := environment[3]; got != "MISE_CEILING_PATHS="+paths.Root {
+		t.Fatalf("machine environment = %v", environment)
+	}
+	if os.Getenv("MISE_CONFIG_DIR") != "before" || os.Getenv("MISE_GLOBAL_CONFIG_ROOT") != "before" || os.Getenv("MISE_CEILING_PATHS") != "before" || os.Getenv("MISE_AUTO_UPDATE") != "before" {
 		t.Fatal("building a child environment mutated the Config process")
 	}
 }

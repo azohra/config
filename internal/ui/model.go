@@ -2,7 +2,6 @@ package ui
 
 import (
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	config "github.com/azohra/config/internal/config"
@@ -34,7 +33,6 @@ type Model struct {
 	planCursor      int
 	scroll          int
 	choices         []planChoice
-	input           textinput.Model
 	spinner         spinner.Model
 	width           int
 	height          int
@@ -43,11 +41,6 @@ type Model struct {
 }
 
 func New(paths config.Paths, machine config.Machine, executable string) Model {
-	input := textinput.New()
-	input.Prompt = "Message  "
-	input.Placeholder = "Describe this snapshot"
-	input.CharLimit = 120
-	input.SetWidth(60)
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
 	spin.Style = accent
 	return Model{
@@ -57,7 +50,6 @@ func New(paths config.Paths, machine config.Machine, executable string) Model {
 		screen:       screenDashboard,
 		afterInspect: screenDashboard,
 		loading:      true,
-		input:        input,
 		spinner:      spin,
 		width:        80,
 		height:       24,
@@ -86,7 +78,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.input.SetWidth(min(70, max(8, m.width-14)))
 		m.dashboardCursor = min(m.dashboardCursor, max(0, len(m.dashboardActions())-1))
 	case reportMsg:
 		m.report = msg.report
@@ -104,11 +95,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case screenSnapshot:
 			if m.report.Snapshot.NeedsSave() {
 				m.screen = screenSnapshot
-				if m.report.Snapshot.Dirty > 0 {
-					m.input.SetValue("")
-					m.input.Err = nil
-					commands = append(commands, m.input.Focus())
-				}
 			} else {
 				m.screen = screenDashboard
 			}
@@ -137,12 +123,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePlan(msg)
 		case screenSnapshot:
 			return m.updateSnapshot(msg)
-		}
-	default:
-		if m.screen == screenSnapshot && m.report.Snapshot.Dirty > 0 {
-			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
-			commands = append(commands, cmd)
 		}
 	}
 	return m, tea.Batch(commands...)

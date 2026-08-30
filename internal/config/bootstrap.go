@@ -6,52 +6,134 @@ import (
 	"io"
 )
 
-// RestoreFresh is the fresh-clone restore sequence.
-func RestoreFresh(paths Paths, machine Machine, out io.Writer) error {
-	err := restoreFresh(NewApplier(paths, machine, out))
+const restoreSetupStep = "setup"
+
+type freshRestoreStep struct {
+	id   string
+	name string
+	run  func() error
+}
+
+// RestorePending resumes the restore attached to this managed checkout.
+func RestorePending(paths Paths, machine Machine, out io.Writer) error {
+	progress, pending, err := pendingRestore(paths, machine)
+	if err != nil {
+		return err
+	}
+	if !pending {
+		return errors.New("managed checkout has no pending bootstrap restore")
+	}
+	err = restorePending(NewApplier(paths, machine, out), &progress)
+	if err == nil {
+		err = progress.finish(machine)
+	}
 	fmt.Fprintln(out)
 	WriteStatus(out, NewInspector(paths, machine, NewMachineRunner(paths)).Inspect())
 	return err
 }
 
-// restoreFresh converges setup, then restores each declared capability it has
-// something saved for. Chrome PWAs precede the Dock so saved shortcuts exist
-// before a declared Dock layout is rebuilt. A backup that cannot be read is
-// reported without stopping the capabilities beside it: this machine has no
-// earlier state to fall back on, so a partial restore beats none.
-func restoreFresh(applier Applier) error {
+// restorePending converges setup, then restores each unfinished capability.
+// A backup that cannot be read is reported without stopping the capabilities
+// beside it. Successful steps are recorded before the next one starts, so a
+// later bootstrap retries only the work that remains.
+func restorePending(applier Applier, progress *restoreProgress) error {
 	// The one deliberate stop. Mise installs the applications every later
 	// step restores into, so nothing below can converge without it.
-	if err := applier.Apply([]Selection{{ID: setupID, Action: Apply}}); err != nil {
-		return err
+	if !progress.done(restoreSetupStep) {
+		if err := applier.Apply([]Selection{{ID: setupID, Action: Apply}}); err != nil {
+			return err
+		}
+		if err := progress.markDone(restoreSetupStep, applier.Machine); err != nil {
+			return fmt.Errorf("record machine setup restore: %w", err)
+		}
 	}
+
 	var failures []error
-	if err := applier.RestorePreferences(); err != nil {
-		failures = append(failures, err)
-	}
-	var selections []Selection
-	if applier.Machine.ChromePWAs {
-		_, _, hasSaved, err := applier.Bidir.chromePWASaved()
-		switch {
-		case err != nil:
-			failures = append(failures, fmt.Errorf("%s: %w", chromePWAsName, err))
-		case hasSaved:
-			selections = append(selections, Selection{ID: chromePWAsID, Action: Apply})
+	for _, step := range freshRestoreSteps(applier) {
+		if progress.done(step.id) {
+			continue
 		}
-	}
-	if applier.Machine.Dock {
-		_, _, _, hasSaved, err := applier.Bidir.dockSaved()
-		switch {
-		case err != nil:
-			failures = append(failures, fmt.Errorf("%s: %w", dockName, err))
-		case hasSaved:
-			selections = append(selections, Selection{ID: dockID, Action: Apply})
+		if err := step.run(); err != nil {
+			var advisory advisoryError
+			if errors.As(err, &advisory) {
+				applier.Log.Warn(advisory.message)
+			}
+			failures = append(failures, fmt.Errorf("%s: %w", step.name, err))
+			continue
 		}
-	}
-	if len(selections) > 0 {
-		if err := applier.Apply(selections); err != nil {
-			failures = append(failures, err)
+		if err := progress.markDone(step.id, applier.Machine); err != nil {
+			failures = append(failures, fmt.Errorf("record %s restore: %w", step.name, err))
+			return errors.Join(failures...)
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// freshRestoreSteps is the ordered extension point for Config-owned restore
+// capabilities. Chrome PWAs precede the Dock so saved shortcuts exist before
+// a declared Dock layout is rebuilt.
+func freshRestoreSteps(applier Applier) []freshRestoreStep {
+	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+3)
+	if applier.Machine.FinderFavorite != nil {
+		steps = append(steps, freshRestoreStep{
+			id:   "resource/" + finderFavoriteID,
+			name: finderFavoriteName,
+			run: func() error {
+				applier.Log.Section(finderFavoriteName)
+				return applier.reconcileFinderFavorite(Apply)
+			},
+		})
+	}
+	for _, preference := range applier.Machine.Preferences {
+		preference := preference
+		steps = append(steps, freshRestoreStep{
+			id:   "preference/" + preference.ID,
+			name: preference.Name,
+			run: func() error {
+				applier.Log.Section(preference.Name)
+				return applier.restorePreference(preference)
+			},
+		})
+	}
+	if applier.Machine.ChromePWAs {
+		steps = append(steps, freshRestoreStep{
+			id:   "resource/" + chromePWAsID,
+			name: chromePWAsName,
+			run: func() error {
+				applier.Log.Section(chromePWAsName)
+				_, _, hasSaved, err := applier.Bidir.chromePWASaved()
+				if err != nil {
+					return err
+				}
+				if !hasSaved {
+					return nil
+				}
+				if err := applier.applyChromePWAs(); err != nil {
+					return err
+				}
+				return applier.Bidir.MarkChromePWAsIfCurrent()
+			},
+		})
+	}
+	if applier.Machine.Dock {
+		steps = append(steps, freshRestoreStep{
+			id:   "resource/" + dockID,
+			name: dockName,
+			run: func() error {
+				applier.Log.Section(dockName)
+				_, _, _, hasSaved, err := applier.Bidir.dockSaved()
+				if err != nil {
+					return err
+				}
+				if !hasSaved {
+					return nil
+				}
+				if err := applier.applyDock(); err != nil {
+					return err
+				}
+				return applier.Bidir.MarkDockIfCurrent()
+			},
+		})
+	}
+	return steps
 }

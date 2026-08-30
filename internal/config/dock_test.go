@@ -2,59 +2,162 @@ package config
 
 import (
 	"context"
+	"errors"
 	"os"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
+
+	"howett.net/plist"
 )
 
 type dockRunner struct {
-	output string
+	state dockState
+	err   error
 }
 
 func (r dockRunner) Run(_ context.Context, name string, args ...string) Result {
-	if name == "dockutil" && slices.Equal(args, []string{"--list"}) {
-		return Result{Stdout: r.output}
+	if name != "defaults" || !slices.Equal(args, []string{"export", dockDomain, "-"}) {
+		return Result{}
 	}
-	return Result{}
+	if r.err != nil {
+		return Result{Stderr: r.err.Error(), Err: r.err}
+	}
+	values := map[string]any{}
+	if r.state.Present {
+		values[dockKey] = r.state.Tiles
+	}
+	data, err := plist.Marshal(values, plist.XMLFormat)
+	if err != nil {
+		panic(err)
+	}
+	return Result{Stdout: string(data)}
 }
 
-func (dockRunner) Exists(name string) bool { return name == "dockutil" }
+func (dockRunner) Exists(string) bool { return true }
 
-func TestParseDock(t *testing.T) {
-	output := "Safari\tfile:///System/Applications/Safari.app/\tpersistentApps\nDownloads\tfile:///Users/me/Downloads/\tpersistentOthers\nTerminal\tfile:///System/Applications/Utilities/Terminal.app/\trecentApps\nMail\tfile:///System/Applications/Mail.app/\tpersistentApps\n"
-	got, err := parseDock(output)
+func dockDocument(paths ...string) string {
+	tiles := make([]any, 0, len(paths))
+	for index, path := range paths {
+		tiles = append(tiles, newDockAppTile(path, uint64(1_000_000_000+index)))
+	}
+	data, err := plist.Marshal(map[string]any{dockKey: tiles}, plist.XMLFormat)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+func TestDockStoreReadsOnlyThePersistentAppsKey(t *testing.T) {
+	tile := newDockAppTile("/Applications/Example.app", 1_000_000_001)
+	runner := dockRunner{state: dockState{Present: true, Tiles: []any{tile}}}
+	state, err := (defaultsDockStore{Runner: runner}).Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/System/Applications/Safari.app", "/System/Applications/Mail.app"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("parseDock() = %#v, want %#v", got, want)
+	if !state.Present || !reflect.DeepEqual(state.Tiles, []any{tile}) {
+		t.Fatalf("Dock state = %#v", state)
 	}
 }
 
-func TestPlanDock(t *testing.T) {
-	a := "/Applications/A.app"
-	b := "/Applications/B.app"
-	c := "/Applications/C.app"
-	d := "/Applications/D.app"
-	tests := []struct {
-		name  string
-		saved []string
-		live  []string
-		want  []dockOperation
-	}{
-		{"current", []string{a, b}, []string{a, b}, nil},
-		{"add", []string{a, b, c}, []string{a, c}, []dockOperation{{Action: "add", Path: b, Position: 2}}},
-		{"remove", []string{a, c}, []string{a, b, c}, []dockOperation{{Action: "remove", Path: b}}},
-		{"move", []string{a, b, c}, []string{b, a, c}, []dockOperation{{Action: "move", Path: a, Position: 1}}},
-		{"mixed", []string{a, b, c}, []string{d, c, a}, []dockOperation{{Action: "remove", Path: d}, {Action: "move", Path: a, Position: 1}, {Action: "add", Path: b, Position: 2}}},
+func TestDockStoreWritesOnlyThePersistentAppsKey(t *testing.T) {
+	commands := fakeTools(t, fakeTool{name: "defaults"})
+	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	if err := store.Write(dockState{Present: true, Tiles: []any{newDockAppTile("/Applications/Example.app", 1_000_000_001)}}); err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := planDock(tt.saved, tt.live); !slices.Equal(got, tt.want) {
-				t.Fatalf("planDock() = %#v, want %#v", got, tt.want)
-			}
-		})
+	issued := strings.Join(commands(), "\n")
+	if !strings.HasPrefix(issued, "defaults write "+dockDomain+" "+dockKey+" ") {
+		t.Fatalf("Dock write = %q", issued)
+	}
+	if strings.Contains(issued, " import ") {
+		t.Fatalf("Dock write replaced the whole domain: %q", issued)
+	}
+}
+
+func TestDockStoreWriteFailureDoesNotPrintThePreferenceValue(t *testing.T) {
+	fakeTools(t, fakeTool{name: "defaults", exit: 1})
+	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	err := store.Write(dockState{Present: true, Tiles: []any{newDockAppTile("/Applications/Private App.app", 1_000_000_001)}})
+	if err == nil || !strings.Contains(err.Error(), "defaults write "+dockDomain+" "+dockKey) {
+		t.Fatalf("Dock write error = %v", err)
+	}
+	for _, leaked := range []string{"Private App", "tile-data", "CFURL"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("Dock write error includes %q: %v", leaked, err)
+		}
+	}
+}
+
+func TestDockStoreDeletesOnlyTheOriginallyMissingKey(t *testing.T) {
+	commands := fakeTools(t, fakeTool{name: "defaults"})
+	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	if err := store.Write(dockState{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "defaults delete " + dockDomain + " " + dockKey
+	if issued := strings.Join(commands(), "\n"); issued != want {
+		t.Fatalf("Dock rollback = %q, want %q", issued, want)
+	}
+}
+
+func TestReconcileDockTilesPreservesOpaqueState(t *testing.T) {
+	a := newDockAppTile("/Applications/A.app", 1_000_000_001)
+	a["GUID"] = uint64(111)
+	b := newDockAppTile("/Applications/B.app", 1_000_000_002)
+	b["GUID"] = uint64(222)
+	b["tile-data"].(map[string]any)["book"] = []byte("opaque bookmark")
+	spacer := map[string]any{"tile-type": "spacer-tile", "opaque": []byte("keep me")}
+	original := dockState{Present: true, Tiles: []any{a, spacer, b}}
+
+	updated, err := reconcileDockTiles(original, []string{"/Applications/B.app", "/Applications/C.app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := dockAppPaths(updated), []string{"/Applications/B.app", "/Applications/C.app"}; !slices.Equal(got, want) {
+		t.Fatalf("reconciled apps = %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(updated.Tiles[0], b) {
+		t.Fatalf("existing app dictionary was rebuilt:\ngot  %#v\nwant %#v", updated.Tiles[0], b)
+	}
+	if !reflect.DeepEqual(updated.Tiles[1], spacer) {
+		t.Fatalf("unmanaged tile changed:\ngot  %#v\nwant %#v", updated.Tiles[1], spacer)
+	}
+	if path, ok := dockAppPath(updated.Tiles[2]); !ok || path != "/Applications/C.app" {
+		t.Fatalf("missing app tile = %#v", updated.Tiles[2])
+	}
+	guid, ok := dockGUID(updated.Tiles[2])
+	if !ok || guid == 1_000_000_001 || guid == 1_000_000_002 {
+		t.Fatalf("new app tile GUID = %d, present %t", guid, ok)
+	}
+}
+
+func TestReconcileDockTilesGivesNewAppsDistinctGUIDs(t *testing.T) {
+	updated, err := reconcileDockTiles(dockState{}, []string{"/Applications/A.app", "/Applications/B.app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, firstOK := dockGUID(updated.Tiles[0])
+	second, secondOK := dockGUID(updated.Tiles[1])
+	if !firstOK || !secondOK || first == second {
+		t.Fatalf("new Dock GUIDs = %d (%t), %d (%t)", first, firstOK, second, secondOK)
+	}
+}
+
+func TestDockAppPathRejectsNonAppsAndRemoteURLs(t *testing.T) {
+	for _, tile := range []any{
+		map[string]any{"tile-type": "spacer-tile"},
+		map[string]any{"tile-type": "file-tile", "tile-data": map[string]any{"file-data": map[string]any{"_CFURLString": "file:///Users/me/Downloads/"}}},
+		map[string]any{"tile-type": "file-tile", "tile-data": map[string]any{"file-data": map[string]any{"_CFURLString": "https://example.com/Example.app"}}},
+	} {
+		if path, ok := dockAppPath(tile); ok {
+			t.Fatalf("non-app tile decoded as %q: %#v", path, tile)
+		}
+	}
+	plain := map[string]any{"tile-type": "file-tile", "tile-data": map[string]any{"file-data": map[string]any{"_CFURLString": "/Applications/Example.app"}}}
+	if path, ok := dockAppPath(plain); !ok || path != "/Applications/Example.app" {
+		t.Fatalf("plain file path decoded as %q, present %t", path, ok)
 	}
 }
 
@@ -78,8 +181,7 @@ func TestDockInitialCaptureCreatesTheTrackedSnapshot(t *testing.T) {
 	if err := os.MkdirAll(app, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runner := dockRunner{output: "Example\tfile://" + app + "/\tpersistentApps\n"}
-	bidir := NewBidirectional(paths, runner)
+	bidir := testBidirectional(paths, dockRunner{state: dockState{Present: true, Tiles: []any{newDockAppTile(app, 1_000_000_001)}}})
 
 	resource := bidir.InspectDock()
 	if resource.State != Uncaptured || resource.Failed() != 0 || !slices.Equal(resource.Actions, []Action{Capture}) {
@@ -102,7 +204,7 @@ func TestDockInitialCaptureCreatesTheTrackedSnapshot(t *testing.T) {
 
 func TestDockInitialCaptureCanTrackAnEmptyLayout(t *testing.T) {
 	paths := testPaths(t)
-	bidir := NewBidirectional(paths, dockRunner{})
+	bidir := testBidirectional(paths, dockRunner{state: dockState{Present: true}})
 
 	if err := bidir.CaptureDock(); err != nil {
 		t.Fatal(err)
@@ -128,8 +230,7 @@ func TestDockCaptureCanAcceptAnUnavailableSavedApp(t *testing.T) {
 	if err := os.MkdirAll(app, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runner := dockRunner{output: "Example\tfile://" + app + "/\tpersistentApps\n"}
-	bidir := NewBidirectional(paths, runner)
+	bidir := testBidirectional(paths, dockRunner{state: dockState{Present: true, Tiles: []any{newDockAppTile(app, 1_000_000_001)}}})
 	resource := bidir.InspectDock()
 	if !slices.Equal(resource.Actions, []Action{Capture}) {
 		t.Fatalf("Dock with unavailable saved app = %#v", resource)
@@ -143,5 +244,16 @@ func TestDockCaptureCanAcceptAnUnavailableSavedApp(t *testing.T) {
 	}
 	if string(data) != "~/Applications/Example.app\n" {
 		t.Fatalf("recaptured Dock = %q", data)
+	}
+}
+
+func TestDockReadFailureReachesTheResource(t *testing.T) {
+	paths := testPaths(t)
+	resource := testBidirectional(paths, dockRunner{err: errors.New("defaults: cannot read the Dock")}).InspectDock()
+	if resource.State != Unavailable || resource.Failed() == 0 {
+		t.Fatalf("failed Dock read = %#v", resource)
+	}
+	if detail := resource.Checks[len(resource.Checks)-1].Detail; !strings.Contains(detail, "defaults: cannot read the Dock") {
+		t.Fatalf("check detail = %q", detail)
 	}
 }

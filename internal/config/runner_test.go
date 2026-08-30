@@ -66,7 +66,7 @@ func TestFailureReportsTheCommandsOwnWords(t *testing.T) {
 		result Result
 		want   string
 	}{
-		{"stderr leads", Result{Err: exited, Stderr: "dockutil: unknown option\n"}, "dockutil: unknown option (exit status 1)"},
+		{"stderr leads", Result{Err: exited, Stderr: "defaults: unknown option\n"}, "defaults: unknown option (exit status 1)"},
 		{"blank lines skipped", Result{Err: exited, Stderr: "\n\n  defaults: domain not found\n"}, "defaults: domain not found (exit status 1)"},
 		{"silent failure keeps the status", Result{Err: exited}, "exit status 1"},
 	}
@@ -81,28 +81,3 @@ func TestFailureReportsTheCommandsOwnWords(t *testing.T) {
 		t.Fatalf("a successful command reported %v", err)
 	}
 }
-
-// The inventory shows a check's detail, so what dockutil said has to reach it.
-func TestDockReadFailureNamesWhatDockutilSaid(t *testing.T) {
-	resource := NewBidirectional(testPaths(t), failingDockRunner{}).InspectDock()
-	if resource.State != Unavailable || resource.Failed() == 0 {
-		t.Fatalf("a failed Dock read = %#v", resource)
-	}
-	var detail string
-	for _, check := range resource.Checks {
-		if !check.OK {
-			detail = check.Detail
-		}
-	}
-	if !strings.Contains(detail, "dockutil: cannot read the Dock") {
-		t.Fatalf("check detail = %q, want dockutil's own message", detail)
-	}
-}
-
-type failingDockRunner struct{}
-
-func (failingDockRunner) Run(context.Context, string, ...string) Result {
-	return Result{Stderr: "dockutil: cannot read the Dock\n", Err: exec.Command("/usr/bin/false").Run()}
-}
-
-func (failingDockRunner) Exists(string) bool { return true }

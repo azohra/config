@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -11,7 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const minimumMiseVersion = "2026.8.13"
+const testedMiseVersion = "2026.8.14"
 
 // misePath returns Config's canonical execution substrate.
 func misePath(paths Paths) string {
@@ -21,8 +22,7 @@ func misePath(paths Paths) string {
 func miseVersion(output string) (string, bool) {
 	for _, field := range strings.Fields(output) {
 		candidate := strings.TrimPrefix(field, "v")
-		parts := strings.SplitN(candidate, "-", 2)
-		numbers := strings.Split(parts[0], ".")
+		numbers := strings.Split(candidate, ".")
 		if len(numbers) != 3 {
 			continue
 		}
@@ -34,30 +34,40 @@ func miseVersion(output string) (string, bool) {
 			}
 		}
 		if valid {
-			return parts[0], true
+			return candidate, true
 		}
 	}
 	return "", false
 }
 
-func miseVersionAtLeast(output, minimum string) bool {
-	current, ok := miseVersion(output)
-	if !ok {
-		return false
+func currentMiseVersion(runner Runner) (string, error) {
+	if !runner.Exists("mise") {
+		return "", errors.New("mise is unavailable")
 	}
-	minimum, ok = miseVersion(minimum)
-	if !ok {
-		return false
+	result := run(runner, "mise", "--version")
+	version, parsed := miseVersion(result.Stdout)
+	if result.Err != nil || !parsed {
+		return "", errors.New("mise version is unreadable")
 	}
-	minimumParts := strings.Split(minimum, ".")
-	for index, part := range strings.Split(current, ".") {
-		got, _ := strconv.Atoi(part)
-		want, _ := strconv.Atoi(minimumParts[index])
-		if got != want {
-			return got > want
-		}
+	return version, nil
+}
+
+// requireTestedMise is the mutation gate for Config-owned mise commands.
+// Inspection may report an unsupported version, while only config update is
+// allowed to replace it.
+func requireTestedMise(runner Runner) error {
+	version, err := currentMiseVersion(runner)
+	if err != nil {
+		return err
 	}
-	return true
+	if !supportsTestedMise(version) {
+		return fmt.Errorf("mise %s is unsupported; install mise %s", version, testedMiseVersion)
+	}
+	return nil
+}
+
+func supportsTestedMise(version string) bool {
+	return version == testedMiseVersion
 }
 
 // misePhases are the bootstrap categories Config probes. mise offers no way

@@ -151,8 +151,8 @@ func TestResultBannerDistinguishesCancelledFromFailed(t *testing.T) {
 	if banner := ansi.Strip(cancelled.resultBanner()); !strings.Contains(banner, "Apply cancelled") {
 		t.Fatalf("cancelled banner = %q", banner)
 	}
-	failed := Model{width: 80, height: 24, last: operationResult{label: "Apply", err: errors.New("dockutil: exit status 1")}}
-	if banner := ansi.Strip(failed.resultBanner()); !strings.Contains(banner, "Apply failed") || !strings.Contains(banner, "dockutil") {
+	failed := Model{width: 80, height: 24, last: operationResult{label: "Apply", err: errors.New("defaults: exit status 1")}}
+	if banner := ansi.Strip(failed.resultBanner()); !strings.Contains(banner, "Apply failed") || !strings.Contains(banner, "defaults") {
 		t.Fatalf("failed banner = %q", banner)
 	}
 	done := Model{width: 80, height: 24, last: operationResult{label: "Apply"}}

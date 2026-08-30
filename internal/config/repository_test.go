@@ -40,23 +40,72 @@ func TestMaterializeRepositoryOwnsTheCanonicalCheckout(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "machine.git")
 	source = repositoryFixtureAt(t, source, machineDocumentForRepository(source))
 
-	machine, fresh, err := MaterializeRepository(paths, source, io.Discard, io.Discard)
+	machine, pending, err := MaterializeRepository(paths, source, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !fresh || machine.Repository.URL != source {
-		t.Fatalf("materialized = fresh %t, machine %+v", fresh, machine)
+	if !pending || machine.Repository.URL != source {
+		t.Fatalf("materialized = restore pending %t, machine %+v", pending, machine)
 	}
 	if _, err := os.Stat(paths.InRoot("config.toml")); err != nil {
 		t.Fatal(err)
 	}
-	_, fresh, err = MaterializeRepository(paths, source, io.Discard, io.Discard)
+	_, pending, err = MaterializeRepository(paths, source, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh {
-		t.Fatal("existing managed checkout reported fresh")
+	if !pending {
+		t.Fatal("an interrupted restore did not remain pending")
 	}
+	progress, pending, err := pendingRestore(paths, machine)
+	if err != nil || !pending {
+		t.Fatalf("load pending restore = %t, %v", pending, err)
+	}
+	if err := progress.finish(machine); err != nil {
+		t.Fatal(err)
+	}
+	_, pending, err = MaterializeRepository(paths, source, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending {
+		t.Fatal("a completed restore became pending again")
+	}
+}
+
+func TestExistingCheckoutWithoutMatchingRestoreStateIsNeverRestored(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "machine.git")
+	source = repositoryFixtureAt(t, source, machineDocumentForRepository(source))
+
+	t.Run("checkout predates restore state", func(t *testing.T) {
+		paths := managedTestPaths(t)
+		if err := os.MkdirAll(filepath.Dir(paths.Root), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		gitTest(t, filepath.Dir(paths.Root), "clone", "--quiet", "--origin", managedRemote, source, paths.Root)
+		_, pending, err := MaterializeRepository(paths, source, io.Discard, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pending {
+			t.Fatal("an established checkout without restore state was treated as fresh")
+		}
+	})
+
+	t.Run("state belongs to another checkout", func(t *testing.T) {
+		paths := managedTestPaths(t)
+		if _, pending, err := MaterializeRepository(paths, source, io.Discard, io.Discard); err != nil || !pending {
+			t.Fatalf("materialize = pending %t, %v", pending, err)
+		}
+		gitTest(t, paths.Root, "config", "--local", restoreCheckoutKey, "11111111111111111111111111111111")
+		_, pending, err := MaterializeRepository(paths, source, io.Discard, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pending {
+			t.Fatal("restore state from another checkout was accepted")
+		}
+	})
 }
 
 func repositoryFixtureAt(t *testing.T, remote, machineDocument string) string {

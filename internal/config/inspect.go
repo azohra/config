@@ -13,13 +13,17 @@ import (
 )
 
 type Inspector struct {
-	Paths   Paths
-	Machine Machine
-	Runner  Runner
+	Paths           Paths
+	Machine         Machine
+	Runner          Runner
+	FinderFavorites finderFavoritesStore
 }
 
 func NewInspector(paths Paths, machine Machine, runner Runner) Inspector {
-	return Inspector{Paths: paths, Machine: machine, Runner: runner}
+	return Inspector{
+		Paths: paths, Machine: machine, Runner: runner,
+		FinderFavorites: newFinderFavoritesStore(),
+	}
 }
 
 func yes(label string) Check {
@@ -57,13 +61,12 @@ func (i Inspector) miseChecks() []Check {
 	if !i.Runner.Exists("mise") {
 		return []Check{no("mise unavailable at ~/.local/bin/mise", "install the standalone mise binary")}
 	}
-	version := run(i.Runner, "mise", "--version")
-	currentVersion, parsed := miseVersion(version.Stdout)
-	if version.Err != nil || !parsed {
+	currentVersion, err := currentMiseVersion(i.Runner)
+	if err != nil {
 		return []Check{no("mise version unreadable", "replace the standalone mise binary")}
 	}
-	if !miseVersionAtLeast(version.Stdout, minimumMiseVersion) {
-		return []Check{no("mise "+currentVersion+" is too old", "install "+minimumMiseVersion+" or newer at ~/.local/bin/mise")}
+	if !supportsTestedMise(currentVersion) {
+		return []Check{no("mise "+currentVersion+" is unsupported", "install mise "+testedMiseVersion+" at ~/.local/bin/mise")}
 	}
 	// The three groups ask mise and git independent questions, so the slowest
 	// of them sets the cost rather than their sum.
@@ -277,7 +280,7 @@ func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(machineSetup bool) Report {
 	bidir := NewBidirectional(i.Paths, i.Runner)
-	var setup, chromePWAs, dock Resource
+	var setup, chromePWAs, dock, finderFavorite Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
@@ -285,6 +288,15 @@ func (i Inspector) inspect(machineSetup bool) Report {
 	}
 	if machineSetup {
 		tasks = append(tasks, func() { setup = i.setup() })
+		if i.Machine.FinderFavorite != nil {
+			store := i.FinderFavorites
+			if store == nil {
+				store = newFinderFavoritesStore()
+			}
+			tasks = append(tasks, func() {
+				finderFavorite = InspectFinderFavorite(i.Paths, *i.Machine.FinderFavorite, store)
+			})
+		}
 	}
 	if i.Machine.ChromePWAs {
 		tasks = append(tasks, func() { chromePWAs = bidir.InspectChromePWAs() })
@@ -307,6 +319,9 @@ func (i Inspector) inspect(machineSetup bool) Report {
 	resources := slices.Clone(preferences)
 	if machineSetup {
 		resources = append([]Resource{setup}, resources...)
+		if i.Machine.FinderFavorite != nil {
+			resources = append(resources, finderFavorite)
+		}
 	}
 	if i.Machine.ChromePWAs {
 		resources = append(resources, chromePWAs)

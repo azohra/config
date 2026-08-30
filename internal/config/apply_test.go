@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -49,6 +50,8 @@ type converged struct{}
 
 func (converged) Run(_ context.Context, name string, args ...string) Result {
 	switch {
+	case name == "mise" && slices.Equal(args, []string{"--version"}):
+		return Result{Stdout: testedMiseVersion}
 	case name == "defaults" && slices.Contains(args, "com.apple.mouse.tapBehavior"):
 		return Result{Stdout: "1\n"}
 	case name == "plutil":
@@ -94,6 +97,23 @@ func TestADirtyCheckoutDoesNotBlockApply(t *testing.T) {
 	}
 }
 
+func TestApplyMiseRefusesAnUnsupportedVersionBeforeMutation(t *testing.T) {
+	commands := fakeTools(t, fakeTool{name: "mise"})
+	applier := Applier{
+		Runner: &miseStubRunner{version: "2026.8.15"},
+		Live:   LiveRunner{},
+		Log:    Logger{Out: &bytes.Buffer{}},
+	}
+
+	err := applier.applyMise()
+	if err == nil || !strings.Contains(err.Error(), "2026.8.15 is unsupported") {
+		t.Fatalf("applyMise() error = %v, want unsupported mise version", err)
+	}
+	if issued := commands(); len(issued) != 0 {
+		t.Fatalf("unsupported mise executed mutations: %v", issued)
+	}
+}
+
 // applyRunner answers the probes an Applier makes while reconciling, so a
 // test can drive apply without a real Mac.
 type applyRunner struct {
@@ -102,7 +122,10 @@ type applyRunner struct {
 
 func (r applyRunner) Run(_ context.Context, name string, args ...string) Result {
 	switch {
-	case name == "dockutil" && slices.Equal(args, []string{"--list"}):
+	case name == "defaults" && slices.Equal(args, []string{"export", dockDomain, "-"}):
+		if r.dock == "" {
+			return Result{Stdout: dockDocument()}
+		}
 		return Result{Stdout: r.dock}
 	case name == "defaults" && len(args) > 0 && args[0] == "export":
 		return Result{Stdout: "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>k</key><true/></dict></plist>"}
@@ -124,7 +147,7 @@ func TestApplyRunsOnlyTheSelectedSteps(t *testing.T) {
 	if err := os.MkdirAll(app, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runner := applyRunner{dock: "Example\tfile://" + app + "/\tpersistentApps\n"}
+	runner := applyRunner{dock: dockDocument(app)}
 	applier, chatter := testApplier(t, paths, testMachine(), runner)
 
 	if err := applier.Apply([]Selection{{ID: dockID, Action: Capture}}); err != nil {
@@ -151,7 +174,7 @@ func TestApplyDoesNotFailOnADeliberateSkip(t *testing.T) {
 	machine := testMachine()
 	machine.ChromePWAs = false
 	machine.Preferences = nil
-	runner := applyRunner{dock: ""}
+	runner := applyRunner{dock: dockDocument()}
 	applier, chatter := testApplier(t, paths, machine, runner)
 
 	// No saved layout exists, so applyDock declines and says so.
@@ -164,10 +187,8 @@ func TestApplyDoesNotFailOnADeliberateSkip(t *testing.T) {
 	}
 }
 
-// The Dock is rebuilt with one dockutil call per planned change, each
-// suppressing the restart, and a single restart at the end. Dropping
-// --no-restart makes the Dock flicker through every intermediate layout.
-func TestApplyDockIssuesThePlannedOperationsThenRestartsOnce(t *testing.T) {
+// The Dock preference changes once, verifies, and only then restarts once.
+func TestApplyDockWritesTheKeyThenRestartsOnce(t *testing.T) {
 	paths := testPaths(t)
 	machine := testMachine()
 	machine.ChromePWAs = false
@@ -182,12 +203,8 @@ func TestApplyDockIssuesThePlannedOperationsThenRestartsOnce(t *testing.T) {
 	if err := atomicWrite(dockSnapshotPath(paths), []byte(first+"\n"+second+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// The Dock reads reversed, then reads back in the saved order once the
-	// planned dockutil calls have run.
-	reversed := "Second\tfile://" + second + "/\tpersistentApps\nFirst\tfile://" + first + "/\tpersistentApps\n"
-	restored := "First\tfile://" + first + "/\tpersistentApps\nSecond\tfile://" + second + "/\tpersistentApps\n"
-	runner := &sequencedDockRunner{listings: []string{reversed, restored}}
-	commands := fakeTools(t, fakeTool{name: "dockutil"}, fakeTool{name: "killall"})
+	runner := &sequencedDockRunner{listings: []string{dockDocument(second, first), dockDocument(first, second)}}
+	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "killall"})
 	applier, chatter := testApplier(t, paths, machine, runner)
 
 	if err := applier.Apply([]Selection{{ID: dockID, Action: Apply}}); err != nil {
@@ -197,13 +214,11 @@ func TestApplyDockIssuesThePlannedOperationsThenRestartsOnce(t *testing.T) {
 	if len(issued) == 0 {
 		t.Fatalf("apply issued no commands:\n%s", chatter.String())
 	}
-	restarts := 0
+	restarts, writes := 0, 0
 	for _, command := range issued {
 		switch {
-		case strings.HasPrefix(command, "dockutil "):
-			if !strings.Contains(command, "--no-restart") {
-				t.Fatalf("a Dock change restarted the Dock mid-plan: %q", command)
-			}
+		case strings.HasPrefix(command, "defaults write "+dockDomain+" "+dockKey+" "):
+			writes++
 		case strings.HasPrefix(command, "killall "):
 			restarts++
 			if !strings.Contains(command, "Dock") {
@@ -213,13 +228,183 @@ func TestApplyDockIssuesThePlannedOperationsThenRestartsOnce(t *testing.T) {
 			t.Fatalf("apply issued an unexpected command: %q", command)
 		}
 	}
+	if writes != 1 {
+		t.Fatalf("persistent apps written %d times, want exactly 1:\n%s", writes, strings.Join(issued, "\n"))
+	}
 	if restarts != 1 {
 		t.Fatalf("Dock restarted %d times, want exactly 1:\n%s", restarts, strings.Join(issued, "\n"))
 	}
 }
 
-// Restore is the fresh-clone path. It must import into the declared domain,
-// and must not touch an application this Mac has not installed.
+type failedDockVerification struct {
+	original dockState
+	writes   []dockState
+	reads    int
+}
+
+type changedOpaqueDockVerification struct {
+	original dockState
+	desired  string
+	writes   []dockState
+	reads    int
+}
+
+type failedDockRestart struct {
+	original dockState
+	applied  dockState
+	writes   []dockState
+	reads    int
+}
+
+type memoryDockStore struct {
+	state  dockState
+	writes []dockState
+}
+
+func (s *memoryDockStore) Read() (dockState, error) { return s.state, nil }
+
+func (s *memoryDockStore) Write(state dockState) error {
+	s.writes = append(s.writes, state)
+	s.state = state
+	return nil
+}
+
+func (s *failedDockRestart) Read() (dockState, error) {
+	s.reads++
+	switch s.reads {
+	case 1:
+		return s.original, nil
+	case 2:
+		return s.applied, nil
+	default:
+		return s.original, nil
+	}
+}
+
+func (s *failedDockRestart) Write(state dockState) error {
+	s.writes = append(s.writes, state)
+	return nil
+}
+
+func (s *changedOpaqueDockVerification) Read() (dockState, error) {
+	s.reads++
+	if s.reads == 2 {
+		return dockState{Present: true, Tiles: []any{
+			map[string]any{"tile-type": "spacer-tile", "opaque": "changed"},
+			newDockAppTile(s.desired, 1_000_000_003),
+		}}, nil
+	}
+	return s.original, nil
+}
+
+func (s *changedOpaqueDockVerification) Write(state dockState) error {
+	s.writes = append(s.writes, state)
+	return nil
+}
+
+func (s *failedDockVerification) Read() (dockState, error) {
+	s.reads++
+	if s.reads == 2 {
+		return dockState{Present: true, Tiles: []any{newDockAppTile("/Applications/Wrong.app", 1_000_000_003)}}, nil
+	}
+	return s.original, nil
+}
+
+func (s *failedDockVerification) Write(state dockState) error {
+	s.writes = append(s.writes, state)
+	return nil
+}
+
+func TestApplyDockRestoresTheOriginalKeyWhenVerificationFails(t *testing.T) {
+	paths := testPaths(t)
+	desired := paths.InHome("Applications", "Desired.app")
+	if err := os.MkdirAll(desired, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original := dockState{Present: true, Tiles: []any{
+		map[string]any{"tile-type": "spacer-tile", "opaque": []byte("preserve")},
+		newDockAppTile("/Applications/Original.app", 1_000_000_001),
+	}}
+	store := &failedDockVerification{original: original}
+	commands := fakeTools(t, fakeTool{name: "killall"})
+	applier, _ := testApplier(t, paths, testMachine(), applyRunner{})
+	applier.Bidir.Dock = store
+
+	err := applier.applyDock()
+	if err == nil || !strings.Contains(err.Error(), "original layout restored") {
+		t.Fatalf("failed verification = %v", err)
+	}
+	if len(store.writes) != 2 || !reflect.DeepEqual(store.writes[1], original) {
+		t.Fatalf("Dock rollback writes = %#v", store.writes)
+	}
+	if issued := commands(); len(issued) != 0 {
+		t.Fatalf("failed verification restarted the Dock: %v", issued)
+	}
+}
+
+func TestApplyDockRestoresTheOriginalKeyWhenAnOpaqueTileChanges(t *testing.T) {
+	paths := testPaths(t)
+	desired := paths.InHome("Applications", "Desired.app")
+	if err := os.MkdirAll(desired, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original := dockState{Present: true, Tiles: []any{
+		map[string]any{"tile-type": "spacer-tile", "opaque": "preserve"},
+		newDockAppTile("/Applications/Original.app", 1_000_000_001),
+	}}
+	store := &changedOpaqueDockVerification{original: original, desired: desired}
+	commands := fakeTools(t, fakeTool{name: "killall"})
+	applier, _ := testApplier(t, paths, testMachine(), applyRunner{})
+	applier.Bidir.Dock = store
+
+	err := applier.applyDock()
+	if err == nil || !strings.Contains(err.Error(), "original layout restored") || !strings.Contains(err.Error(), "non-app tiles") {
+		t.Fatalf("changed opaque tile = %v", err)
+	}
+	if len(store.writes) != 2 || !reflect.DeepEqual(store.writes[1], original) {
+		t.Fatalf("Dock rollback writes = %#v", store.writes)
+	}
+	if issued := commands(); len(issued) != 0 {
+		t.Fatalf("failed verification restarted the Dock: %v", issued)
+	}
+}
+
+func TestApplyDockReportsARestartFailure(t *testing.T) {
+	paths := testPaths(t)
+	desired := paths.InHome("Applications", "Desired.app")
+	if err := os.MkdirAll(desired, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original := dockState{}
+	applied := dockState{Present: true, Tiles: []any{newDockAppTile(desired, 1_000_000_003)}}
+	store := &failedDockRestart{original: original, applied: applied}
+	commands := fakeTools(t, fakeTool{name: "killall", exit: 1})
+	applier, _ := testApplier(t, paths, testMachine(), applyRunner{})
+	applier.Bidir.Dock = store
+
+	err := applier.applyDock()
+	if err == nil || !strings.Contains(err.Error(), "restart Dock") || !strings.Contains(err.Error(), "original layout restored") {
+		t.Fatalf("restart failure = %v", err)
+	}
+	if len(store.writes) != 2 || !reflect.DeepEqual(store.writes[1], original) {
+		t.Fatalf("Dock rollback writes = %#v", store.writes)
+	}
+	if issued := commands(); len(issued) != 1 || !strings.HasPrefix(issued[0], "killall Dock") {
+		t.Fatalf("restart failure commands = %v", issued)
+	}
+}
+
+// A pending bootstrap must import into the declared domain and must not touch
+// an application this Mac has not installed.
 func TestRestorePreferenceImportsOnlyWhenTheAppIsInstalled(t *testing.T) {
 	paths := testPaths(t)
 	machine := testMachine()
@@ -231,7 +416,7 @@ func TestRestorePreferenceImportsOnlyWhenTheAppIsInstalled(t *testing.T) {
 	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
 	applier, chatter := testApplier(t, paths, machine, applyRunner{})
 
-	if err := applier.RestorePreferences(); err != nil {
+	if err := applier.restorePreference(preference); err != nil {
 		t.Fatalf("restore: %v\n%s", err, chatter.String())
 	}
 	issued := strings.Join(commands(), "\n")
@@ -244,12 +429,9 @@ func TestRestorePreferenceImportsOnlyWhenTheAppIsInstalled(t *testing.T) {
 		t.Fatalf("restore relaunched an application that was not running:\n%s", issued)
 	}
 
-	uninstalled, chatter := testApplier(t, paths, machine, notInstalledRunner{})
-	if err := uninstalled.RestorePreferences(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(chatter.String(), "is not installed") {
-		t.Fatalf("an uninstalled application was not reported:\n%s", chatter.String())
+	uninstalled, _ := testApplier(t, paths, machine, notInstalledRunner{})
+	if err := uninstalled.restorePreference(preference); err == nil || !strings.Contains(err.Error(), "restore remains pending") {
+		t.Fatalf("missing app restore = %v", err)
 	}
 }
 
@@ -268,7 +450,7 @@ type sequencedDockRunner struct {
 }
 
 func (r *sequencedDockRunner) Run(ctx context.Context, name string, args ...string) Result {
-	if name == "dockutil" && slices.Equal(args, []string{"--list"}) {
+	if name == "defaults" && slices.Equal(args, []string{"export", dockDomain, "-"}) {
 		listing := r.listings[min(r.reads, len(r.listings)-1)]
 		r.reads++
 		return Result{Stdout: listing}
@@ -326,13 +508,13 @@ func TestApplyReportsAFailedStepOnce(t *testing.T) {
 	if err := atomicWrite(dockSnapshotPath(paths), []byte(first+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runner := &sequencedDockRunner{listings: []string{""}}
-	fakeTools(t, fakeTool{name: "dockutil", exit: 1}, fakeTool{name: "killall"})
+	runner := &sequencedDockRunner{listings: []string{dockDocument()}}
+	fakeTools(t, fakeTool{name: "defaults", exit: 1}, fakeTool{name: "killall"})
 	applier, chatter := testApplier(t, paths, machine, runner)
 
 	err := applier.Apply([]Selection{{ID: dockID, Action: Apply}})
 	if err == nil {
-		t.Fatalf("a failed dockutil was not reported:\n%s", chatter.String())
+		t.Fatalf("a failed defaults write was not reported:\n%s", chatter.String())
 	}
 	if got := strings.Count(err.Error(), dockName+":"); got != 1 {
 		t.Fatalf("Dock reported %d times in %q", got, err.Error())
@@ -423,7 +605,7 @@ func TestRestorePreferenceQuitsAndRelaunchesARunningApp(t *testing.T) {
 	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
 	applier, chatter := testApplier(t, paths, machine, &runningAppRunner{})
 
-	if err := applier.RestorePreferences(); err != nil {
+	if err := applier.restorePreference(preference); err != nil {
 		t.Fatalf("restore: %v\n%s", err, chatter.String())
 	}
 	issued := commands()
@@ -460,7 +642,7 @@ func TestRestorePreferenceRefusesAnApplicationThatWillNotQuit(t *testing.T) {
 	applier, _ := testApplier(t, paths, machine, stubborn)
 	applier.QuitPoll = time.Millisecond
 
-	err := applier.RestorePreferences()
+	err := applier.restorePreference(preference)
 	if err == nil || !strings.Contains(err.Error(), "did not quit") {
 		t.Fatalf("a stubborn application produced %v", err)
 	}

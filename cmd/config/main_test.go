@@ -121,3 +121,84 @@ func TestDevNullIsNotATerminal(t *testing.T) {
 		t.Fatal("a regular file was treated as a terminal")
 	}
 }
+
+func TestSnapshotTakesNoMessage(t *testing.T) {
+	binary, home := buildConfig(t), fixtureHome(t)
+
+	withMessage, code := runConfig(t, binary, home, "--snapshot", "Manual subject")
+	if code != 1 || !strings.Contains(withMessage, "invalid snapshot request") {
+		t.Fatalf("config --snapshot accepted a message (exit %d):\n%s", code, withMessage)
+	}
+
+	withoutMessage, code := runConfig(t, binary, home, "--snapshot")
+	if code != 1 || strings.Contains(withoutMessage, "invalid snapshot request") {
+		t.Fatalf("config --snapshot rejected its parameterless form (exit %d):\n%s", code, withoutMessage)
+	}
+}
+
+func TestPathAndInstallDoNotRequireAMachineRepository(t *testing.T) {
+	binary, home := buildConfig(t), t.TempDir()
+
+	output, code := runConfig(t, binary, home, "path")
+	wantPath := filepath.Join(home, "Library", "Application Support", "Config", "repository") + "\n"
+	if code != 0 || output != wantPath {
+		t.Fatalf("config path = %q (exit %d), want %q", output, code, wantPath)
+	}
+
+	output, code = runConfig(t, binary, home, "install")
+	if code != 0 || output != "" {
+		t.Fatalf("config install = %q (exit %d)", output, code)
+	}
+	installed := filepath.Join(home, ".local", "bin", "config")
+	installedBytes, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryBytes, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(installedBytes) != string(binaryBytes) || info.Mode().Perm() != 0o755 {
+		t.Fatalf("installed command differs from the running binary or is not executable")
+	}
+}
+
+func TestBootstrapInstallsTheCommandBeforeARestoreFailure(t *testing.T) {
+	binary, home := buildConfig(t), t.TempDir()
+	source := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", source}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+	git("init", "--quiet", "--initial-branch=main")
+	git("config", "user.name", "Config Test")
+	git("config", "user.email", "config@example.invalid")
+	document := `kind = "azohra.config.machine"
+schema = 1
+
+[repository]
+branch = "main"
+url = "` + source + `"
+`
+	if err := os.WriteFile(filepath.Join(source, "config.toml"), []byte(document), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "config.toml")
+	git("commit", "--quiet", "-m", "Add machine contract")
+
+	output, code := runConfig(t, binary, home, "bootstrap", source)
+	if code != 1 || !strings.Contains(output, "mise unavailable") {
+		t.Fatalf("bootstrap without mise = %q (exit %d)", output, code)
+	}
+	installed := filepath.Join(home, ".local", "bin", "config")
+	if info, err := os.Stat(installed); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("bootstrap did not leave a permanent command: %v, %v", info, err)
+	}
+}

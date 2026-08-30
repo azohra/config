@@ -101,7 +101,7 @@ func TestUpdateRunsOnlyWhenSelected(t *testing.T) {
 	}
 }
 
-func TestSnapshotRefreshesShowsFilesAndRequiresMessage(t *testing.T) {
+func TestSnapshotRefreshesShowsFilesAndSavesWithoutAMessage(t *testing.T) {
 	report := config.Report{Snapshot: config.SnapshotStatus{
 		Dirty: 2, Changes: []string{" M README.md", "?? cmd/config/main.go"},
 		Upstream: "origin/main", Destination: "origin/main",
@@ -116,14 +116,17 @@ func TestSnapshotRefreshesShowsFilesAndRequiresMessage(t *testing.T) {
 	next, _ = refreshing.Update(reportMsg{report: report})
 	got := next.(Model)
 	view := got.renderSnapshot()
-	for _, want := range []string{"2 changed files", "README.md", "cmd/config/main.go", "Message"} {
+	for _, want := range []string{"2 changed files", "README.md", "cmd/config/main.go", "Save snapshot"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("snapshot missing %q:\n%s", want, view)
 		}
 	}
+	if strings.Contains(view, "Message") {
+		t.Fatalf("snapshot asks for a message:\n%s", view)
+	}
 	next, _ = got.updateSnapshot(press(tea.KeyEnter))
-	if empty := next.(Model); empty.input.Err == nil || empty.screen != screenSnapshot {
-		t.Fatal("empty snapshot message was accepted")
+	if saving := next.(Model); saving.screen != screenRunning || saving.operation.label != "Save" {
+		t.Fatalf("screen=%v label=%q, want running Save", saving.screen, saving.operation.label)
 	}
 }
 

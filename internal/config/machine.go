@@ -17,13 +17,14 @@ const (
 
 // Machine is Config's complete contract inside config.toml.
 type Machine struct {
-	Kind        string             `toml:"kind"`
-	Schema      int                `toml:"schema"`
-	Repository  MachineRepository  `toml:"repository"`
-	Dock        bool               `toml:"dock"`
-	ChromePWAs  bool               `toml:"chrome_pwas"`
-	MacOS       MachineMacOS       `toml:"macos"`
-	Preferences []PreferenceBackup `toml:"preferences"`
+	Kind           string             `toml:"kind"`
+	Schema         int                `toml:"schema"`
+	Repository     MachineRepository  `toml:"repository"`
+	Dock           bool               `toml:"dock"`
+	ChromePWAs     bool               `toml:"chrome_pwas"`
+	FinderFavorite *FinderFavorite    `toml:"finder_favorite"`
+	MacOS          MachineMacOS       `toml:"macos"`
+	Preferences    []PreferenceBackup `toml:"preferences"`
 }
 
 type MachineRepository struct {
@@ -102,6 +103,11 @@ func (m Machine) Validate() error {
 			return fmt.Errorf("macos.spotlight must declare a positive id, type standard, and three parameters")
 		}
 	}
+	if m.FinderFavorite != nil {
+		if err := m.FinderFavorite.Validate(); err != nil {
+			return fmt.Errorf("finder_favorite: %w", err)
+		}
+	}
 	seenPreferences := map[string]bool{}
 	for _, preference := range m.Preferences {
 		if !contractIDPattern.MatchString(preference.ID) || preference.Name == "" {
@@ -127,6 +133,7 @@ func validGitName(value string) bool {
 // Config child process and stops discovery at the managed checkout.
 func MiseEnvironment(paths Paths) []string {
 	return []string{
+		"MISE_AUTO_UPDATE=0",
 		"MISE_CONFIG_DIR=" + paths.InRoot("mise"),
 		"MISE_GLOBAL_CONFIG_ROOT=" + paths.Root,
 		"MISE_CEILING_PATHS=" + paths.Root,

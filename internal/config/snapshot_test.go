@@ -65,10 +65,10 @@ func TestSnapshotSaveAndIdempotence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := snapshotter.Save("Update settings"); err != nil {
+	if err := snapshotter.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if got := gitTest(t, root, "log", "-1", "--format=%s"); got != "Update settings" {
+	if got := gitTest(t, root, "log", "-1", "--format=%s"); got != "Update machine snapshot" {
 		t.Fatalf("commit subject = %q", got)
 	}
 	if got := gitTest(t, root, "status", "--short"); got != "" {
@@ -77,25 +77,8 @@ func TestSnapshotSaveAndIdempotence(t *testing.T) {
 	if local, upstream := gitTest(t, root, "rev-parse", "HEAD"), gitTest(t, remote, "rev-parse", "refs/heads/main"); local != upstream {
 		t.Fatal("remote does not match local HEAD")
 	}
-	if err := snapshotter.Save(""); err != nil {
+	if err := snapshotter.Save(); err != nil {
 		t.Fatalf("idempotent save: %v", err)
-	}
-}
-
-func TestSnapshotRequiresMessageBeforeCommit(t *testing.T) {
-	snapshotter, root, _ := snapshotFixture(t)
-	before := gitTest(t, root, "rev-parse", "HEAD")
-	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := snapshotter.Save(""); err == nil {
-		t.Fatal("save accepted dirty state without a message")
-	}
-	if after := gitTest(t, root, "rev-parse", "HEAD"); after != before {
-		t.Fatal("missing message created a commit")
-	}
-	if staged := gitTest(t, root, "diff", "--cached", "--name-only"); staged != "" {
-		t.Fatalf("missing message staged files: %s", staged)
 	}
 }
 
@@ -135,7 +118,7 @@ func TestSnapshotRefusesAnythingButTheDeclaredMainUpstream(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			err := snapshotter.Save("Must not save")
+			err := snapshotter.Save()
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("save error = %v, want %q", err, test.want)
 			}
@@ -151,7 +134,7 @@ func TestSnapshotRefusesARunnerInAnotherRepository(t *testing.T) {
 	other := t.TempDir()
 	gitTest(t, other, "init", "--quiet", "--initial-branch=main")
 	snapshotter.Paths.Root = other
-	if err := snapshotter.Save(""); err == nil || !strings.Contains(err.Error(), "repository root does not match Config's managed checkout") {
+	if err := snapshotter.Save(); err == nil || !strings.Contains(err.Error(), "repository root does not match Config's managed checkout") {
 		t.Fatalf("wrong-root error = %v", err)
 	}
 	if got := gitTest(t, root, "status", "--short"); got != "" {
@@ -168,7 +151,7 @@ func TestSnapshotRejectedPushLeavesLocalCommit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("rejected\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := snapshotter.Save("Rejected snapshot"); err == nil {
+	if err := snapshotter.Save(); err == nil {
 		t.Fatal("rejected push succeeded")
 	}
 	if got := gitTest(t, root, "status", "--short"); got != "" {
@@ -188,7 +171,7 @@ func TestSnapshotSaveKeepsCommandsQuiet(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("quiet\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := snapshotter.Save("Quiet snapshot"); err != nil {
+	if err := snapshotter.Save(); err != nil {
 		t.Fatal(err)
 	}
 	if chatter.Len() > 0 {
@@ -206,7 +189,7 @@ func TestSnapshotHonorsRepositoryCommitHooks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("blocked\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := snapshotter.Save("Blocked snapshot"); err == nil {
+	if err := snapshotter.Save(); err == nil {
 		t.Fatal("repository commit hook was bypassed")
 	}
 	if after := gitTest(t, root, "rev-parse", "HEAD"); after != before {

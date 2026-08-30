@@ -20,14 +20,17 @@ Usage:
   config
   config --status
   config --version
+  config path
+  config install
   config update
   config bootstrap <repository>
 
 Config inspects first, proposes a plan, requires explicit choices for app state,
 then offers to commit and push the resulting snapshot.
 
-Bootstrap clones an authenticated Git repository into Config's managed storage
-and restores it only when that clone was created by the current invocation.
+Bootstrap clones an authenticated Git repository into Config's managed storage,
+installs the permanent Config command, and resumes restore until every declared
+step has completed. Path prints the managed repository's canonical location.
 
 Update asks the canonical mise to update itself, declared tools, packages, and
 clean repositories. It runs only when explicitly invoked.`
@@ -58,13 +61,29 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if len(args) > 0 && args[0] == "path" {
+		if len(args) != 1 {
+			return errors.New("usage: config path")
+		}
+		fmt.Println(paths.Root)
+		return nil
+	}
+	if len(args) > 0 && args[0] == "install" {
+		if len(args) != 1 {
+			return errors.New("usage: config install")
+		}
+		return config.InstallCurrent(paths)
+	}
 	var machine config.Machine
-	fresh := false
+	restorePending := false
 	if len(args) > 0 && args[0] == "bootstrap" {
 		if len(args) != 2 {
 			return errors.New("usage: config bootstrap <repository>")
 		}
-		machine, fresh, err = config.MaterializeRepository(paths, args[1], os.Stdout, os.Stderr)
+		machine, restorePending, err = config.MaterializeRepository(paths, args[1], os.Stdout, os.Stderr)
+		if err == nil {
+			err = config.InstallCurrent(paths)
+		}
 		args = nil
 	} else {
 		machine, err = config.LoadMachine(paths)
@@ -73,8 +92,8 @@ func run() error {
 		return err
 	}
 	runner := config.NewMachineRunner(paths)
-	if fresh {
-		return config.RestoreFresh(paths, machine, os.Stdout)
+	if restorePending {
+		return config.RestorePending(paths, machine, os.Stdout)
 	}
 	if len(args) > 0 {
 		switch args[0] {
@@ -97,10 +116,10 @@ func run() error {
 			}
 			return config.NewApplier(paths, machine, os.Stdout).Apply(selections)
 		case "--snapshot":
-			if len(args) != 2 {
+			if len(args) != 1 {
 				return errors.New("invalid snapshot request")
 			}
-			return config.NewSnapshotter(paths, machine, os.Stdout).Save(args[1])
+			return config.NewSnapshotter(paths, machine, os.Stdout).Save()
 		case "update":
 			if len(args) != 1 {
 				return errors.New("usage: config update")
@@ -108,7 +127,7 @@ func run() error {
 			return config.NewUpdater(paths, os.Stdout).Update()
 		default:
 			if !strings.HasPrefix(args[0], "-") {
-				return errors.New("unknown command; run config, config --status, config update, or config bootstrap <repository>")
+				return errors.New("unknown command; run config help for available commands")
 			}
 			return fmt.Errorf("unknown option: %s", args[0])
 		}

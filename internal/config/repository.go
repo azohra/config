@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -12,7 +13,8 @@ import (
 
 // MaterializeRepository clones the requested configuration into Config's
 // managed checkout. The locator carries public repository identity;
-// authentication comes from the caller's environment.
+// authentication comes from the caller's environment. The boolean reports
+// whether this exact checkout still has bootstrap restore work pending.
 func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer) (Machine, bool, error) {
 	if _, err := repositoryIdentity(source); err != nil {
 		return Machine{}, false, err
@@ -22,7 +24,11 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 			return Machine{}, false, fmt.Errorf("managed checkout %s is not a directory", paths.Root)
 		}
 		machine, err := validateMaterializedRepository(paths, source)
-		return machine, false, err
+		if err != nil {
+			return Machine{}, false, err
+		}
+		_, pending, err := pendingRestore(paths, machine)
+		return machine, pending, err
 	} else if !os.IsNotExist(err) {
 		return Machine{}, false, err
 	}
@@ -50,7 +56,15 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 	if err != nil {
 		return Machine{}, false, err
 	}
+	progress, err := beginRestore(paths, stagedPaths, machine)
+	if err != nil {
+		return Machine{}, false, err
+	}
 	if err := os.Rename(checkout, paths.Root); err != nil {
+		cleanupErr := os.Remove(restoreStatePath(paths, progress.record.Checkout))
+		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			return Machine{}, false, errors.Join(fmt.Errorf("install managed checkout: %w", err), fmt.Errorf("remove pending restore state: %w", cleanupErr))
+		}
 		return Machine{}, false, fmt.Errorf("install managed checkout: %w", err)
 	}
 	return machine, true, nil

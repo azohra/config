@@ -1,9 +1,7 @@
 package ui
 
 import (
-	"fmt"
 	"slices"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -190,8 +188,6 @@ func (m Model) beginSnapshot() (tea.Model, tea.Cmd) {
 func (m Model) updateSnapshot(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
-		m.input.Blur()
-		m.input.Err = nil
 		m.screen = screenDashboard
 		return m, nil
 	case "pgup":
@@ -201,19 +197,7 @@ func (m Model) updateSnapshot(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll += 10
 		return m, nil
 	case "enter":
-		message := ""
-		if m.report.Snapshot.Dirty > 0 {
-			message = strings.TrimSpace(m.input.Value())
-			if message == "" {
-				m.input.Err = fmt.Errorf("message required")
-				return m, nil
-			}
-			m.input.Blur()
-		}
-		return m.startOperation("Save", m.executable, "--snapshot", message)
+		return m.startOperation("Save", m.executable, "--snapshot")
 	}
-	m.input.Err = nil
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(key)
-	return m, cmd
+	return m, nil
 }

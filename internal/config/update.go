@@ -8,16 +8,18 @@ import (
 )
 
 type Updater struct {
-	Mise string
-	Live LiveRunner
-	Log  Logger
+	Mise   string
+	Runner Runner
+	Live   LiveRunner
+	Log    Logger
 }
 
 func NewUpdater(paths Paths, out io.Writer) Updater {
 	return Updater{
-		Mise: misePath(paths),
-		Live: NewMachineLiveRunner(paths),
-		Log:  Logger{Out: out},
+		Mise:   misePath(paths),
+		Runner: NewMachineRunner(paths),
+		Live:   NewMachineLiveRunner(paths),
+		Log:    Logger{Out: out},
 	}
 }
 
@@ -27,12 +29,22 @@ func (u Updater) Update() error {
 		return fmt.Errorf("mise unavailable at %s", u.Mise)
 	}
 
+	u.Log.Section("mise")
+	if err := u.Live.Command("mise", "self-update", testedMiseVersion, "--yes", "--no-plugins"); err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("mise: %w", err)
+	}
+	if err := requireTestedMise(u.Runner); err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("mise: %w", err)
+	}
+	u.Log.OK("standalone mise set to " + testedMiseVersion)
+
 	steps := []struct {
 		name    string
 		success string
 		args    []string
 	}{
-		{"mise", "standalone mise updated", []string{"self-update", "--yes"}},
 		{"Tools", "declared tools updated", []string{"upgrade", "--yes"}},
 		{"Packages", "declared packages updated", []string{"bootstrap", "packages", "upgrade", "--yes"}},
 		{"Repositories", "clean repositories updated", []string{"bootstrap", "repos", "update", "--yes", "--skip-dirty"}},

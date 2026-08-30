@@ -93,12 +93,23 @@ func fakeTools(t *testing.T, tools ...fakeTool) func() []string {
 func testApplier(t *testing.T, paths Paths, machine Machine, runner Runner) (Applier, *bytes.Buffer) {
 	t.Helper()
 	var chatter bytes.Buffer
+	live := LiveRunner{Dir: paths.Root, Stdout: &chatter, Stderr: &chatter}
 	return Applier{
 		Paths:   paths,
 		Machine: machine,
 		Runner:  runner,
-		Live:    LiveRunner{Dir: paths.Root, Stdout: &chatter, Stderr: &chatter},
+		Live:    live,
 		Log:     Logger{Out: &chatter},
-		Bidir:   NewBidirectional(paths, runner),
+		Bidir: Bidirectional{
+			Paths: paths, Runner: runner, Dock: defaultsDockStore{Runner: runner, Live: live},
+			Baselines: Baselines{Dir: paths.StateDir},
+		},
 	}, &chatter
+}
+
+func testBidirectional(paths Paths, runner Runner) Bidirectional {
+	return Bidirectional{
+		Paths: paths, Runner: runner, Dock: defaultsDockStore{Runner: runner},
+		Baselines: Baselines{Dir: paths.StateDir},
+	}
 }

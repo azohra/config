@@ -11,13 +11,17 @@ The machine repository owns policy and data. Its root `config.toml` is Config's
 strict contract. Native mise declarations live under `mise/`; Config does not
 parse or reinterpret them.
 
-Mise owns the resources it declares and the order encoded by its bootstrap
-phases and hooks. Config invokes one canonical standalone binary at
+Mise owns the resources the machine repository declares and the order encoded
+by its bootstrap phases and hooks. Config invokes one canonical standalone
+binary at
 `~/.local/bin/mise`, scopes the repository's native `mise/` configuration to
 each child process, and reports each bootstrap phase's status or the apply
 result. Package names, repository purposes, commands, secret references, and
 provider configuration remain opaque mise input. The standalone mise
-installation is Config's execution substrate.
+installation is Config's execution substrate, and Config accepts exactly the
+version whose command and phase vocabulary the release tests.
+Config disables mise's ambient auto-update behavior in child processes;
+`config update` is the explicit version transition.
 
 Config probes the phases separately rather than taking mise's aggregate.
 The aggregate includes `repos`, where mise answers two questions at once:
@@ -30,8 +34,8 @@ must keep pace with mise, so a test pins the list to the phases mise offers.
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
 native macOS capabilities. A capability is absent unless schema 1 declares it.
-The document opts into a capability; it does not select the files Config uses
-to persist that capability.
+The document opts into a capability and supplies personal values; it does not
+select the files Config uses to implement that capability.
 
 ## Managed checkout
 
@@ -50,7 +54,17 @@ atomic rename to:
 Validation proves that the checkout root is not a symlink, the `origin` remote
 matches the requested repository, the document declares the same repository,
 and the checked-out branch and upstream match the document. A failed clone or
-contract leaves no managed checkout behind.
+contract leaves no managed checkout behind. Before installation, Config gives
+the clone a local restore identity and atomically records pending progress under
+`~/Library/Application Support/Config/restore`. A later bootstrap resumes only
+when the repository, checkout, cloned commit, and versioned declaration plan
+all match and the checkout remains clean. Successful steps are recorded
+individually; completion closes the restore permanently for that checkout.
+
+Bootstrap atomically installs the running released executable at
+`~/.local/bin/config` after checkout validation and before restoration. Config
+therefore owns its permanent command even when restoration needs another run.
+`config path` exposes the canonical checkout without requiring it to exist.
 
 ## Reconciliation
 
@@ -63,12 +77,13 @@ or forged plan cannot invoke an action the current state no longer allows.
 A declared capability without its canonical snapshot is `uncaptured`. Capture
 reads live state and atomically creates the repository artifact. That first
 capture establishes the tracked configuration; later inspections can compare
-saved and live state. A fresh clone restores only artifacts already present
-and leaves missing ones uncaptured. It reports an artifact it cannot read
-rather than stopping, because this machine has no earlier state to fall back
-on and the capabilities beside it would restore perfectly well. Converging
-mise stays the one deliberate stop: it installs the applications every later
-step restores into.
+saved and live state. A pending bootstrap restores only artifacts already
+present and leaves missing ones uncaptured. It reports an artifact it cannot
+read rather than stopping, because the capabilities beside it may restore
+perfectly well. Completed steps stay complete across retries. Converging mise
+stays the one deliberate stop: it installs the applications every later step
+restores into. A missing snapshot completes as uncaptured; a missing application
+leaves its dependent step pending for a later retry.
 
 Apply first converges mise with:
 
@@ -77,9 +92,15 @@ mise bootstrap --yes --skip-dirty
 ```
 
 The selected mise configuration owns any custom ordering through mise hooks.
-Config then converges declared native macOS facts and executes selected
-preference, Chrome PWA, and Dock actions. Independent failures are collected so
-one resource does not hide the rest of the plan.
+Config then converges declared native macOS facts and executes selected Finder
+Favorite, preference, Chrome PWA, and Dock actions. Independent failures are
+collected so one resource does not hide the rest of the plan.
+
+Finder Favorites are authoritative one-way state. The declaration names the
+Favorite; Config derives the managed checkout URL and uses the native macOS
+shared-file-list API to replace same-named entries that point elsewhere. Order
+and unrelated Favorites remain outside the resource. Config loads that API at
+runtime and reports the resource unavailable if macOS no longer exposes it.
 
 Dock and Chrome PWAs use three-way reconciliation:
 
@@ -94,6 +115,14 @@ kept because a restore rebuilds the bundle from them, but Chrome owns that
 content and rewrites it on its own schedule, so comparing it would report
 Chrome's churn as a choice.
 
+Dock inspection exports the current user's `com.apple.dock` domain and decodes
+`persistent-apps` without writing. Restore reorders only application tiles,
+reuses their complete existing dictionaries, and carries non-app tiles through
+unchanged. Missing applications receive a minimal file tile with a unique
+identifier. Config writes only the `persistent-apps` key, rereads its app paths,
+and restores the original key when verification fails. The Dock restarts once,
+after a verified change.
+
 Baselines live outside the repository under `~/.cache/config/state`. They are
 written only when saved and live state agree. Captures use atomic writes; PWA
 snapshots validate identifiers, URLs, schemes, icon digests, and plist input
@@ -102,9 +131,9 @@ before replacing saved state.
 Preference plists use a different contract. Their declaration identifies the
 application and defaults domain; Config derives
 `snapshots/preferences/<id>.plist`. On an established Mac, Config can capture
-current settings. A fresh clone may restore existing backups after mise installs
-their applications. The restore validates the plist, checks the bundle, quits a
-running application before import, and relaunches it afterward.
+current settings. A pending bootstrap may restore existing backups after mise
+installs their applications. The restore validates the plist, checks the
+bundle, quits a running application before import, and relaunches it afterward.
 
 ## Snapshot safety
 
@@ -114,9 +143,10 @@ branch, exact `origin/<branch>` upstream, and remote identity. It then refuses
 when a resource that owns snapshot content is unreadable or still waiting on a
 bidirectional choice. Machine setup is reported in status but does not gate a
 save: it converges live settings and records nothing in the repository, so a
-package or checkout mise owns cannot make a commit wrong. Config commits under
-the repository's Git policy and performs an append-only push. Push failure
-leaves the local commit intact.
+package or checkout mise owns cannot make a commit wrong. Config writes the
+fixed `Update machine snapshot` subject, commits under the repository's Git
+policy, and performs an append-only push. Push failure leaves the local commit
+intact.
 
 The repository locator is public configuration. Authentication stays in the
 caller's Git environment or credential helper, outside the document, logs, and
@@ -131,5 +161,6 @@ operations in child processes. `cmd/config` owns argument parsing and selects
 the CLI or terminal interface.
 
 The release contains a single static binary for each supported macOS
-architecture. GitHub Releases is Config's distribution channel; mise's GitHub
-backend supplies the permanent installation selected by the machine repository.
+architecture. GitHub Releases is Config's distribution channel. Mise hands the
+selected release to Config once; Config installs that executable as its
+permanent command.

@@ -12,20 +12,21 @@ import (
 	"testing"
 )
 
-func TestMiseVersionContract(t *testing.T) {
+func TestMiseVersionParsing(t *testing.T) {
 	for _, test := range []struct {
-		output  string
-		minimum string
-		want    bool
+		output string
+		want   string
+		ok     bool
 	}{
-		{"2026.8.13 macos-arm64", "2026.8.13", true},
-		{"mise 2026.9.0", "2026.8.13", true},
-		{"v2026.8.12", "2026.8.13", false},
-		{"2025.12.99", "2026.8.13", false},
-		{"not a version", "2026.8.13", false},
+		{"2026.8.14 macos-arm64", "2026.8.14", true},
+		{"mise 2026.9.0", "2026.9.0", true},
+		{"v2026.8.13", "2026.8.13", true},
+		{"2026.8.14-beta.1", "", false},
+		{"not a version", "", false},
 	} {
-		if got := miseVersionAtLeast(test.output, test.minimum); got != test.want {
-			t.Errorf("miseVersionAtLeast(%q, %q) = %v, want %v", test.output, test.minimum, got, test.want)
+		got, ok := miseVersion(test.output)
+		if got != test.want || ok != test.ok {
+			t.Errorf("miseVersion(%q) = %q, %v; want %q, %v", test.output, got, ok, test.want, test.ok)
 		}
 	}
 }
@@ -40,6 +41,7 @@ type miseStubRunner struct {
 	repos        map[string]string
 	origins      map[string]string
 	missingTools string
+	version      string
 }
 
 func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Result {
@@ -48,7 +50,10 @@ func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Res
 	r.mu.Unlock()
 	switch {
 	case name == "mise" && slices.Equal(args, []string{"--version"}):
-		return Result{Stdout: minimumMiseVersion}
+		if r.version != "" {
+			return Result{Stdout: r.version}
+		}
+		return Result{Stdout: testedMiseVersion}
 	case name == "mise" && slices.Equal(args, []string{"ls", "--missing", "-J"}):
 		if r.missingTools == "" {
 			return Result{Stdout: "{}"}
@@ -80,6 +85,17 @@ func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Res
 }
 
 func (*miseStubRunner) Exists(string) bool { return true }
+
+func TestMiseChecksRequireTheTestedVersion(t *testing.T) {
+	for _, version := range []string{"2026.8.13", "2026.8.15"} {
+		checks := (Inspector{Runner: &miseStubRunner{version: version}}).miseChecks()
+		if len(checks) != 1 || checks[0].OK ||
+			checks[0].Label != "mise "+version+" is unsupported" ||
+			!strings.Contains(checks[0].Detail, testedMiseVersion) {
+			t.Fatalf("mise %s produced %+v", version, checks)
+		}
+	}
+}
 
 // A converged phase exits zero, which Result.ExitCode reports as -1 because
 // there is no ExitError to read. Reading the code before the error turns

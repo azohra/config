@@ -1,8 +1,8 @@
 # Config
 
 Config reconciles a Mac against a Git repository you control. It gives mise's
-machine bootstrap a focused terminal interface, adds native support for a few
-macOS resources that can change in both directions, and snapshots accepted
+machine bootstrap a focused terminal interface, adds typed support for macOS
+resources that need more than a mise declaration, and snapshots accepted
 changes back to the same repository.
 
 The caller selects the machine repository and supplies its Git authentication.
@@ -10,24 +10,23 @@ Config scopes each mise invocation to that repository's document.
 
 ## Install
 
-Config requires macOS, Git, and mise 2026.8.13 or newer installed at
+Config requires macOS, Git, and mise 2026.8.14 installed at
 `~/.local/bin/mise`. Mise can run the released binary for the initial handoff:
 
 ```bash
-mise x github:azohra/config@0.3.0 -- \
+mise x github:azohra/config@0.4.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
 Authentication comes from the calling environment. `bootstrap` rejects
 credential-bearing URLs, clones the selected repository to
 `~/Library/Application Support/Config/repository`, validates its contract, and
-restores saved state only when that invocation created the clone. An existing
-managed checkout follows the normal inspect-and-select workflow.
-
-The initial invocation is one-shot. The machine repository can expose the
-declared Config tool through a launcher that scopes its mise shim to this
-document; the document itself remains repository state rather than ambient mise
-configuration.
+records restore progress before it installs the checkout. Bootstrap also copies
+the running release to `~/.local/bin/config` before restoration begins. If setup
+or one restore step fails, rerun the same bootstrap command to continue the
+unfinished steps. A completed checkout, or an existing checkout with no
+matching restore record, follows the normal inspect-and-select workflow and is
+never restored.
 
 ## Machine repository
 
@@ -47,10 +46,9 @@ Native mise configuration lives separately in `mise/config.toml` and optional
 `mise/conf.d/*.toml` fragments:
 
 ```toml
-min_version = "2026.8.13"
+min_version = "2026.8.14"
 
 [tools]
-"github:azohra/config" = "0.3.0"
 node = "24"
 
 [dotfiles]
@@ -78,6 +76,9 @@ chrome_pwas = true
 [repository]
 branch = "main"
 url = "https://github.com/owner/machine.git"
+
+[finder_favorite]
+name = "Machine config"
 
 [macos]
 current_host_tap_to_click = true
@@ -107,19 +108,30 @@ snapshots/chrome-pwas/<id>.icns
 snapshots/preferences/<preference-id>.plist
 ```
 
-A declared capability with no saved state is uncaptured, not broken. Capture
-reads the live Mac and creates its tracked snapshot. Save then commits that
-snapshot with the rest of the repository. On a fresh clone, Config restores
-only snapshots that exist and leaves uncaptured capabilities ready for their
-first capture.
+A declared snapshot-backed capability with no saved state is uncaptured, not
+broken. Capture reads the live Mac and creates its tracked snapshot. Save then
+commits that snapshot with the rest of the repository. During a pending restore,
+Config restores only snapshots that exist and leaves uncaptured capabilities
+ready for their first capture. Authoritative capabilities instead compare their
+declared value directly with the Mac and own no snapshot.
 
 Dock and Chrome PWA snapshots are bidirectional. Config compares the saved
 snapshot, the live Mac, and a local last-agreement baseline so it can
 distinguish a saved edit from a live edit and stop for a choice when both
 changed. It compares which apps are in the Dock and which PWAs are installed,
 not what is inside them: Chrome rewrites a PWA bundle whenever a site changes
-its icon, and that is Chrome's to change. Preference plists are one-way
-backups on an established Mac and are restored only during a fresh bootstrap.
+its icon, and that is Chrome's to change. A Dock restore preserves the full
+dictionary for every app it keeps and leaves non-app tiles alone. It writes
+only `persistent-apps`, verifies the resulting app paths, and restores the
+original key if verification fails.
+
+Preference plists are one-way backups on an established Mac and are restored
+only while bootstrap has a pending restore for that exact checkout.
+
+Finder Favorites are one-way desired state. Config derives the target from its
+managed checkout and the machine document supplies only the label. Inspection
+is read-only. Apply uses macOS's native shared-file-list API to make that label
+open the managed repository.
 
 Everything else belongs to mise. Packages, tools, repositories, dotfiles,
 services, Compose projects, macOS defaults, LaunchAgents, hooks, and custom
@@ -137,12 +149,14 @@ The interface inspects first, presents uncaptured state, drift, and conflicts,
 applies only the selected actions, then offers to save the resulting repository
 snapshot.
 Inspection is read-only. Apply delegates writes to mise, `defaults`, `hidutil`,
-`dockutil`, and the relevant applications.
+native macOS APIs, and the relevant applications.
 
 Useful non-interactive commands:
 
 ```bash
 config --status
+config path
+config install
 config update
 config --version
 ```
@@ -154,15 +168,20 @@ declared repository that is not checked out, and one whose checkout holds a
 different repository. Both answers are local. It says nothing about how far a
 checkout has drifted from its remote:
 that costs a network round trip each, and `update` already owns it. `update`
-is explicit and unscheduled: it updates the standalone mise binary, declared
-tools and packages, then fast-forwards clean declared repositories. Dirty
-repositories are reported and left untouched.
-Declaring `github:azohra/config` makes the initial one-shot invocation
-permanent. Changing its selected version upgrades Config through mise.
+is explicit and unscheduled: it holds the standalone mise binary at Config's
+tested version, updates declared tools and packages, then fast-forwards clean
+declared repositories. Dirty repositories are reported and left untouched.
+`config path` prints the managed checkout even before it exists. To replace the
+permanent Config command with another release, run that release explicitly:
 
-Saving stages the whole managed repository and creates a commit under the
-repository's Git policy. The declared `origin`, branch, and upstream determine
-the sole push destination; branch management remains an explicit Git operation.
+```bash
+mise x github:azohra/config@0.4.0 -- config install
+```
+
+Saving stages the whole managed repository and creates a commit under its Git
+policy. Config writes `Update machine snapshot` as the subject; the user only
+confirms the save. The declared `origin`, branch, and upstream determine the sole
+push destination; branch management remains an explicit Git operation.
 
 ## Development
 
