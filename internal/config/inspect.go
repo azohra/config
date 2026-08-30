@@ -70,7 +70,8 @@ func (i Inspector) miseChecks() []Check {
 	}
 	checks := []Check{yes("mise " + currentVersion)}
 	checks = append(checks, i.bootstrapChecks()...)
-	checks = append(checks, i.toolCheck(), i.repositoryCheck())
+	checks = append(checks, i.toolCheck())
+	checks = append(checks, i.repositoryChecks()...)
 	return append(checks, setupChecks(i.Paths, i.Runner, miseFacts(i.Machine))...)
 }
 
@@ -139,26 +140,57 @@ func (i Inspector) toolCheck() Check {
 		Failure, strings.Join(names, ", "))
 }
 
-// repositoryCheck answers what [bootstrap.repos] declares: the checkout
-// should be there. How far it has drifted from its remote is a different
-// question, one config update already owns and one that costs a network
-// round trip for every repository.
-func (i Inspector) repositoryCheck() Check {
+// repositoryChecks answer what [bootstrap.repos] declares: this repository
+// belongs at this path. Both halves read locally. How far a checkout has
+// drifted from its remote is a different question, one config update owns
+// and one that costs a network round trip for every repository.
+func (i Inspector) repositoryChecks() []Check {
 	declared, err := miseRepositories(i.Paths, i.Runner)
 	if err != nil {
-		return no("declared repositories unreadable", Failure, err.Error())
+		return []Check{no("declared repositories unreadable", Failure, err.Error())}
 	}
-	var missing []string
-	for _, path := range declared {
-		if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr != nil {
-			missing = append(missing, filepath.Base(path))
+	// One git call per declared checkout, so they go out together.
+	type verdict struct{ absent, foreign bool }
+	verdicts := make([]verdict, len(declared))
+	var wg sync.WaitGroup
+	for index, repository := range declared {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, statErr := os.Stat(filepath.Join(repository.Path, ".git")); statErr != nil {
+				verdicts[index] = verdict{absent: true}
+				return
+			}
+			if repository.URL == "" {
+				return
+			}
+			origin := run(i.Runner, "git", "-C", repository.Path, "remote", "get-url", managedRemote)
+			verdicts[index] = verdict{foreign: origin.Err != nil || !sameRepositoryLocator(origin.Output(), repository.URL)}
+		}()
+	}
+	wg.Wait()
+	var missing, foreign []string
+	for index, repository := range declared {
+		switch name := filepath.Base(repository.Path); {
+		case verdicts[index].absent:
+			missing = append(missing, name)
+		case verdicts[index].foreign:
+			foreign = append(foreign, name)
 		}
 	}
+	var checks []Check
 	if len(missing) > 0 {
-		return no(FormatCount(len(missing), "declared repository missing", "declared repositories missing"),
-			Failure, strings.Join(missing, ", "))
+		checks = append(checks, no(FormatCount(len(missing), "declared repository missing", "declared repositories missing"),
+			Failure, strings.Join(missing, ", ")))
 	}
-	return yes(FormatCount(len(declared), "repository checked out", "repositories checked out"))
+	if len(foreign) > 0 {
+		checks = append(checks, no(FormatCount(len(foreign), "checkout is another repository", "checkouts are another repository"),
+			Failure, strings.Join(foreign, ", ")))
+	}
+	if len(checks) > 0 {
+		return checks
+	}
+	return []Check{yes(FormatCount(len(declared), "repository checked out", "repositories checked out"))}
 }
 
 func (i Inspector) setup() Resource {

@@ -84,10 +84,17 @@ var misePhases = [][]string{
 	{"macos", "launchd-agents"},
 }
 
+// miseRepository is one checkout mise declares: where it belongs, and which
+// repository belongs there.
+type miseRepository struct {
+	Path string
+	URL  string
+}
+
 // miseRepositories asks mise which checkouts it declares. Config never reads
 // a declaration file: mise parses its own configuration and hands back the
 // paths, and what a repository is for stays mise's business.
-func miseRepositories(paths Paths, runner Runner) ([]string, error) {
+func miseRepositories(paths Paths, runner Runner) ([]miseRepository, error) {
 	listing := run(runner, "mise", "config", "ls", "-J")
 	if listing.Err != nil {
 		return nil, fmt.Errorf("list mise configuration: %w", listing.Failure())
@@ -99,7 +106,7 @@ func miseRepositories(paths Paths, runner Runner) ([]string, error) {
 		return nil, fmt.Errorf("read mise configuration list: %w", err)
 	}
 	seen := make(map[string]bool)
-	var declared []string
+	var declared []miseRepository
 	for _, file := range files {
 		// A configuration file that declares no repositories exits non-zero.
 		// That is absence, not failure.
@@ -107,21 +114,25 @@ func miseRepositories(paths Paths, runner Runner) ([]string, error) {
 		if value.Err != nil {
 			continue
 		}
-		var table map[string]any
+		var table map[string]struct {
+			URL string `toml:"url"`
+		}
 		if err := toml.Unmarshal([]byte(value.Stdout), &table); err != nil {
 			return nil, fmt.Errorf("read declared repositories in %s: %w", file.Path, err)
 		}
-		for key := range table {
+		for key, declaration := range table {
 			path := key
 			if strings.HasPrefix(path, "~/") {
 				path = filepath.Join(paths.Home, strings.TrimPrefix(path, "~/"))
 			}
 			if path = filepath.Clean(path); !seen[path] {
 				seen[path] = true
-				declared = append(declared, path)
+				declared = append(declared, miseRepository{Path: path, URL: declaration.URL})
 			}
 		}
 	}
-	slices.Sort(declared)
+	slices.SortFunc(declared, func(left, right miseRepository) int {
+		return strings.Compare(left.Path, right.Path)
+	})
 	return declared, nil
 }

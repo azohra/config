@@ -38,6 +38,7 @@ type miseStubRunner struct {
 	phase        map[string]Result
 	files        []string
 	repos        map[string]string
+	origins      map[string]string
 	missingTools string
 }
 
@@ -65,6 +66,12 @@ func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Res
 			return Result{Err: exec.Command("/usr/bin/false").Run()}
 		}
 		return Result{Stdout: declaration}
+	case name == "git" && len(args) == 5 && args[0] == "-C" && args[2] == "remote":
+		origin, known := r.origins[filepath.Base(args[1])]
+		if !known {
+			return Result{Err: exec.Command("/usr/bin/false").Run()}
+		}
+		return Result{Stdout: origin + "\n"}
 	case name == "mise" && len(args) > 2 && args[0] == "bootstrap" && args[len(args)-2] == "status":
 		return r.phase[strings.Join(args[1:len(args)-2], " ")]
 	default:
@@ -134,12 +141,15 @@ func TestToolCheckReportsMissingDeclaredTools(t *testing.T) {
 	}
 }
 
-// A declared checkout that is not on disk is drift, and answering that needs
-// no network at all.
-func TestRepositoryCheckReportsOnlyMissingCheckouts(t *testing.T) {
+// A declared checkout that is absent, or that holds a different repository,
+// is drift. Both answers are local: neither needs the network that made the
+// aggregate expensive.
+func TestRepositoryChecksCatchAbsentAndForeignCheckouts(t *testing.T) {
 	paths := testPaths(t)
-	if err := os.MkdirAll(filepath.Join(paths.Home, "Development", "present", ".git"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"present", "foreign"} {
+		if err := os.MkdirAll(filepath.Join(paths.Home, "Development", name, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	runner := &miseStubRunner{
 		files: []string{"/machine/mise/conf.d/repositories.toml", "/machine/mise/conf.d/dotfiles.toml"},
@@ -147,20 +157,42 @@ func TestRepositoryCheckReportsOnlyMissingCheckouts(t *testing.T) {
 ["~/Development/present"]
 url = "git@github.com:example/present.git"
 
+["~/Development/foreign"]
+url = "git@github.com:example/foreign.git"
+
 ["~/Development/absent"]
 url = "git@github.com:example/absent.git"
 `},
+		origins: map[string]string{
+			"present": "git@github.com:example/present.git",
+			"foreign": "https://github.com/someone/entirely-different.git",
+		},
 	}
 
-	check := (Inspector{Paths: paths, Runner: runner}).repositoryCheck()
-	if check.OK || check.Label != "1 declared repository missing" || check.Detail != "absent" {
-		t.Fatalf("repositoryCheck() = %+v", check)
+	checks := (Inspector{Paths: paths, Runner: runner}).repositoryChecks()
+	found := map[string]string{}
+	for _, check := range checks {
+		if check.OK {
+			t.Fatalf("a passing check among failures: %+v", checks)
+		}
+		found[check.Label] = check.Detail
 	}
+	if found["1 declared repository missing"] != "absent" {
+		t.Fatalf("absent checkout not reported: %+v", checks)
+	}
+	if found["1 checkout is another repository"] != "foreign" {
+		t.Fatalf("foreign checkout not reported: %+v", checks)
+	}
+
+	// Point the foreign checkout at what it should be, and the drift clears.
+	runner.origins["foreign"] = "git@github.com:example/foreign.git"
 	if err := os.MkdirAll(filepath.Join(paths.Home, "Development", "absent", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if check := (Inspector{Paths: paths, Runner: runner}).repositoryCheck(); !check.OK {
-		t.Fatalf("every checkout exists but repositoryCheck() = %+v", check)
+	runner.origins["absent"] = "git@github.com:example/absent.git"
+	checks = (Inspector{Paths: paths, Runner: runner}).repositoryChecks()
+	if len(checks) != 1 || !checks[0].OK {
+		t.Fatalf("every checkout correct but repositoryChecks() = %+v", checks)
 	}
 }
 
