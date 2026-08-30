@@ -200,13 +200,15 @@ url = "git@github.com:example/absent.git"
 // than quietly going unreported. Every bootstrap subcommand that offers a
 // status verb has to be covered, except repos, which Config answers itself.
 func TestMisePhasesCoverEveryBootstrapPhase(t *testing.T) {
+	// Skipping here would retire the guard silently. The check task runs the
+	// suite through mise, so mise is on PATH whenever these tests run at all.
 	mise, err := exec.LookPath("mise")
 	if err != nil {
-		t.Skip("mise is not installed")
+		t.Fatal("mise is not on PATH, so this guard cannot run")
 	}
 	help, err := exec.Command(mise, "bootstrap", "--help").CombinedOutput()
 	if err != nil {
-		t.Skipf("mise bootstrap --help: %v", err)
+		t.Fatalf("mise bootstrap --help: %v\n%s", err, help)
 	}
 	commands, inCommands := map[string]bool{}, false
 	for _, line := range strings.Split(string(help), "\n") {

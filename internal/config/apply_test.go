@@ -333,3 +333,45 @@ func TestApplyReportsAFailedStepOnce(t *testing.T) {
 		t.Fatalf("Dock reported %d times in %q", got, err.Error())
 	}
 }
+
+// Selecting Chrome PWAs through Apply has to reach the capture and restore
+// the resource offers. The step table is the only thing routing an action to
+// them, and a plan that reaches neither would look like a clean apply.
+func TestApplyRoutesChromePWAActions(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	machine.Dock = false
+	machine.Preferences = nil
+	icon := []byte("icon")
+	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
+	writeTestLivePWA(t, paths, app, icon)
+
+	// Capture routes to the backup, which the repository did not have.
+	applier, chatter := testApplier(t, paths, machine, OSRunner{Dir: paths.Root})
+	if err := applier.Apply([]Selection{{ID: chromePWAsID, Action: Capture}}); err != nil {
+		t.Fatalf("capture PWAs: %v\n%s", err, chatter.String())
+	}
+	saved, apps, hasSaved, err := applier.Bidir.chromePWASaved()
+	if err != nil || !hasSaved {
+		t.Fatalf("capture wrote no backup: %v", err)
+	}
+	if len(apps) != 1 || apps[0].Name != "Gmail" {
+		t.Fatalf("captured PWAs = %+v", apps)
+	}
+
+	// Apply routes to the restore, which has nothing to change here and must
+	// say so rather than reporting a failure.
+	live, _, _, err := applier.Bidir.chromePWALive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != string(live) {
+		t.Fatalf("capture did not agree with the live collection")
+	}
+	if err := applier.Apply([]Selection{{ID: chromePWAsID, Action: Apply}}); err != nil {
+		t.Fatalf("apply PWAs: %v\n%s", err, chatter.String())
+	}
+	if !strings.Contains(chatter.String(), "already current") {
+		t.Fatalf("apply did not reach the restore:\n%s", chatter.String())
+	}
+}
