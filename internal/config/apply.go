@@ -96,7 +96,7 @@ func (e Applier) Apply(selections []Selection) error {
 		fn   func(Action) error
 	}
 	steps := []step{
-		{setupID, setupName, func(Action) error { return e.applySetup() }},
+		{setupID, setupName, func(Action) error { return e.applyMise() }},
 	}
 	for _, preference := range e.Machine.Preferences {
 		steps = append(steps, step{preference.ID, preference.Name, func(action Action) error {
@@ -150,11 +150,6 @@ func (e Applier) Apply(selections []Selection) error {
 		}
 	}
 	return errors.Join(failures...)
-}
-
-// Mise's declared packages establish the commands every later phase consumes.
-func (e Applier) applySetup() error {
-	return e.applyMise()
 }
 
 func (e Applier) reconcilePreference(preference PreferenceBackup, action Action) error {
@@ -240,6 +235,7 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 	return nil
 }
 
+// Mise's declared packages establish the commands every later phase consumes.
 func (e Applier) applyMise() error {
 	if !e.Runner.Exists("mise") {
 		return fmt.Errorf("mise unavailable at %s", misePath(e.Paths))

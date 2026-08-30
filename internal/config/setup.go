@@ -12,8 +12,7 @@ const (
 
 // setupFact pairs one desired-state predicate with the fix that converges it.
 // Inspector and Applier both read these tables, so drift and apply can never
-// disagree about what a fact means. Empty log fields keep a fact
-// silent during apply.
+// disagree about what a fact means.
 type setupFact struct {
 	ok       string
 	drifted  string
@@ -21,8 +20,6 @@ type setupFact struct {
 	hint     string
 	current  func(Paths, Runner) bool
 	fix      func(Applier) error
-	already  string
-	applied  string
 }
 
 func miseFacts(machine Machine) []setupFact {
@@ -102,18 +99,12 @@ func (e Applier) converge(facts []setupFact) (int, error) {
 	changed := 0
 	for _, fact := range facts {
 		if fact.current(e.Paths, e.Runner) {
-			if fact.already != "" {
-				e.Log.OK(fact.already)
-			}
 			continue
 		}
 		if err := fact.fix(e); err != nil {
 			return changed, err
 		}
 		changed++
-		if fact.applied != "" {
-			e.Log.OK(fact.applied)
-		}
 	}
 	return changed, nil
 }

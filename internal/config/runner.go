@@ -117,21 +117,13 @@ func NewMachineLiveRunner(paths Paths) LiveRunner {
 }
 
 func (r LiveRunner) Command(name string, args ...string) error {
-	return r.command(r.Stdin, name, args...)
-}
-
-func (r LiveRunner) Input(input string, name string, args ...string) error {
-	return r.command(strings.NewReader(input), name, args...)
-}
-
-func (r LiveRunner) command(stdin io.Reader, name string, args ...string) error {
 	if executable := r.Executables[name]; executable != "" {
 		name = executable
 	}
 	cmd := exec.Command(name, args...)
 	cmd.Dir = r.Dir
 	cmd.Env = ChildEnvironment(r.Environment)
-	cmd.Stdin = stdin
+	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	if err := cmd.Run(); err != nil {
