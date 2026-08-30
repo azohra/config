@@ -32,15 +32,16 @@ func TestValidateSelections(t *testing.T) {
 	}
 }
 
+// A failed check, a resource waiting on a choice, and one never captured are
+// three different things, and the status line counts them separately.
 func TestCountsSeparatesDecisionsFromFailures(t *testing.T) {
 	report := Report{Resources: []Resource{
-		{Checks: []Check{{OK: false, Severity: Failure}}},
-		{Checks: []Check{{OK: false, Severity: Advisory}}},
+		{Checks: []Check{{Label: "git", OK: false}, {Label: "mise", OK: true}}},
 		{Bidirectional: true, State: LiveChanged, Actions: []Action{Capture, Apply}},
 		{State: Uncaptured, Actions: []Action{Capture}},
 	}, Snapshot: SnapshotStatus{Dirty: 1, Upstream: "origin/main"}}
 	failures, decisions, advisories := report.Counts()
-	if failures != 1 || decisions != 1 || advisories != 2 {
+	if failures != 1 || decisions != 1 || advisories != 1 {
 		t.Fatalf("Counts() = %d, %d, %d", failures, decisions, advisories)
 	}
 	if warnings := report.Snapshot.Warnings(); warnings != 1 {
@@ -103,7 +104,7 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 	}
 
 	failing := Report{Resources: []Resource{
-		{Name: "Example App", Checks: []Check{{Label: "Saved settings valid", Severity: Failure}}},
+		{Name: "Example App", Checks: []Check{{Label: "Saved settings valid"}}},
 	}}
 	err := failing.PreflightError()
 	if err == nil || !strings.Contains(err.Error(), "Example App: Saved settings valid") {
@@ -126,7 +127,7 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 func TestPreflightErrorDoesNotLetMachineSetupBlockASnapshot(t *testing.T) {
 	report := Report{Resources: []Resource{
 		authoritativeResource(setupID, setupName, []Check{
-			no("mise bootstrap state needs attention", Failure, "repos"),
+			no("mise bootstrap state needs attention", "repos"),
 		}),
 		{ID: dockID, Name: dockName, State: Current, Bidirectional: true},
 	}}
@@ -139,7 +140,7 @@ func TestPreflightErrorDoesNotLetMachineSetupBlockASnapshot(t *testing.T) {
 	corrupt := Report{Resources: []Resource{
 		authoritativeResource(setupID, setupName, nil),
 		{ID: chromePWAsID, Name: chromePWAsName, State: Unavailable, Checks: []Check{
-			no("saved PWA backup valid", Failure, "icon digest mismatch"),
+			no("saved PWA backup valid", "icon digest mismatch"),
 		}},
 	}}
 	err := corrupt.PreflightError()

@@ -48,7 +48,7 @@ func (m Model) dashboardActions() []dashboardAction {
 func attentionResources(report config.Report) []config.Resource {
 	var resources []config.Resource
 	for _, resource := range report.Resources {
-		if resource.State != config.Current || resource.Failed() > 0 || resource.Warned() > 0 {
+		if resource.State != config.Current || resource.Failed() > 0 {
 			resources = append(resources, resource)
 		}
 	}

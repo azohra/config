@@ -242,16 +242,12 @@ func (m Model) renderInventory() string {
 	return frame(m.width, header, strings.Join(lines, "\n"), keyHints(hints...))
 }
 
-// checkSymbol is one check's glyph, colored: passing, advisory, or failed.
+// checkSymbol is one check's glyph, colored: passing or failed.
 func checkSymbol(check config.Check) string {
-	switch {
-	case check.OK:
+	if check.OK {
 		return styledSymbol(config.GlyphOK)
-	case check.Severity == config.Failure:
-		return styledSymbol(config.GlyphError)
-	default:
-		return styledSymbol(config.GlyphWarn)
 	}
+	return styledSymbol(config.GlyphError)
 }
 
 func resourceRow(resource config.Resource) string {

@@ -306,15 +306,15 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 		resource.State = Unavailable
 		resource.Summary = "PWA state unavailable"
 		if savedErr != nil {
-			resource.Checks = append(resource.Checks, no("saved PWA backup valid", Failure, savedErr.Error()))
+			resource.Checks = append(resource.Checks, no("saved PWA backup valid", savedErr.Error()))
 		}
 		if liveErr != nil {
-			resource.Checks = append(resource.Checks, no("installed PWAs readable", Failure, liveErr.Error()))
+			resource.Checks = append(resource.Checks, no("installed PWAs readable", liveErr.Error()))
 		}
 		return resource
 	}
 	for _, problem := range damaged {
-		resource.Checks = append(resource.Checks, no("installed PWA readable", Failure, problem))
+		resource.Checks = append(resource.Checks, no("installed PWA readable", problem))
 	}
 	resource.Details = chromePWADiff(savedApps, liveApps)
 	switch {

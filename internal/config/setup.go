@@ -14,12 +14,11 @@ const (
 // Inspector and Applier both read these tables, so drift and apply can never
 // disagree about what a fact means.
 type setupFact struct {
-	ok       string
-	drifted  string
-	severity Severity
-	hint     string
-	current  func(Paths, Runner) bool
-	fix      func(Applier) error
+	ok      string
+	drifted string
+	hint    string
+	current func(Paths, Runner) bool
+	fix     func(Applier) error
 }
 
 func miseFacts(machine Machine) []setupFact {
@@ -31,7 +30,7 @@ func miseFacts(machine Machine) []setupFact {
 		}
 		facts = append(facts, setupFact{
 			ok: "current-host tap to click matches", drifted: "current-host tap to click differs",
-			severity: Failure, hint: "apply tracked value",
+			hint: "apply tracked value",
 			current: func(_ Paths, runner Runner) bool {
 				return run(runner, "defaults", "-currentHost", "read", "NSGlobalDomain", "com.apple.mouse.tapBehavior").Output() == value
 			},
@@ -53,7 +52,7 @@ func miseFacts(machine Machine) []setupFact {
 			enabled, strings.Join(parameters, ", "), spotlight.Type)
 		facts = append(facts, setupFact{
 			ok: "Spotlight shortcut matches", drifted: "Spotlight shortcut differs",
-			severity: Failure, hint: "apply tracked value",
+			hint: "apply tracked value",
 			current: func(paths Paths, runner Runner) bool {
 				key := fmt.Sprintf("AppleSymbolicHotKeys.%d.enabled", spotlight.ID)
 				return run(runner, "plutil", "-extract", key, "raw", paths.InHome("Library", "Preferences", "com.apple.symbolichotkeys.plist")).Output() == enabled
@@ -66,7 +65,7 @@ func miseFacts(machine Machine) []setupFact {
 	if machine.MacOS.ClearUserKeyMapping {
 		facts = append(facts, setupFact{
 			ok: "hardware key mapping clear", drifted: "hardware key mapping present",
-			severity: Failure, hint: "clear it",
+			hint: "clear it",
 			current: func(_ Paths, runner Runner) bool {
 				// A reboot resets hidutil state to (null), which means the same
 				// thing as an explicitly empty list: no custom mappings.
@@ -88,7 +87,7 @@ func setupChecks(paths Paths, runner Runner, facts []setupFact) []Check {
 		if fact.current(paths, runner) {
 			checks = append(checks, yes(fact.ok))
 		} else {
-			checks = append(checks, no(fact.drifted, fact.severity, fact.hint))
+			checks = append(checks, no(fact.drifted, fact.hint))
 		}
 	}
 	return checks

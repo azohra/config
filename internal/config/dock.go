@@ -139,7 +139,7 @@ func (b Bidirectional) InspectDock() Resource {
 	if !b.Runner.Exists("dockutil") {
 		resource.State = Unavailable
 		resource.Summary = "dockutil unavailable"
-		resource.Checks = []Check{{Label: "dockutil installed", OK: false, Severity: Failure}}
+		resource.Checks = []Check{no("dockutil installed", "install dockutil")}
 		return resource
 	}
 	saved, all, present, hasSaved, savedErr := b.dockSaved()
@@ -148,10 +148,10 @@ func (b Bidirectional) InspectDock() Resource {
 		resource.State = Unavailable
 		resource.Summary = "Dock state unavailable"
 		if savedErr != nil {
-			resource.Checks = append(resource.Checks, no("saved Dock layout valid", Failure, savedErr.Error()))
+			resource.Checks = append(resource.Checks, no("saved Dock layout valid", savedErr.Error()))
 		}
 		if liveErr != nil {
-			resource.Checks = append(resource.Checks, no("Dock layout readable", Failure, liveErr.Error()))
+			resource.Checks = append(resource.Checks, no("Dock layout readable", liveErr.Error()))
 		}
 		return resource
 	}
@@ -178,8 +178,7 @@ func (b Bidirectional) InspectDock() Resource {
 	resource.Details = dockDiff(present, liveApps)
 	if missing > 0 {
 		resource.Checks = append(resource.Checks, Check{
-			Label:    FormatCount(missing, "saved Dock app unavailable", "saved Dock apps unavailable"),
-			Severity: Failure,
+			Label: FormatCount(missing, "saved Dock app unavailable", "saved Dock apps unavailable"),
 		})
 		for _, app := range all {
 			if !slices.Contains(present, app) {

@@ -26,8 +26,8 @@ func yes(label string) Check {
 	return Check{Label: label, OK: true}
 }
 
-func no(label string, severity Severity, detail string) Check {
-	return Check{Label: label, OK: false, Severity: severity, Detail: detail}
+func no(label, detail string) Check {
+	return Check{Label: label, Detail: detail}
 }
 
 func authoritativeResource(id, name string, checks []Check) Resource {
@@ -36,9 +36,6 @@ func authoritativeResource(id, name string, checks []Check) Resource {
 	case resource.Failed() > 0:
 		resource.State = Drift
 		resource.Summary = FormatCount(resource.Failed(), "issue", "issues")
-	case resource.Warned() > 0:
-		resource.State = Warning
-		resource.Summary = FormatCount(resource.Warned(), "advisory", "advisories")
 	default:
 		resource.State = Current
 		resource.Summary = FormatCount(len(checks), "check current", "checks current")
@@ -53,20 +50,20 @@ func (i Inspector) substrateChecks() []Check {
 	if i.Runner.Exists("git") {
 		return []Check{yes("git")}
 	}
-	return []Check{no("git unavailable", Failure, "install Git")}
+	return []Check{no("git unavailable", "install Git")}
 }
 
 func (i Inspector) miseChecks() []Check {
 	if !i.Runner.Exists("mise") {
-		return []Check{no("mise unavailable at ~/.local/bin/mise", Failure, "install the standalone mise binary")}
+		return []Check{no("mise unavailable at ~/.local/bin/mise", "install the standalone mise binary")}
 	}
 	version := run(i.Runner, "mise", "--version")
 	currentVersion, parsed := miseVersion(version.Stdout)
 	if version.Err != nil || !parsed {
-		return []Check{no("mise version unreadable", Failure, "replace the standalone mise binary")}
+		return []Check{no("mise version unreadable", "replace the standalone mise binary")}
 	}
 	if !miseVersionAtLeast(version.Stdout, minimumMiseVersion) {
-		return []Check{no("mise "+currentVersion+" is too old", Failure, "install "+minimumMiseVersion+" or newer at ~/.local/bin/mise")}
+		return []Check{no("mise "+currentVersion+" is too old", "install "+minimumMiseVersion+" or newer at ~/.local/bin/mise")}
 	}
 	// The three groups ask mise and git independent questions, so the slowest
 	// of them sets the cost rather than their sum.
@@ -125,10 +122,10 @@ func (i Inspector) bootstrapChecks() []Check {
 	}
 	var checks []Check
 	if len(unavailable) > 0 {
-		checks = append(checks, no("mise bootstrap unavailable", Failure, strings.Join(unavailable, ", ")))
+		checks = append(checks, no("mise bootstrap unavailable", strings.Join(unavailable, ", ")))
 	}
 	if len(drifted) > 0 {
-		checks = append(checks, no("mise bootstrap state needs attention", Failure, strings.Join(drifted, ", ")))
+		checks = append(checks, no("mise bootstrap state needs attention", strings.Join(drifted, ", ")))
 	}
 	if len(checks) == 0 {
 		checks = append(checks, yes("mise bootstrap state"))
@@ -142,18 +139,18 @@ func (i Inspector) bootstrapChecks() []Check {
 func (i Inspector) toolCheck() Check {
 	listing := run(i.Runner, "mise", "ls", "--missing", "-J")
 	if listing.Err != nil {
-		return no("declared tools unreadable", Failure, listing.Failure().Error())
+		return no("declared tools unreadable", listing.Failure().Error())
 	}
 	var missing map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(listing.Stdout), &missing); err != nil {
-		return no("declared tools unreadable", Failure, err.Error())
+		return no("declared tools unreadable", err.Error())
 	}
 	if len(missing) == 0 {
 		return yes("declared tools installed")
 	}
 	names := slices.Sorted(maps.Keys(missing))
 	return no(FormatCount(len(names), "declared tool missing", "declared tools missing"),
-		Failure, strings.Join(names, ", "))
+		strings.Join(names, ", "))
 }
 
 // repositoryChecks answer what [bootstrap.repos] declares: this repository
@@ -163,7 +160,7 @@ func (i Inspector) toolCheck() Check {
 func (i Inspector) repositoryChecks() []Check {
 	declared, err := miseRepositories(i.Paths, i.Runner)
 	if err != nil {
-		return []Check{no("declared repositories unreadable", Failure, err.Error())}
+		return []Check{no("declared repositories unreadable", err.Error())}
 	}
 	// One git call per declared checkout, so they go out together.
 	type verdict struct{ absent, foreign bool }
@@ -197,11 +194,11 @@ func (i Inspector) repositoryChecks() []Check {
 	var checks []Check
 	if len(missing) > 0 {
 		checks = append(checks, no(FormatCount(len(missing), "declared repository missing", "declared repositories missing"),
-			Failure, strings.Join(missing, ", ")))
+			strings.Join(missing, ", ")))
 	}
 	if len(foreign) > 0 {
 		checks = append(checks, no(FormatCount(len(foreign), "checkout is another repository", "checkouts are another repository"),
-			Failure, strings.Join(foreign, ", ")))
+			strings.Join(foreign, ", ")))
 	}
 	if len(checks) > 0 {
 		return checks

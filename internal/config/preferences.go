@@ -35,9 +35,8 @@ func (p PreferenceBackup) Inspect(paths Paths) Resource {
 		resource.State = Unavailable
 		resource.Summary = "saved settings are invalid"
 		resource.Checks = []Check{{
-			Label:    "Saved settings valid",
-			Severity: Failure,
-			Detail:   err.Error(),
+			Label:  "Saved settings valid",
+			Detail: err.Error(),
 		}}
 		return resource
 	}

@@ -14,7 +14,6 @@ const (
 	Current      State = "current"
 	Uncaptured   State = "uncaptured"
 	Drift        State = "drift"
-	Warning      State = "warning"
 	SavedChanged State = "saved-changed"
 	LiveChanged  State = "live-changed"
 	Conflict     State = "conflict"
@@ -30,18 +29,10 @@ const (
 	Capture Action = "capture"
 )
 
-type Severity string
-
-const (
-	Advisory Severity = "advisory"
-	Failure  Severity = "failure"
-)
-
 type Check struct {
-	Label    string
-	OK       bool
-	Severity Severity
-	Detail   string
+	Label  string
+	OK     bool
+	Detail string
 }
 
 type Resource struct {
@@ -71,17 +62,7 @@ func (r Resource) NeedsDecision() bool {
 func (r Resource) Failed() int {
 	n := 0
 	for _, check := range r.Checks {
-		if !check.OK && check.Severity == Failure {
-			n++
-		}
-	}
-	return n
-}
-
-func (r Resource) Warned() int {
-	n := 0
-	for _, check := range r.Checks {
-		if !check.OK && check.Severity == Advisory {
+		if !check.OK {
 			n++
 		}
 	}
@@ -95,7 +76,7 @@ func (r Resource) Symbol() string {
 		return GlyphError
 	case r.NeedsDecision():
 		return GlyphChoice
-	case r.State == Uncaptured || r.State == Warning || r.State == Unavailable:
+	case r.State == Uncaptured || r.State == Unavailable:
 		return GlyphWarn
 	default:
 		return GlyphOK
@@ -188,7 +169,6 @@ func (r Report) Resource(id string) (Resource, bool) {
 func (r Report) Counts() (failures, decisions, advisories int) {
 	for _, resource := range r.Resources {
 		failures += resource.Failed()
-		advisories += resource.Warned()
 		if resource.NeedsDecision() {
 			decisions++
 		} else if resource.State == Uncaptured {
@@ -208,7 +188,7 @@ func (r Report) PreflightError() error {
 			continue
 		}
 		for _, check := range resource.Checks {
-			if !check.OK && check.Severity == Failure {
+			if !check.OK {
 				problems = append(problems, resource.Name+": "+check.Label)
 			}
 		}
