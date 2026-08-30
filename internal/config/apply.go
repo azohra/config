@@ -65,7 +65,17 @@ type Applier struct {
 	Live    LiveRunner
 	Log     Logger
 	Bidir   Bidirectional
+	// QuitPoll is how long to wait between asking whether an application has
+	// quit. Zero means the default.
+	QuitPoll time.Duration
 }
+
+// quitAttempts and defaultQuitPoll give an application ten seconds to close
+// before restore refuses to import over it.
+const (
+	quitAttempts    = 20
+	defaultQuitPoll = 500 * time.Millisecond
+)
 
 func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 	runner := NewMachineRunner(paths)
@@ -204,7 +214,11 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 		if err := e.Live.Command("osascript", "-e", `tell application id "`+preference.Bundle+`" to quit`); err != nil {
 			return err
 		}
-		for range 20 {
+		poll := e.QuitPoll
+		if poll == 0 {
+			poll = defaultQuitPoll
+		}
+		for range quitAttempts {
 			active, runningErr := preferenceIsRunning(e.Runner, preference)
 			if runningErr != nil {
 				return runningErr
@@ -212,7 +226,7 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 			if !active {
 				break
 			}
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(poll)
 		}
 		active, runningErr := preferenceIsRunning(e.Runner, preference)
 		if runningErr != nil {

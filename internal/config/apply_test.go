@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // Every step the Logger writes must read back as one: a reader that colors or
@@ -376,5 +378,93 @@ func TestApplyRoutesChromePWAActions(t *testing.T) {
 	}
 	if !strings.Contains(chatter.String(), "already current") {
 		t.Fatalf("apply did not reach the restore:\n%s", chatter.String())
+	}
+}
+
+// runningAppRunner reports the application as running until it is asked to
+// quit, which is what restorePreference waits for before it imports.
+type runningAppRunner struct {
+	mu     sync.Mutex
+	quit   bool
+	probes int
+}
+
+func (r *runningAppRunner) Run(_ context.Context, name string, args ...string) Result {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case name == "mdfind":
+		return Result{Stdout: "/Applications/Example.app\n"}
+	case name == "osascript":
+		r.probes++
+		if r.quit {
+			return Result{Stdout: "false\n"}
+		}
+		// The quit is issued through the live runner, so the second probe is
+		// the first one after it.
+		r.quit = r.probes >= 2
+		return Result{Stdout: "true\n"}
+	}
+	return Result{}
+}
+
+func (*runningAppRunner) Exists(string) bool { return true }
+
+// A running application holds its preferences in memory and would write them
+// back over the import, so restore quits it first and puts it back after.
+func TestRestorePreferenceQuitsAndRelaunchesARunningApp(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	preference := machine.Preferences[0]
+	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
+	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
+	applier, chatter := testApplier(t, paths, machine, &runningAppRunner{})
+
+	if err := applier.RestorePreferences(); err != nil {
+		t.Fatalf("restore: %v\n%s", err, chatter.String())
+	}
+	issued := commands()
+	var order []string
+	for _, command := range issued {
+		switch {
+		case strings.HasPrefix(command, "osascript"):
+			order = append(order, "quit")
+		case strings.HasPrefix(command, "defaults import"):
+			order = append(order, "import")
+		case strings.HasPrefix(command, "open"):
+			order = append(order, "relaunch")
+		}
+	}
+	if !slices.Equal(order, []string{"quit", "import", "relaunch"}) {
+		t.Fatalf("restore order = %v, want quit then import then relaunch:\n%s", order, strings.Join(issued, "\n"))
+	}
+}
+
+// An application that will not quit would overwrite the import, so restore
+// refuses rather than leaving the saved settings half applied.
+func TestRestorePreferenceRefusesAnApplicationThatWillNotQuit(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	preference := machine.Preferences[0]
+	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
+	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
+	// Never reports the app as gone.
+	stubborn := &runningAppRunner{}
+	stubborn.probes = -1000
+	applier, _ := testApplier(t, paths, machine, stubborn)
+	applier.QuitPoll = time.Millisecond
+
+	err := applier.RestorePreferences()
+	if err == nil || !strings.Contains(err.Error(), "did not quit") {
+		t.Fatalf("a stubborn application produced %v", err)
+	}
+	if strings.Contains(strings.Join(commands(), "\n"), "defaults import") {
+		t.Fatal("settings were imported over a running application")
 	}
 }
