@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -55,3 +56,53 @@ func TestMachineRunnersUseOnlyTheCanonicalMise(t *testing.T) {
 		t.Fatalf("machine live runner used %q", output.String())
 	}
 }
+
+// A buffered command's stderr is the only account of why it failed. Losing it
+// leaves the reader with "exit status 1" and nothing to act on.
+func TestFailureReportsTheCommandsOwnWords(t *testing.T) {
+	exited := exec.Command("/usr/bin/false").Run()
+	tests := []struct {
+		name   string
+		result Result
+		want   string
+	}{
+		{"stderr leads", Result{Err: exited, Stderr: "dockutil: unknown option\n"}, "dockutil: unknown option (exit status 1)"},
+		{"blank lines skipped", Result{Err: exited, Stderr: "\n\n  defaults: domain not found\n"}, "defaults: domain not found (exit status 1)"},
+		{"silent failure keeps the status", Result{Err: exited}, "exit status 1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.result.Failure(); got == nil || got.Error() != test.want {
+				t.Fatalf("Failure() = %v, want %q", got, test.want)
+			}
+		})
+	}
+	if err := (Result{Stdout: "fine"}).Failure(); err != nil {
+		t.Fatalf("a successful command reported %v", err)
+	}
+}
+
+// The inventory shows a check's detail, so what dockutil said has to reach it.
+func TestDockReadFailureNamesWhatDockutilSaid(t *testing.T) {
+	resource := NewBidirectional(testPaths(t), failingDockRunner{}).InspectDock()
+	if resource.State != Unavailable || resource.Failed() == 0 {
+		t.Fatalf("a failed Dock read = %#v", resource)
+	}
+	var detail string
+	for _, check := range resource.Checks {
+		if !check.OK {
+			detail = check.Detail
+		}
+	}
+	if !strings.Contains(detail, "dockutil: cannot read the Dock") {
+		t.Fatalf("check detail = %q, want dockutil's own message", detail)
+	}
+}
+
+type failingDockRunner struct{}
+
+func (failingDockRunner) Run(context.Context, string, ...string) Result {
+	return Result{Stderr: "dockutil: cannot read the Dock\n", Err: exec.Command("/usr/bin/false").Run()}
+}
+
+func (failingDockRunner) Exists(string) bool { return true }

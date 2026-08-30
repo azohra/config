@@ -101,7 +101,7 @@ func planDock(saved, live []string) []dockOperation {
 func (b Bidirectional) dockLive() (json.RawMessage, []string, error) {
 	result := run(b.Runner, "dockutil", "--list")
 	if result.Err != nil {
-		return nil, nil, result.Err
+		return nil, nil, result.Failure()
 	}
 	apps, err := parseDock(result.Stdout)
 	if err != nil {

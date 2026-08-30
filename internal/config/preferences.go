@@ -52,7 +52,7 @@ func (p PreferenceBackup) Inspect(paths Paths) Resource {
 func (p PreferenceBackup) Backup(paths Paths, runner Runner) error {
 	result := run(runner, "defaults", "export", p.Domain, "-")
 	if result.Err != nil {
-		return fmt.Errorf("export %s: %w", p.Name, result.Err)
+		return fmt.Errorf("export %s: %w", p.Name, result.Failure())
 	}
 	data := []byte(result.Stdout)
 	if _, err := decodePlist(data); err != nil {
@@ -64,7 +64,7 @@ func (p PreferenceBackup) Backup(paths Paths, runner Runner) error {
 func preferenceIsRunning(runner Runner, preference PreferenceBackup) (bool, error) {
 	result := run(runner, "osascript", "-e", `application id "`+preference.Bundle+`" is running`)
 	if result.Err != nil {
-		return false, fmt.Errorf("inspect %s process: %w", preference.Name, result.Err)
+		return false, fmt.Errorf("inspect %s process: %w", preference.Name, result.Failure())
 	}
 	switch result.Output() {
 	case "true":

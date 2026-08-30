@@ -66,6 +66,22 @@ func runWithTimeout(r Runner, timeout time.Duration, name string, args ...string
 	return r.Run(ctx, name, args...)
 }
 
+// Failure reports why a command failed in the command's own words. An
+// exec.ExitError renders as "exit status 1" and says nothing a reader can act
+// on, while the tool has usually already written the reason to stderr, which
+// OSRunner buffers rather than showing.
+func (r Result) Failure() error {
+	if r.Err == nil {
+		return nil
+	}
+	for line := range strings.SplitSeq(r.Stderr, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return fmt.Errorf("%s (%w)", line, r.Err)
+		}
+	}
+	return r.Err
+}
+
 // ExitCode extracts the process exit code from a Result error, or -1 when the
 // process did not run to completion (timeout, missing binary).
 func (r Result) ExitCode() int {
