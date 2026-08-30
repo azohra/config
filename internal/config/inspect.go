@@ -27,7 +27,7 @@ func no(label string, severity Severity, detail string) Check {
 }
 
 func authoritativeResource(id, name string, checks []Check) Resource {
-	resource := Resource{ID: id, Name: name, Checks: checks}
+	resource := Resource{ID: id, Name: name, Checks: checks, Authoritative: true}
 	switch {
 	case resource.Failed() > 0:
 		resource.State = Drift

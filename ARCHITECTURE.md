@@ -91,9 +91,13 @@ running application before import, and relaunches it afterward.
 
 Save stages the entire managed tree because the repository itself is the
 snapshot. Before committing, Config verifies the repository root, declared
-branch, exact `origin/<branch>` upstream, and remote identity. It validates the
-post-change machine report, commits under the repository's Git policy, and
-performs an append-only push. Push failure leaves the local commit intact.
+branch, exact `origin/<branch>` upstream, and remote identity. It then refuses
+when a resource that owns snapshot content is unreadable or still waiting on a
+bidirectional choice. Machine setup is reported in status but does not gate a
+save: it converges live settings and records nothing in the repository, so a
+package or checkout mise owns cannot make a commit wrong. Config commits under
+the repository's Git policy and performs an append-only push. Push failure
+leaves the local commit intact.
 
 The repository locator is public configuration. Authentication stays in the
 caller's Git environment or credential helper, outside the document, logs, and

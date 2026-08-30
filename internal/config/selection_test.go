@@ -95,7 +95,7 @@ func TestSelectionsSurviveTheProcessBoundary(t *testing.T) {
 // bidirectional choice must stop the snapshot, and must say which resource.
 func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 	clean := Report{Resources: []Resource{
-		{Name: "Machine setup", Checks: []Check{{Label: "git", OK: true}}},
+		{Name: "Example App", Checks: []Check{{Label: "Preference backup valid", OK: true}}},
 		{Name: "Dock", State: Current, Bidirectional: true},
 	}}
 	if err := clean.PreflightError(); err != nil {
@@ -103,10 +103,10 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 	}
 
 	failing := Report{Resources: []Resource{
-		{Name: "Machine setup", Checks: []Check{{Label: "mise bootstrap state", Severity: Failure}}},
+		{Name: "Example App", Checks: []Check{{Label: "Saved settings valid", Severity: Failure}}},
 	}}
 	err := failing.PreflightError()
-	if err == nil || !strings.Contains(err.Error(), "Machine setup: mise bootstrap state") {
+	if err == nil || !strings.Contains(err.Error(), "Example App: Saved settings valid") {
 		t.Fatalf("failed check preflight error = %v", err)
 	}
 
@@ -116,5 +116,34 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 	err = undecided.PreflightError()
 	if err == nil || !strings.Contains(err.Error(), "Dock: unresolved conflict") {
 		t.Fatalf("unresolved choice preflight error = %v", err)
+	}
+}
+
+// A snapshot records Config-owned state. Machine setup converges live
+// settings and writes nothing into the repository, so mise needing attention
+// — a checkout behind its remote, a package not installed — must not stop a
+// backup of the Dock, the PWAs, and the saved preferences.
+func TestPreflightErrorDoesNotLetMachineSetupBlockASnapshot(t *testing.T) {
+	report := Report{Resources: []Resource{
+		authoritativeResource(setupID, setupName, []Check{
+			no("mise bootstrap state needs attention", Failure, "repos"),
+		}),
+		{ID: dockID, Name: dockName, State: Current, Bidirectional: true},
+	}}
+	if err := report.PreflightError(); err != nil {
+		t.Fatalf("machine setup blocked a snapshot: %v", err)
+	}
+
+	// A resource that owns snapshot content still blocks: its saved artifact
+	// is what the commit would record.
+	corrupt := Report{Resources: []Resource{
+		authoritativeResource(setupID, setupName, nil),
+		{ID: chromePWAsID, Name: chromePWAsName, State: Unavailable, Checks: []Check{
+			no("saved PWA backup valid", Failure, "icon digest mismatch"),
+		}},
+	}}
+	err := corrupt.PreflightError()
+	if err == nil || !strings.Contains(err.Error(), chromePWAsName) {
+		t.Fatalf("a corrupt saved backup did not block the snapshot: %v", err)
 	}
 }
