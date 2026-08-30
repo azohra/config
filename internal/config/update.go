@@ -5,40 +5,134 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+const (
+	configReleaseTool = "github:azohra/config@latest"
+	updateReexecEnv   = "AZOHRA_CONFIG_UPDATE_REEXEC_VERSION"
 )
 
 type Updater struct {
-	Mise   string
-	Runner Runner
-	Live   LiveRunner
-	Log    Logger
+	Version           string
+	Mise              string
+	Config            string
+	MiseProbe         Runner
+	Installed         Runner
+	Substrate         LiveRunner
+	Machine           LiveRunner
+	Log               Logger
+	CurrentExecutable func() (string, error)
+	ValidateMachine   func() error
+	Reexec            func(string, []string, []string) error
 }
 
-func NewUpdater(paths Paths, out io.Writer) Updater {
+func NewUpdater(paths Paths, out io.Writer, version string) Updater {
+	command := ConfigCommandPath(paths)
+	substrateEnvironment := []string{"MISE_AUTO_UPDATE=0", "MISE_NO_CONFIG=1"}
+	live := NewLiveRunner(paths.Home)
+	live.Environment = substrateEnvironment
+	live.Executables = map[string]string{"mise": misePath(paths)}
 	return Updater{
-		Mise:   misePath(paths),
-		Runner: NewMachineRunner(paths),
-		Live:   NewMachineLiveRunner(paths),
-		Log:    Logger{Out: out},
+		Version: version,
+		Mise:    misePath(paths),
+		Config:  command,
+		MiseProbe: OSRunner{
+			Dir:         paths.Home,
+			Environment: substrateEnvironment,
+			Executables: map[string]string{"mise": misePath(paths)},
+		},
+		Installed: OSRunner{Dir: paths.Home, Executables: map[string]string{
+			"config": command,
+		}},
+		Substrate:         live,
+		Machine:           NewMachineLiveRunner(paths),
+		Log:               Logger{Out: out},
+		CurrentExecutable: os.Executable,
+		ValidateMachine: func() error {
+			_, err := LoadMachine(paths)
+			return err
+		},
+		Reexec: syscall.Exec,
 	}
 }
 
 func (u Updater) Update() error {
-	info, err := os.Stat(u.Mise)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+	if err := requireExecutableFile(u.Mise); err != nil {
 		return fmt.Errorf("mise unavailable at %s", u.Mise)
 	}
+	if u.Version == "dev" {
+		if err := u.ValidateMachine(); err != nil {
+			return err
+		}
+		return u.updateMachine()
+	}
+	if !stableConfigVersion(u.Version) {
+		return fmt.Errorf("Config build version %q cannot update itself", u.Version)
+	}
+	if resumedVersion, resumed := os.LookupEnv(updateReexecEnv); resumed {
+		if resumedVersion != u.Version {
+			return fmt.Errorf("Config update resumed with version %q, but this is %s", resumedVersion, u.Version)
+		}
+		if err := u.requireCanonicalExecutable(); err != nil {
+			return err
+		}
+		if err := u.ValidateMachine(); err != nil {
+			return err
+		}
+		if err := os.Unsetenv(updateReexecEnv); err != nil {
+			return fmt.Errorf("clear Config update state: %w", err)
+		}
+		return u.updateMachine()
+	}
 
-	u.Log.Section("mise")
-	if err := u.Live.Command("mise", "self-update", testedMiseVersion, "--yes", "--no-plugins"); err != nil {
-		u.Log.Error(err.Error())
-		return fmt.Errorf("mise: %w", err)
+	// The current release first restores the mise version it was tested with.
+	// That gives release acquisition a known substrate even when mise drifted.
+	if err := u.updateMise(); err != nil {
+		return err
 	}
-	if err := requireTestedMise(u.Runner); err != nil {
+	u.Log.Section("Config")
+	resolvedVersion, err := u.resolveRelease()
+	if err != nil {
 		u.Log.Error(err.Error())
-		return fmt.Errorf("mise: %w", err)
+		return fmt.Errorf("Config: %w", err)
 	}
-	u.Log.OK("standalone mise set to " + testedMiseVersion)
+	if compareConfigVersions(resolvedVersion, u.Version) < 0 {
+		err := fmt.Errorf("refusing to replace Config %s with older release %s", u.Version, resolvedVersion)
+		u.Log.Error(err.Error())
+		return fmt.Errorf("Config: %w", err)
+	}
+	releaseRunner := u.releaseRunner()
+	exactTool := "github:azohra/config@" + strings.TrimPrefix(resolvedVersion, "v")
+	if err := releaseRunner.Command("mise", "--no-config", "x", exactTool, "--", "config", "install"); err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("Config: %w", err)
+	}
+	installedVersion, err := u.installedVersion()
+	if err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("Config: %w", err)
+	}
+	if installedVersion != resolvedVersion {
+		err := fmt.Errorf("installed Config is %s, want resolved release %s", installedVersion, resolvedVersion)
+		u.Log.Error(err.Error())
+		return fmt.Errorf("Config: %w", err)
+	}
+	u.Log.OK("Config " + installedVersion + " installed")
+
+	environment := ChildEnvironment([]string{updateReexecEnv + "=" + installedVersion})
+	if err := u.Reexec(u.Config, []string{u.Config, "update"}, environment); err != nil {
+		return fmt.Errorf("re-exec Config %s: %w", installedVersion, err)
+	}
+	return nil
+}
+
+func (u Updater) updateMachine() error {
+	if err := u.updateMise(); err != nil {
+		return err
+	}
 
 	steps := []struct {
 		name    string
@@ -53,7 +147,7 @@ func (u Updater) Update() error {
 	var failures []error
 	for _, step := range steps {
 		u.Log.Section(step.name)
-		if err := u.Live.Command("mise", step.args...); err != nil {
+		if err := u.Machine.Command("mise", step.args...); err != nil {
 			u.Log.Error(err.Error())
 			failures = append(failures, fmt.Errorf("%s: %w", step.name, err))
 			continue
@@ -61,4 +155,140 @@ func (u Updater) Update() error {
 		u.Log.OK(step.success)
 	}
 	return errors.Join(failures...)
+}
+
+func (u Updater) updateMise() error {
+	u.Log.Section("mise")
+	if err := u.Substrate.Command("mise", "--no-config", "self-update", testedMiseVersion, "--yes", "--no-plugins"); err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("mise: %w", err)
+	}
+	if err := requireTestedMise(u.MiseProbe); err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("mise: %w", err)
+	}
+	u.Log.OK("standalone mise set to " + testedMiseVersion)
+	return nil
+}
+
+func (u Updater) installedVersion() (string, error) {
+	if err := requireExecutableFile(u.Config); err != nil {
+		return "", fmt.Errorf("installed Config command is unavailable at %s", u.Config)
+	}
+	result := run(u.Installed, "config", "--version")
+	if result.Err != nil {
+		return "", fmt.Errorf("read installed Config version: %w", result.Failure())
+	}
+	version, ok := configVersionOutput(result.Stdout)
+	if !ok {
+		return "", errors.New("installed Config version is unreadable")
+	}
+	return version, nil
+}
+
+func (u Updater) resolveRelease() (string, error) {
+	var output strings.Builder
+	releaseRunner := u.releaseRunner()
+	releaseRunner.Stdout = &output
+	if err := releaseRunner.Command("mise", "--no-config", "x", configReleaseTool, "--", "config", "--version"); err != nil {
+		return "", fmt.Errorf("resolve latest Config release: %w", err)
+	}
+	version, ok := configVersionOutput(output.String())
+	if !ok {
+		return "", errors.New("latest Config release version is unreadable")
+	}
+	return version, nil
+}
+
+func (u Updater) releaseRunner() LiveRunner {
+	runner := u.Substrate
+	runner.Environment = append(runner.Environment,
+		"MISE_GITHUB_GITHUB_ATTESTATIONS=true",
+		"MISE_MINIMUM_RELEASE_AGE=0s",
+	)
+	return runner
+}
+
+func configVersionOutput(output string) (string, bool) {
+	fields := strings.Fields(output)
+	if len(fields) != 2 || fields[0] != "config" || !stableConfigVersion(fields[1]) {
+		return "", false
+	}
+	return fields[1], true
+}
+
+func (u Updater) requireCanonicalExecutable() error {
+	if err := requireExecutableFile(u.Config); err != nil {
+		return fmt.Errorf("resumed Config command is unavailable at %s", u.Config)
+	}
+	current, err := u.CurrentExecutable()
+	if err != nil {
+		return fmt.Errorf("locate resumed Config: %w", err)
+	}
+	currentInfo, err := os.Stat(current)
+	if err != nil {
+		return fmt.Errorf("inspect resumed Config: %w", err)
+	}
+	canonicalInfo, err := os.Stat(u.Config)
+	if err != nil {
+		return fmt.Errorf("inspect canonical Config: %w", err)
+	}
+	if !os.SameFile(currentInfo, canonicalInfo) {
+		return fmt.Errorf("Config update resumed outside the canonical command at %s", u.Config)
+	}
+	return nil
+}
+
+func requireExecutableFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return errors.New("not an executable regular file")
+	}
+	return nil
+}
+
+func stableConfigVersion(version string) bool {
+	_, ok := configVersionNumbers(version)
+	return ok
+}
+
+func compareConfigVersions(left, right string) int {
+	leftNumbers, _ := configVersionNumbers(left)
+	rightNumbers, _ := configVersionNumbers(right)
+	for index := range leftNumbers {
+		if leftNumbers[index] < rightNumbers[index] {
+			return -1
+		}
+		if leftNumbers[index] > rightNumbers[index] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func configVersionNumbers(version string) ([3]int, bool) {
+	var numbers [3]int
+	if !strings.HasPrefix(version, "v") {
+		return numbers, false
+	}
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	if len(parts) != len(numbers) {
+		return numbers, false
+	}
+	for index, part := range parts {
+		if part == "" || len(part) > 1 && part[0] == '0' {
+			return numbers, false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return numbers, false
+			}
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return numbers, false
+		}
+		numbers[index] = value
+	}
+	return numbers, true
 }

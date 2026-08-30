@@ -4,6 +4,7 @@ min_version = "2026.8.13"
 [tools]
 go = "1.27.0"
 gitleaks = "8.30.0"
+"go:github.com/google/go-licenses/v2" = "2.0.1"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.7.0"
 
 [tasks.format]
@@ -30,6 +31,25 @@ go mod verify
 gitleaks dir --no-banner --redact .
 """
 
+[tasks."check:darwin-native"]
+description = "Read Finder Favorites through the native macOS integration"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $(uname -s) == Darwin ]] || {
+  echo "check:darwin-native: this canary requires macOS" >&2
+  exit 1
+}
+tests=$(go test -tags=config_native_canary ./internal/config \
+  -list '^TestFinderFavoritesNativeCanary$')
+grep -qx 'TestFinderFavoritesNativeCanary' <<<"$tests" || {
+  echo "check:darwin-native: the Finder Favorites canary is unavailable" >&2
+  exit 1
+}
+go test -tags=config_native_canary ./internal/config \
+  -run '^TestFinderFavoritesNativeCanary$' -count=1
+"""
+
 [tasks."build:release"]
 description = "Build release binaries and checksums without publishing"
 depends = ["check"]
@@ -50,10 +70,24 @@ for arch in arm64 amd64; do
     go build -trimpath -ldflags "-s -w -X main.version=$tag" -o "$output" ./cmd/config
 done
 printf '%s\n' "$tag" > dist/version.txt
+cp LICENSE dist/LICENSE
+license_dir=dist/third-party-licenses
+mkdir -p "$license_dir"
+for arch in arm64 amd64; do
+  GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 \
+    go-licenses save ./cmd/config \
+      --ignore github.com/azohra/config \
+      --save_path "$license_dir/config-darwin-$arch"
+done
+COPYFILE_DISABLE=1 tar -czf dist/third-party-licenses.tar.gz \
+  -C dist third-party-licenses
+rm -rf -- "$license_dir"
 if command -v sha256sum >/dev/null 2>&1; then
-  (cd dist && sha256sum config-darwin-* > checksums.txt)
+  (cd dist && sha256sum \
+    LICENSE config-darwin-* third-party-licenses.tar.gz version.txt > checksums.txt)
 else
-  (cd dist && shasum -a 256 config-darwin-* > checksums.txt)
+  (cd dist && shasum -a 256 \
+    LICENSE config-darwin-* third-party-licenses.tar.gz version.txt > checksums.txt)
 fi
 """
 
@@ -65,7 +99,8 @@ run = """
 set -euo pipefail
 tag="${usage_tag:?release: a release tag is required}"
 refuse() { echo "release: refusing — $*" >&2; exit 1; }
-[[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || refuse "$tag is not a release tag"
+[[ "$tag" =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$ ]] ||
+  refuse "$tag is not a stable release tag"
 [ -z "$(git status --porcelain)" ] || refuse "the tree is dirty"
 origin=$(git remote get-url origin)
 case "$origin" in
@@ -80,14 +115,23 @@ grep -n 'github:azohra/config[@"]' README.md | grep -v "${tag#v}" &&
 [ -n "${GITHUB_TOKEN:-}" ] || refuse "GITHUB_TOKEN is unset"
 command -v gh >/dev/null 2>&1 || refuse "GitHub CLI is unavailable"
 gh release view "$tag" >/dev/null 2>&1 && refuse "$tag already has a release"
-(test -f dist/config-darwin-arm64 && test -f dist/config-darwin-amd64 && test -f dist/checksums.txt) ||
+(test -f dist/config-darwin-arm64 && test -f dist/config-darwin-amd64 &&
+  test -f dist/LICENSE && test -f dist/third-party-licenses.tar.gz &&
+  test -f dist/checksums.txt) ||
   refuse "release artifacts are missing; run mise run build:release $tag"
 [ "$(cat dist/version.txt 2>/dev/null || true)" = "$tag" ] || refuse "release artifacts were not built for $tag"
+cmp -s LICENSE dist/LICENSE || refuse "the release license does not match LICENSE"
+tar -tzf dist/third-party-licenses.tar.gz >/dev/null || refuse "the third-party license archive is invalid"
 if command -v sha256sum >/dev/null 2>&1; then
   (cd dist && sha256sum -c checksums.txt)
 else
   (cd dist && shasum -a 256 -c checksums.txt)
 fi
-gh release create "$tag" dist/config-darwin-* dist/checksums.txt dist/version.txt \
+gh release create "$tag" \
+  dist/config-darwin-* \
+  dist/LICENSE \
+  dist/third-party-licenses.tar.gz \
+  dist/checksums.txt \
+  dist/version.txt \
   --generate-notes --title "Config $tag" --verify-tag
 """

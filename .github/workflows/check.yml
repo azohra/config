@@ -39,4 +39,8 @@ jobs:
           key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-${{ hashFiles('go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-
-      - run: mise run check
+      - name: Check
+        run: mise run check
+      - name: Finder Favorites canary
+        if: runner.os == 'macOS'
+        run: mise run check:darwin-native

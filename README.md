@@ -14,7 +14,7 @@ Config requires macOS, Git, and mise 2026.8.14 installed at
 `~/.local/bin/mise`. Mise can run the released binary for the initial handoff:
 
 ```bash
-mise x github:azohra/config@0.4.0 -- \
+mise x github:azohra/config@0.5.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -156,7 +156,6 @@ Useful non-interactive commands:
 ```bash
 config --status
 config path
-config install
 config update
 config --version
 ```
@@ -168,15 +167,14 @@ declared repository that is not checked out, and one whose checkout holds a
 different repository. Both answers are local. It says nothing about how far a
 checkout has drifted from its remote:
 that costs a network round trip each, and `update` already owns it. `update`
-is explicit and unscheduled: it holds the standalone mise binary at Config's
-tested version, updates declared tools and packages, then fast-forwards clean
-declared repositories. Dirty repositories are reported and left untouched.
-`config path` prints the managed checkout even before it exists. To replace the
-permanent Config command with another release, run that release explicitly:
-
-```bash
-mise x github:azohra/config@0.4.0 -- config install
-```
+is explicit and unscheduled. After repairing its standalone mise substrate if
+needed, a released Config acquires the latest stable, attested release,
+atomically installs it as the permanent command, and continues the same update
+from that executable. The current release validates the machine document, holds
+standalone mise at its tested version, updates declared tools and packages, and
+fast-forwards clean declared repositories. Dirty repositories are reported and
+left untouched. Unversioned development builds skip Config's release update.
+`config path` prints the managed checkout even before it exists.
 
 Saving stages the whole managed repository and creates a commit under its Git
 policy. Config writes `Update machine snapshot` as the subject; the user only
@@ -195,8 +193,10 @@ mise run build:release -- v0.0.0-dev
 
 `check` runs formatting validation, `go vet`, the race-enabled test suite,
 `govulncheck`, module verification, and a redacted secret scan. CI invokes the
-same task. Release tags publish bare macOS binaries for Apple silicon and Intel
-plus SHA-256 checksums.
+same task. macOS CI also runs `mise run check:darwin-native`, a read-only canary
+for the native Finder Favorites integration. Release tags publish bare macOS
+binaries for Apple silicon and Intel, Config's license, third-party license
+material, and SHA-256 checksums.
 
 The implementation and its trust boundaries are described in
 [ARCHITECTURE.md](ARCHITECTURE.md).

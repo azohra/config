@@ -21,7 +21,6 @@ Usage:
   config --status
   config --version
   config path
-  config install
   config update
   config bootstrap <repository>
 
@@ -32,8 +31,9 @@ Bootstrap clones an authenticated Git repository into Config's managed storage,
 installs the permanent Config command, and resumes restore until every declared
 step has completed. Path prints the managed repository's canonical location.
 
-Update asks the canonical mise to update itself, declared tools, packages, and
-clean repositories. It runs only when explicitly invoked.`
+Update verifies its canonical mise substrate, installs the latest verified
+Config release, then continues from that release to update mise, declared tools,
+packages, and clean repositories. It runs only when explicitly invoked.`
 
 var version = "dev"
 
@@ -73,6 +73,12 @@ func run() error {
 			return errors.New("usage: config install")
 		}
 		return config.InstallCurrent(paths)
+	}
+	if len(args) > 0 && args[0] == "update" {
+		if len(args) != 1 {
+			return errors.New("usage: config update")
+		}
+		return config.NewUpdater(paths, os.Stdout, version).Update()
 	}
 	var machine config.Machine
 	restorePending := false
@@ -120,11 +126,6 @@ func run() error {
 				return errors.New("invalid snapshot request")
 			}
 			return config.NewSnapshotter(paths, machine, os.Stdout).Save()
-		case "update":
-			if len(args) != 1 {
-				return errors.New("usage: config update")
-			}
-			return config.NewUpdater(paths, os.Stdout).Update()
 		default:
 			if !strings.HasPrefix(args[0], "-") {
 				return errors.New("unknown command; run config help for available commands")

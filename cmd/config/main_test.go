@@ -11,9 +11,17 @@ import (
 // buildConfig compiles the command so a test drives the real argv boundary
 // rather than a rearranged copy of it.
 func buildConfig(t *testing.T) string {
+	return buildConfigVersion(t, "")
+}
+
+func buildConfigVersion(t *testing.T, version string) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "config")
-	build := exec.Command("go", "build", "-o", binary, ".")
+	args := []string{"build", "-o", binary}
+	if version != "" {
+		args = append(args, "-ldflags", "-X main.version="+version)
+	}
+	build := exec.Command("go", append(args, ".")...)
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build config: %v\n%s", err, output)
 	}
@@ -164,6 +172,32 @@ func TestPathAndInstallDoNotRequireAMachineRepository(t *testing.T) {
 	}
 	if string(installedBytes) != string(binaryBytes) || info.Mode().Perm() != 0o755 {
 		t.Fatalf("installed command differs from the running binary or is not executable")
+	}
+}
+
+func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
+	binary, home := buildConfigVersion(t, "v0.4.0"), t.TempDir()
+	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("newer-machine-schema"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, code := runConfig(t, binary, home, "update")
+	if code != 1 || !strings.Contains(output, "mise unavailable") || strings.Contains(output, "config.toml") {
+		t.Fatalf("config update read the machine document before updating itself (exit %d):\n%s", code, output)
+	}
+}
+
+func TestHelpKeepsInstallAsDistributionPlumbing(t *testing.T) {
+	output, code := runConfig(t, buildConfig(t), t.TempDir(), "help")
+	if code != 0 {
+		t.Fatalf("config help exited %d:\n%s", code, output)
+	}
+	if strings.Contains(output, "\n  config install\n") {
+		t.Fatalf("config help exposes the release handoff command:\n%s", output)
 	}
 }
 

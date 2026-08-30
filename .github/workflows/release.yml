@@ -41,6 +41,8 @@ jobs:
         with:
           subject-path: |
             dist/config-darwin-*
+            dist/LICENSE
+            dist/third-party-licenses.tar.gz
             dist/checksums.txt
             dist/version.txt
       - name: Publish release

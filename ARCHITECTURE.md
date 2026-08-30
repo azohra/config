@@ -21,7 +21,18 @@ provider configuration remain opaque mise input. The standalone mise
 installation is Config's execution substrate, and Config accepts exactly the
 version whose command and phase vocabulary the release tests.
 Config disables mise's ambient auto-update behavior in child processes;
-`config update` is the explicit version transition.
+`config update` is the explicit version transition for Config, mise, and the
+resources declared by the machine repository. A released Config first repairs
+canonical mise to the version it knows, then uses that isolated substrate to
+acquire the latest stable Config release with GitHub artifact attestation
+enabled. It atomically installs that executable and continues the same update
+from the installed command before loading the machine document. The current
+release validates that document, normalizes mise to the exact version it was
+tested against, and updates the declared resources. Unversioned development
+builds skip the Config release transition. Release acquisition alone disables
+mise's general release-age delay because this explicit operation promises the
+latest release; an exact resolved version, provenance verification, and
+downgrade refusal still gate replacement.
 
 Config probes the phases separately rather than taking mise's aggregate.
 The aggregate includes `repos`, where mise answers two questions at once:
@@ -162,5 +173,8 @@ the CLI or terminal interface.
 
 The release contains a single static binary for each supported macOS
 architecture. GitHub Releases is Config's distribution channel. Mise hands the
-selected release to Config once; Config installs that executable as its
-permanent command.
+selected release to Config for the initial handoff and for explicit updates;
+Config installs that executable as its permanent command. Each release also
+ships Config's license and the license material required to redistribute its
+dependencies. A read-only canary on a disposable macOS CI runner exercises the
+native Finder Favorites boundary without changing the runner's state.
