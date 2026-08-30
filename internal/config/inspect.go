@@ -1,12 +1,15 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 type Inspector struct {
@@ -66,18 +69,96 @@ func (i Inspector) miseChecks() []Check {
 		return []Check{no("mise "+currentVersion+" is too old", Failure, "install "+minimumMiseVersion+" or newer at ~/.local/bin/mise")}
 	}
 	checks := []Check{yes("mise " + currentVersion)}
-	// Mise owns the vocabulary below its bootstrap command. Config consumes the
-	// aggregate result instead of learning about each resource category.
-	result := runWithTimeout(i.Runner, 5*time.Minute, "mise", "bootstrap", "status", "--missing")
-	switch {
-	case result.Err == nil:
-		checks = append(checks, yes("mise bootstrap state"))
-	case result.ExitCode() == 1:
-		checks = append(checks, no("mise bootstrap state needs attention", Failure, "mise bootstrap status"))
-	default:
-		checks = append(checks, no("mise bootstrap unavailable", Failure, "mise doctor"))
-	}
+	checks = append(checks, i.bootstrapChecks()...)
+	checks = append(checks, i.toolCheck(), i.repositoryCheck())
 	return append(checks, setupChecks(i.Paths, i.Runner, miseFacts(i.Machine))...)
+}
+
+// bootstrapChecks probes every declared phase at once. Naming the phases
+// costs Config a list to keep current and buys back which phase drifted,
+// which the aggregate's single exit code could never say.
+func (i Inspector) bootstrapChecks() []Check {
+	type outcome struct {
+		phase  string
+		result Result
+	}
+	outcomes := make([]outcome, len(misePhases))
+	var wg sync.WaitGroup
+	for index, phase := range misePhases {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			args := append(append([]string{"bootstrap"}, phase...), "status", "--missing")
+			outcomes[index] = outcome{strings.Join(phase, " "), run(i.Runner, "mise", args...)}
+		}()
+	}
+	wg.Wait()
+	var drifted, unavailable []string
+	for _, outcome := range outcomes {
+		// A converged phase exits zero, and ExitCode reports -1 for that
+		// because there is no ExitError to read. Test the error first, or
+		// every healthy phase reads as a missing binary.
+		switch {
+		case outcome.result.Err == nil:
+		case outcome.result.ExitCode() == 1:
+			drifted = append(drifted, outcome.phase)
+		default:
+			unavailable = append(unavailable, outcome.phase)
+		}
+	}
+	var checks []Check
+	if len(unavailable) > 0 {
+		checks = append(checks, no("mise bootstrap unavailable", Failure, strings.Join(unavailable, ", ")))
+	}
+	if len(drifted) > 0 {
+		checks = append(checks, no("mise bootstrap state needs attention", Failure, strings.Join(drifted, ", ")))
+	}
+	if len(checks) == 0 {
+		checks = append(checks, yes("mise bootstrap state"))
+	}
+	return checks
+}
+
+// toolCheck covers the one declared category with no bootstrap phase of its
+// own. `mise ls --missing` exits zero either way, so a complete machine is an
+// empty listing rather than a successful command.
+func (i Inspector) toolCheck() Check {
+	listing := run(i.Runner, "mise", "ls", "--missing", "-J")
+	if listing.Err != nil {
+		return no("declared tools unreadable", Failure, listing.Failure().Error())
+	}
+	var missing map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(listing.Stdout), &missing); err != nil {
+		return no("declared tools unreadable", Failure, err.Error())
+	}
+	if len(missing) == 0 {
+		return yes("declared tools installed")
+	}
+	names := slices.Sorted(maps.Keys(missing))
+	return no(FormatCount(len(names), "declared tool missing", "declared tools missing"),
+		Failure, strings.Join(names, ", "))
+}
+
+// repositoryCheck answers what [bootstrap.repos] declares: the checkout
+// should be there. How far it has drifted from its remote is a different
+// question, one config update already owns and one that costs a network
+// round trip for every repository.
+func (i Inspector) repositoryCheck() Check {
+	declared, err := miseRepositories(i.Paths, i.Runner)
+	if err != nil {
+		return no("declared repositories unreadable", Failure, err.Error())
+	}
+	var missing []string
+	for _, path := range declared {
+		if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr != nil {
+			missing = append(missing, filepath.Base(path))
+		}
+	}
+	if len(missing) > 0 {
+		return no(FormatCount(len(missing), "declared repository missing", "declared repositories missing"),
+			Failure, strings.Join(missing, ", "))
+	}
+	return yes(FormatCount(len(declared), "repository checked out", "repositories checked out"))
 }
 
 func (i Inspector) setup() Resource {

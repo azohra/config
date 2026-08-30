@@ -57,10 +57,11 @@ node = "24"
 "~/.gitconfig" = "gitconfig"
 ```
 
-Only repository identity is required. Config parses no mise declarations. It
-selects the repository's `mise/` directory through `MISE_CONFIG_DIR`, fixes its
-configuration root to the checkout, and stops parent discovery. Those values
-exist only in the child process.
+Only repository identity is required. Config interprets no mise declaration
+beyond asking which repository checkouts are declared, so it can report one
+that is missing. It selects the repository's `mise/` directory through
+`MISE_CONFIG_DIR`, fixes its configuration root to the checkout, and stops
+parent discovery. Those values exist only in the child process.
 
 The standalone mise installation is Config's execution substrate, so mise is
 excluded from the document's tools and packages.
@@ -120,8 +121,9 @@ restored only during a fresh bootstrap.
 
 Everything else belongs to mise. Packages, tools, repositories, dotfiles,
 services, Compose projects, macOS defaults, LaunchAgents, hooks, and custom
-bootstrap tasks keep their native meaning. Config runs `mise bootstrap` and
-reports its aggregate status and apply result.
+bootstrap tasks keep their native meaning. Config runs `mise bootstrap` to
+apply, and reports the status of each bootstrap phase separately so a failure
+names the phase it came from.
 
 ## Use
 
@@ -144,10 +146,12 @@ config --version
 ```
 
 `--status` exits unsuccessfully when a failed check or unresolved bidirectional
-choice needs attention. Mise treats a dirty declared repository as a failed
-bootstrap check. `update` is explicit and unscheduled: it updates the standalone
-mise binary, declared tools and packages, then fast-forwards clean declared
-repositories. Dirty repositories are reported and left untouched.
+choice needs attention. It reports a declared repository that is not checked
+out, and says nothing about how far one has drifted from its remote: answering
+that costs a network round trip each, and `update` already owns it. `update`
+is explicit and unscheduled: it updates the standalone mise binary, declared
+tools and packages, then fast-forwards clean declared repositories. Dirty
+repositories are reported and left untouched.
 Declaring `github:azohra/config` makes the initial one-shot invocation
 permanent. Changing its selected version upgrades Config through mise.
 

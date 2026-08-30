@@ -57,11 +57,7 @@ func (r OSRunner) executable(name string) string {
 }
 
 func run(r Runner, name string, args ...string) Result {
-	return runWithTimeout(r, 20*time.Second, name, args...)
-}
-
-func runWithTimeout(r Runner, timeout time.Duration, name string, args ...string) Result {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return r.Run(ctx, name, args...)
 }

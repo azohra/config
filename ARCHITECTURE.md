@@ -14,9 +14,18 @@ parse or reinterpret them.
 Mise owns the resources it declares and the order encoded by its bootstrap
 phases and hooks. Config invokes one canonical standalone binary at
 `~/.local/bin/mise`, scopes the repository's native `mise/` configuration to
-each child process, and reports status or apply results. Package names, repository
-purposes, commands, secret references, and provider configuration remain opaque
-mise input. The standalone mise installation is Config's execution substrate.
+each child process, and reports each bootstrap phase's status or the apply
+result. Package names, repository purposes, commands, secret references, and
+provider configuration remain opaque mise input. The standalone mise
+installation is Config's execution substrate.
+
+Config probes the phases separately rather than taking mise's aggregate.
+The aggregate includes `repos`, where mise answers two questions at once:
+whether a checkout exists, which is a local stat, and whether it matches its
+remote, which is one network round trip per declared repository. Only presence
+is machine setup, so Config asks mise for the declared paths and checks those
+itself; freshness belongs to `config update`. Naming the phases means Config
+must keep pace with mise, so a test pins the list to the phases mise offers.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
