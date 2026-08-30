@@ -68,10 +68,26 @@ func (i Inspector) miseChecks() []Check {
 	if !miseVersionAtLeast(version.Stdout, minimumMiseVersion) {
 		return []Check{no("mise "+currentVersion+" is too old", Failure, "install "+minimumMiseVersion+" or newer at ~/.local/bin/mise")}
 	}
+	// The three groups ask mise and git independent questions, so the slowest
+	// of them sets the cost rather than their sum.
+	var bootstrap, tools, repositories []Check
+	var wg sync.WaitGroup
+	for _, probe := range []func(){
+		func() { bootstrap = i.bootstrapChecks() },
+		func() { tools = []Check{i.toolCheck()} },
+		func() { repositories = i.repositoryChecks() },
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			probe()
+		}()
+	}
+	wg.Wait()
 	checks := []Check{yes("mise " + currentVersion)}
-	checks = append(checks, i.bootstrapChecks()...)
-	checks = append(checks, i.toolCheck())
-	checks = append(checks, i.repositoryChecks()...)
+	checks = append(checks, bootstrap...)
+	checks = append(checks, tools...)
+	checks = append(checks, repositories...)
 	return append(checks, setupChecks(i.Paths, i.Runner, miseFacts(i.Machine))...)
 }
 
