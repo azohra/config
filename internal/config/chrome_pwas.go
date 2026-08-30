@@ -126,13 +126,36 @@ func normalizeChromePWAs(apps []chromePWA) ([]chromePWA, error) {
 	return normalized, nil
 }
 
+// canonicalChromePWAs reduces a collection to the fact Config tracks: which
+// PWAs are installed. Chrome owns everything inside a bundle and rewrites it
+// whenever a site changes its icon or manifest, so comparing that content
+// would report Chrome's churn as a choice for the reader to make. The rest of
+// the record is kept because a restore has to rebuild the bundle from it.
 func canonicalChromePWAs(apps []chromePWA) (json.RawMessage, []chromePWA, error) {
 	normalized, err := normalizeChromePWAs(apps)
 	if err != nil {
 		return nil, nil, err
 	}
-	canonical, err := json.Marshal(chromePWASnapshot{Schema: chromePWAsSchema, Apps: normalized})
+	installed := make([]string, len(normalized))
+	for index, app := range normalized {
+		installed[index] = app.ID
+	}
+	canonical, err := json.Marshal(installed)
 	return canonical, normalized, err
+}
+
+// chromePWACollectionsEqual compares the full records, which is what a
+// restore needs: identity alone cannot say whether a bundle must be rebuilt.
+func chromePWACollectionsEqual(saved []chromePWA, live []liveChromePWA) bool {
+	if len(saved) != len(live) {
+		return false
+	}
+	for index := range saved {
+		if !chromePWAEqual(saved[index], live[index].chromePWA) {
+			return false
+		}
+	}
+	return true
 }
 
 func chromePWAEqual(left, right chromePWA) bool {
@@ -282,12 +305,8 @@ func chromePWADiff(saved []chromePWA, live []liveChromePWA) []string {
 	}
 	var details []string
 	for _, app := range live {
-		savedApp, exists := savedByID[app.ID]
-		switch {
-		case !exists:
+		if _, exists := savedByID[app.ID]; !exists {
 			details = append(details, "Only on this Mac: "+app.Name)
-		case !chromePWAEqual(savedApp, app.chromePWA):
-			details = append(details, "Changed on this Mac: "+app.Name)
 		}
 	}
 	for _, app := range saved {
@@ -488,18 +507,18 @@ func (e Applier) reconcileChromePWAs(action Action) error {
 }
 
 func (e Applier) applyChromePWAs() error {
-	savedCanonical, saved, hasSaved, err := e.Bidir.chromePWASaved()
+	_, saved, hasSaved, err := e.Bidir.chromePWASaved()
 	if err != nil {
 		return err
 	}
 	if !hasSaved {
 		return advisoryError{"no saved PWA backup; Chrome PWAs left untouched"}
 	}
-	liveCanonical, live, _, err := e.Bidir.chromePWALive()
+	_, live, _, err := e.Bidir.chromePWALive()
 	if err != nil {
 		return err
 	}
-	if bytes.Equal(savedCanonical, liveCanonical) {
+	if chromePWACollectionsEqual(saved, live) {
 		e.Log.OK("PWAs already current")
 		return nil
 	}

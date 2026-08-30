@@ -403,3 +403,41 @@ func TestChromePWAsNameADamagedBundleWithoutLosingTheRest(t *testing.T) {
 		t.Fatalf("a refused capture still removed the saved icon: %v", err)
 	}
 }
+
+// Chrome owns what is inside a PWA bundle and rewrites it whenever a site
+// changes its icon. Config tracks which PWAs are installed, so that rewrite
+// is not drift and must not become a choice for the reader to make.
+func TestChromePWAsIgnoreContentChromeOwns(t *testing.T) {
+	paths := testPaths(t)
+	app := testChromePWA("YouTube", "agimnkijcaahngcdmfeangaknmldooml", "https://www.youtube.com/", []byte("old icon"))
+	writeTestLivePWA(t, paths, app, []byte("old icon"))
+	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	if err := bidir.CaptureChromePWAs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := bidir.MarkChromePWAsIfCurrent(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Chrome rewrites the bundle with a new icon.
+	refreshed := testChromePWA("YouTube", app.ID, app.URL, []byte("icon Chrome regenerated"))
+	writeTestLivePWA(t, paths, refreshed, []byte("icon Chrome regenerated"))
+
+	resource := bidir.InspectChromePWAs()
+	if resource.State != Current {
+		t.Fatalf("a Chrome icon rewrite became %s: %#v", resource.State, resource)
+	}
+	if resource.NeedsDecision() {
+		t.Fatalf("a Chrome icon rewrite asked the reader to choose: %#v", resource)
+	}
+
+	// Installing a PWA is drift, because that is the fact Config tracks.
+	added := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", []byte("icon"))
+	writeTestLivePWA(t, paths, added, []byte("icon"))
+	if resource = bidir.InspectChromePWAs(); resource.State != LiveChanged {
+		t.Fatalf("installing a PWA = %s, want live-changed: %#v", resource.State, resource)
+	}
+	if !slices.Contains(resource.Details, "Only on this Mac: Gmail") {
+		t.Fatalf("the new PWA was not named: %+v", resource.Details)
+	}
+}

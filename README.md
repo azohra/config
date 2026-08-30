@@ -116,8 +116,10 @@ first capture.
 Dock and Chrome PWA snapshots are bidirectional. Config compares the saved
 snapshot, the live Mac, and a local last-agreement baseline so it can
 distinguish a saved edit from a live edit and stop for a choice when both
-changed. Preference plists are one-way backups on an established Mac and are
-restored only during a fresh bootstrap.
+changed. It compares which apps are in the Dock and which PWAs are installed,
+not what is inside them: Chrome rewrites a PWA bundle whenever a site changes
+its icon, and that is Chrome's to change. Preference plists are one-way
+backups on an established Mac and are restored only during a fresh bootstrap.
 
 Everything else belongs to mise. Packages, tools, repositories, dotfiles,
 services, Compose projects, macOS defaults, LaunchAgents, hooks, and custom

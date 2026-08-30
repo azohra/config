@@ -84,6 +84,12 @@ saved snapshot + live state + last agreement -> current, saved changed,
 live changed, unknown, or conflict
 ```
 
+Each side reduces to the fact Config tracks before it is compared: the apps
+in the Dock, and the PWAs installed. A PWA's name, URL, icon, and schemes are
+kept because a restore rebuilds the bundle from them, but Chrome owns that
+content and rewrites it on its own schedule, so comparing it would report
+Chrome's churn as a choice.
+
 Baselines live outside the repository under `~/.cache/config/state`. They are
 written only when saved and live state agree. Captures use atomic writes; PWA
 snapshots validate identifiers, URLs, schemes, icon digests, and plist input
