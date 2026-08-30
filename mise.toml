@@ -73,6 +73,10 @@ case "$origin" in
   *) refuse "origin is not azohra/config" ;;
 esac
 [ "$(git describe --tags --exact-match 2>/dev/null || true)" = "$tag" ] || refuse "$tag is not the tag at HEAD"
+# A pin the README documents is the version a new machine installs, so it
+# cannot lag the release being published.
+grep -n 'github:azohra/config[@"]' README.md | grep -v "${tag#v}" &&
+  refuse "README pins a version other than ${tag#v}"
 [ -n "${GITHUB_TOKEN:-}" ] || refuse "GITHUB_TOKEN is unset"
 command -v gh >/dev/null 2>&1 || refuse "GitHub CLI is unavailable"
 gh release view "$tag" >/dev/null 2>&1 && refuse "$tag already has a release"
