@@ -52,7 +52,7 @@ func parseDock(output string) ([]string, error) {
 		if len(fields) < 2 {
 			return nil, fmt.Errorf("unexpected dockutil output: %s", line)
 		}
-		if len(fields) >= 3 && fields[2] != "application" && fields[2] != "persistentApps" {
+		if len(fields) >= 3 && fields[2] != "persistentApps" {
 			continue
 		}
 		path := strings.TrimSuffix(strings.TrimPrefix(fields[1], "file://"), "/")

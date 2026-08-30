@@ -29,9 +29,12 @@ func (b Baselines) Load(resource string) (Baseline, bool, error) {
 	if err != nil {
 		return Baseline{}, false, err
 	}
+	// A baseline is a cache, not a record. An unreadable one means the same
+	// thing as an absent one — no last agreement — so a resource whose two
+	// sides differ asks for a direction instead of guessing.
 	var baseline Baseline
 	if err := json.Unmarshal(data, &baseline); err != nil {
-		return Baseline{}, false, nil // Ignore hash-only and otherwise obsolete state.
+		return Baseline{}, false, nil
 	}
 	if baseline.Schema != baselineSchema || baseline.Resource != resource || !json.Valid(baseline.Content) {
 		return Baseline{}, false, nil

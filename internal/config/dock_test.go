@@ -21,12 +21,12 @@ func (r dockRunner) Run(_ context.Context, name string, args ...string) Result {
 func (dockRunner) Exists(name string) bool { return name == "dockutil" }
 
 func TestParseDock(t *testing.T) {
-	output := "Safari\tfile:///System/Applications/Safari.app/\tpersistentApps\nDownloads\tfile:///Users/me/Downloads/\tpersistentOthers\nTerminal\tfile:///System/Applications/Utilities/Terminal.app/\tapplication\n"
+	output := "Safari\tfile:///System/Applications/Safari.app/\tpersistentApps\nDownloads\tfile:///Users/me/Downloads/\tpersistentOthers\nTerminal\tfile:///System/Applications/Utilities/Terminal.app/\trecentApps\nMail\tfile:///System/Applications/Mail.app/\tpersistentApps\n"
 	got, err := parseDock(output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/System/Applications/Safari.app", "/System/Applications/Utilities/Terminal.app"}
+	want := []string{"/System/Applications/Safari.app", "/System/Applications/Mail.app"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("parseDock() = %#v, want %#v", got, want)
 	}
