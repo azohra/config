@@ -14,7 +14,7 @@ Config requires macOS, Git, and mise 2026.8.14 or newer installed at
 `~/.local/bin/mise`. Mise can run the released binary for the initial handoff:
 
 ```bash
-mise x github:azohra/config@0.2.2 -- \
+mise x github:azohra/config@0.3.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -50,7 +50,7 @@ Native mise configuration lives separately in `mise/config.toml` and optional
 min_version = "2026.8.14"
 
 [tools]
-"github:azohra/config" = "0.2.2"
+"github:azohra/config" = "0.3.0"
 node = "24"
 
 [dotfiles]
