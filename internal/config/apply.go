@@ -110,6 +110,7 @@ func (e Applier) Apply(selections []Selection) error {
 		steps = append(steps, step{dockID, dockName, e.reconcileDock})
 	}
 	var failures []error
+	converged := make(map[string]bool)
 	for _, step := range steps {
 		action, selected := actions[step.id]
 		if !selected {
@@ -124,10 +125,13 @@ func (e Applier) Apply(selections []Selection) error {
 			}
 			e.Log.Error(err.Error())
 			failures = append(failures, fmt.Errorf("%s: %w", step.name, err))
+			continue
 		}
+		converged[step.id] = true
 	}
-	// Establish baselines whenever both sides agree. A selected bidirectional
-	// action must verify; unrelated current state stays out of the apply log.
+	// Establish baselines whenever both sides agree. A step that converged
+	// must verify; one that failed or declined already said why, and cannot
+	// leave the two sides agreeing.
 	type baselineStep struct {
 		id   string
 		name string
@@ -141,10 +145,8 @@ func (e Applier) Apply(selections []Selection) error {
 		baselines = append(baselines, baselineStep{dockID, dockName, e.Bidir.MarkDockIfCurrent})
 	}
 	for _, baseline := range baselines {
-		if err := baseline.mark(); err != nil {
-			if _, selected := actions[baseline.id]; selected {
-				failures = append(failures, fmt.Errorf("%s: %w", baseline.name, err))
-			}
+		if err := baseline.mark(); err != nil && converged[baseline.id] {
+			failures = append(failures, fmt.Errorf("%s: %w", baseline.name, err))
 		}
 	}
 	return errors.Join(failures...)

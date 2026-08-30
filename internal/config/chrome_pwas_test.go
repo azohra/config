@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"howett.net/plist"
@@ -222,5 +223,68 @@ func TestChromePWABundleBuiltFromInstalledChromeCanBeSigned(t *testing.T) {
 	}
 	if output, err := exec.Command("codesign", "--verify", "--deep", "--strict", bundle).CombinedOutput(); err != nil {
 		t.Fatalf("codesign verify: %v\n%s", err, output)
+	}
+}
+
+// The restore branch stages a bundle, signs it, removes what it replaces, and
+// renames the staged copy into place. It needs the installed Chrome it builds
+// from, so it verifies against the real template and loader.
+func TestChromePWARestoreInstallsTheSavedBundle(t *testing.T) {
+	if _, err := os.Stat(chromePWATemplatePath()); err != nil {
+		t.Skip("Google Chrome is not installed")
+	}
+	paths := testPaths(t)
+	icon := []byte("icon")
+	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
+
+	// Capture a live PWA, then remove it so the saved backup is the only copy.
+	bundle := writeTestLivePWA(t, paths, app, icon)
+	runner := OSRunner{Dir: paths.Root}
+	bidir := NewBidirectional(paths, runner)
+	if err := bidir.CaptureChromePWAs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(bundle); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeBin, "trash"), []byte("#!/bin/sh\nrm -rf -- \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	applier := Applier{
+		Paths:  paths,
+		Runner: runner,
+		Live:   NewLiveRunner(paths.Root),
+		Log:    Logger{Out: io.Discard},
+		Bidir:  bidir,
+	}
+	if err := applier.applyChromePWAs(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := filepath.Join(chromePWALiveDir(paths), app.Name+".app")
+	info, err := os.ReadFile(filepath.Join(restored, "Contents", "Info.plist"))
+	if err != nil {
+		t.Fatalf("restore left no bundle at %s: %v", restored, err)
+	}
+	rebuilt, isPWA, err := chromePWAFromPlist(info, icon)
+	if err != nil || !isPWA {
+		t.Fatalf("restored bundle does not read back as a PWA: %v", err)
+	}
+	if !chromePWAEqual(rebuilt, app) {
+		t.Fatalf("restored PWA = %+v, want %+v", rebuilt, app)
+	}
+	// Nothing may be left staged beside the bundle it installed.
+	entries, err := os.ReadDir(chromePWALiveDir(paths))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".config-pwas") {
+			t.Fatalf("restore left staging directory %s behind", entry.Name())
+		}
 	}
 }

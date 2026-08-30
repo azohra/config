@@ -91,3 +91,245 @@ func TestADirtyCheckoutDoesNotBlockApply(t *testing.T) {
 		t.Fatalf("mise order = %q, want %q", commands, want)
 	}
 }
+
+// applyRunner answers the probes an Applier makes while reconciling, so a
+// test can drive apply without a real Mac.
+type applyRunner struct {
+	dock string
+}
+
+func (r applyRunner) Run(_ context.Context, name string, args ...string) Result {
+	switch {
+	case name == "dockutil" && slices.Equal(args, []string{"--list"}):
+		return Result{Stdout: r.dock}
+	case name == "defaults" && len(args) > 0 && args[0] == "export":
+		return Result{Stdout: "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>k</key><true/></dict></plist>"}
+	case name == "mdfind":
+		return Result{Stdout: "/Applications/Example.app"}
+	case name == "osascript":
+		return Result{Stdout: "false"}
+	}
+	return Result{}
+}
+
+func (applyRunner) Exists(string) bool { return true }
+
+// Apply is a plan executor: a step runs because it was chosen, not because
+// the machine declares it.
+func TestApplyRunsOnlyTheSelectedSteps(t *testing.T) {
+	paths := testPaths(t)
+	app := paths.InHome("Applications", "Example.app")
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := applyRunner{dock: "Example\tfile://" + app + "/\tpersistentApps\n"}
+	applier, chatter := testApplier(t, paths, testMachine(), runner)
+
+	if err := applier.Apply([]Selection{{ID: dockID, Action: Capture}}); err != nil {
+		t.Fatal(err)
+	}
+	out := chatter.String()
+	if !strings.Contains(out, dockName) {
+		t.Fatalf("the selected step did not run:\n%s", out)
+	}
+	for _, unselected := range []string{setupName, chromePWAsName, "Example App"} {
+		if strings.Contains(out, unselected) {
+			t.Fatalf("%s ran without being selected:\n%s", unselected, out)
+		}
+	}
+	if _, err := os.Stat(dockSnapshotPath(paths)); err != nil {
+		t.Fatalf("the selected capture wrote nothing: %v", err)
+	}
+}
+
+// A step that skips itself deliberately is not a failure. Apply must not
+// convert that warning into an error through the baseline pass.
+func TestApplyDoesNotFailOnADeliberateSkip(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	machine.ChromePWAs = false
+	machine.Preferences = nil
+	runner := applyRunner{dock: ""}
+	applier, chatter := testApplier(t, paths, machine, runner)
+
+	// No saved layout exists, so applyDock declines and says so.
+	err := applier.Apply([]Selection{{ID: dockID, Action: Apply}})
+	if err != nil {
+		t.Fatalf("a deliberate skip was reported as a failure: %v", err)
+	}
+	if !strings.Contains(chatter.String(), "Dock left untouched") {
+		t.Fatalf("the skip was not explained:\n%s", chatter.String())
+	}
+}
+
+// The Dock is rebuilt with one dockutil call per planned change, each
+// suppressing the restart, and a single restart at the end. Dropping
+// --no-restart makes the Dock flicker through every intermediate layout.
+func TestApplyDockIssuesThePlannedOperationsThenRestartsOnce(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	machine.ChromePWAs = false
+	machine.Preferences = nil
+	first := paths.InHome("Applications", "First.app")
+	second := paths.InHome("Applications", "Second.app")
+	for _, app := range []string{first, second} {
+		if err := os.MkdirAll(app, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := atomicWrite(dockSnapshotPath(paths), []byte(first+"\n"+second+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The Dock reads reversed, then reads back in the saved order once the
+	// planned dockutil calls have run.
+	reversed := "Second\tfile://" + second + "/\tpersistentApps\nFirst\tfile://" + first + "/\tpersistentApps\n"
+	restored := "First\tfile://" + first + "/\tpersistentApps\nSecond\tfile://" + second + "/\tpersistentApps\n"
+	runner := &sequencedDockRunner{listings: []string{reversed, restored}}
+	commands := fakeTools(t, fakeTool{name: "dockutil"}, fakeTool{name: "killall"})
+	applier, chatter := testApplier(t, paths, machine, runner)
+
+	if err := applier.Apply([]Selection{{ID: dockID, Action: Apply}}); err != nil {
+		t.Fatalf("apply Dock: %v\n%s", err, chatter.String())
+	}
+	issued := commands()
+	if len(issued) == 0 {
+		t.Fatalf("apply issued no commands:\n%s", chatter.String())
+	}
+	restarts := 0
+	for _, command := range issued {
+		switch {
+		case strings.HasPrefix(command, "dockutil "):
+			if !strings.Contains(command, "--no-restart") {
+				t.Fatalf("a Dock change restarted the Dock mid-plan: %q", command)
+			}
+		case strings.HasPrefix(command, "killall "):
+			restarts++
+			if !strings.Contains(command, "Dock") {
+				t.Fatalf("unexpected killall: %q", command)
+			}
+		default:
+			t.Fatalf("apply issued an unexpected command: %q", command)
+		}
+	}
+	if restarts != 1 {
+		t.Fatalf("Dock restarted %d times, want exactly 1:\n%s", restarts, strings.Join(issued, "\n"))
+	}
+}
+
+// Restore is the fresh-clone path. It must import into the declared domain,
+// and must not touch an application this Mac has not installed.
+func TestRestorePreferenceImportsOnlyWhenTheAppIsInstalled(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	preference := machine.Preferences[0]
+	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
+	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
+	applier, chatter := testApplier(t, paths, machine, applyRunner{})
+
+	if err := applier.RestorePreferences(); err != nil {
+		t.Fatalf("restore: %v\n%s", err, chatter.String())
+	}
+	issued := strings.Join(commands(), "\n")
+	want := "defaults import " + preference.Domain + " " + preference.snapshotPath(paths)
+	if !strings.Contains(issued, want) {
+		t.Fatalf("restore did not import the saved domain:\nwant %q\ngot\n%s", want, issued)
+	}
+	// The stub reports the app as not running, so nothing should be relaunched.
+	if strings.Contains(issued, "open ") {
+		t.Fatalf("restore relaunched an application that was not running:\n%s", issued)
+	}
+
+	uninstalled, chatter := testApplier(t, paths, machine, notInstalledRunner{})
+	if err := uninstalled.RestorePreferences(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(chatter.String(), "is not installed") {
+		t.Fatalf("an uninstalled application was not reported:\n%s", chatter.String())
+	}
+}
+
+// notInstalledRunner answers the Spotlight lookup with nothing found.
+type notInstalledRunner struct{}
+
+func (notInstalledRunner) Run(context.Context, string, ...string) Result { return Result{} }
+func (notInstalledRunner) Exists(string) bool                            { return true }
+
+// sequencedDockRunner reads the Dock differently on each probe, so a test can
+// model the live Dock actually changing between apply and its verification.
+type sequencedDockRunner struct {
+	listings []string
+	reads    int
+}
+
+func (r *sequencedDockRunner) Run(_ context.Context, name string, args ...string) Result {
+	if name == "dockutil" && slices.Equal(args, []string{"--list"}) {
+		listing := r.listings[min(r.reads, len(r.listings)-1)]
+		r.reads++
+		return Result{Stdout: listing}
+	}
+	return Result{}
+}
+
+func (*sequencedDockRunner) Exists(string) bool { return true }
+
+// Capturing a preference through Apply writes the whole live domain into the
+// repository, so a snapshot can carry it to the next machine.
+func TestApplyCapturesAPreferenceIntoTheRepository(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	machine.Dock = false
+	machine.ChromePWAs = false
+	preference := machine.Preferences[0]
+	applier, chatter := testApplier(t, paths, machine, applyRunner{})
+
+	if err := applier.Apply([]Selection{{ID: preference.ID, Action: Capture}}); err != nil {
+		t.Fatalf("capture preference: %v\n%s", err, chatter.String())
+	}
+	data, err := os.ReadFile(preference.snapshotPath(paths))
+	if err != nil {
+		t.Fatalf("capture wrote no backup: %v", err)
+	}
+	if _, err := decodePlist(data); err != nil {
+		t.Fatalf("captured backup is not a plist: %v", err)
+	}
+	// Apply is the wrong direction for a preference; only Capture writes.
+	fresh := testPaths(t)
+	other, _ := testApplier(t, fresh, machine, applyRunner{})
+	if err := other.Apply([]Selection{{ID: preference.ID, Action: Apply}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(preference.snapshotPath(fresh)); !os.IsNotExist(err) {
+		t.Fatalf("Apply wrote a preference backup: %v", err)
+	}
+}
+
+// One failed step is one failure. The baseline pass runs after every step and
+// cannot establish an agreement the failed step never reached, so it must not
+// report the same resource a second time.
+func TestApplyReportsAFailedStepOnce(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	machine.ChromePWAs = false
+	machine.Preferences = nil
+	first := paths.InHome("Applications", "First.app")
+	if err := os.MkdirAll(first, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(dockSnapshotPath(paths), []byte(first+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &sequencedDockRunner{listings: []string{""}}
+	fakeTools(t, fakeTool{name: "dockutil", exit: 1}, fakeTool{name: "killall"})
+	applier, chatter := testApplier(t, paths, machine, runner)
+
+	err := applier.Apply([]Selection{{ID: dockID, Action: Apply}})
+	if err == nil {
+		t.Fatalf("a failed dockutil was not reported:\n%s", chatter.String())
+	}
+	if got := strings.Count(err.Error(), dockName+":"); got != 1 {
+		t.Fatalf("Dock reported %d times in %q", got, err.Error())
+	}
+}

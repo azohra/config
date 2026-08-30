@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -54,4 +55,50 @@ func testMachine() Machine {
 			Domain: "com.example.ExampleApp",
 		}},
 	}
+}
+
+// fakeTool is a recording stub on PATH. It records its invocation and exits
+// with the given status, so a test can drive both halves of a step's contract.
+type fakeTool struct {
+	name string
+	exit int
+}
+
+// fakeTools returns every invocation the LiveRunner drove, in order, so a
+// test can prove which commands an apply actually issued.
+func fakeTools(t *testing.T, tools ...fakeTool) func() []string {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(t.TempDir(), "commands")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("COMMAND_LOG", log)
+	for _, tool := range tools {
+		script := fmt.Sprintf("#!/bin/sh\nprintf '%%s %%s\\n' %s \"$*\" >> \"$COMMAND_LOG\"\nexit %d\n", tool.name, tool.exit)
+		if err := os.WriteFile(filepath.Join(dir, tool.name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return func() []string {
+		data, err := os.ReadFile(log)
+		if err != nil {
+			return nil
+		}
+		return strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+}
+
+// testApplier builds an Applier over fakes. NewApplier wires the real
+// machine; every write path below needs the same shape with the subprocess
+// boundary replaced.
+func testApplier(t *testing.T, paths Paths, machine Machine, runner Runner) (Applier, *bytes.Buffer) {
+	t.Helper()
+	var chatter bytes.Buffer
+	return Applier{
+		Paths:   paths,
+		Machine: machine,
+		Runner:  runner,
+		Live:    LiveRunner{Dir: paths.Root, Stdout: &chatter, Stderr: &chatter},
+		Log:     Logger{Out: &chatter},
+		Bidir:   NewBidirectional(paths, runner),
+	}, &chatter
 }
