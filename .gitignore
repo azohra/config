@@ -4,4 +4,4 @@
 /dist/
 
 /mise.local.toml
-/mise.local.lock
+mise*.lock

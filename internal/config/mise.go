@@ -11,7 +11,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const minimumMiseVersion = "2026.8.14"
+const minimumMiseVersion = "2026.8.13"
 
 // misePath returns Config's canonical execution substrate.
 func misePath(paths Paths) string {

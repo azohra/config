@@ -1,5 +1,5 @@
-[tool_config]
-locked = true
+# Config's update path needs bootstrap repos --skip-dirty from mise 2026.8.13.
+min_version = "2026.8.13"
 
 [tools]
 go = "1.27.0"

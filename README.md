@@ -10,7 +10,7 @@ Config scopes each mise invocation to that repository's document.
 
 ## Install
 
-Config requires macOS, Git, and mise 2026.8.14 or newer installed at
+Config requires macOS, Git, and mise 2026.8.13 or newer installed at
 `~/.local/bin/mise`. Mise can run the released binary for the initial handoff:
 
 ```bash
@@ -47,7 +47,7 @@ Native mise configuration lives separately in `mise/config.toml` and optional
 `mise/conf.d/*.toml` fragments:
 
 ```toml
-min_version = "2026.8.14"
+min_version = "2026.8.13"
 
 [tools]
 "github:azohra/config" = "0.3.0"

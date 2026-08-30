@@ -18,11 +18,11 @@ func TestMiseVersionContract(t *testing.T) {
 		minimum string
 		want    bool
 	}{
-		{"2026.8.14 macos-arm64", "2026.8.14", true},
-		{"mise 2026.9.0", "2026.8.14", true},
-		{"v2026.8.13", "2026.8.14", false},
-		{"2025.12.99", "2026.8.14", false},
-		{"not a version", "2026.8.14", false},
+		{"2026.8.13 macos-arm64", "2026.8.13", true},
+		{"mise 2026.9.0", "2026.8.13", true},
+		{"v2026.8.12", "2026.8.13", false},
+		{"2025.12.99", "2026.8.13", false},
+		{"not a version", "2026.8.13", false},
 	} {
 		if got := miseVersionAtLeast(test.output, test.minimum); got != test.want {
 			t.Errorf("miseVersionAtLeast(%q, %q) = %v, want %v", test.output, test.minimum, got, test.want)
