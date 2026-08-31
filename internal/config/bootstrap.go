@@ -16,7 +16,7 @@ type freshRestoreStep struct {
 
 // RestorePending resumes the restore attached to this managed checkout.
 func RestorePending(paths Paths, machine Machine, out io.Writer) error {
-	progress, pending, err := pendingRestore(paths, machine)
+	progress, pending, err := pendingRestore(paths, machine, out)
 	if err != nil {
 		return err
 	}

@@ -11,16 +11,55 @@ import (
 	"time"
 )
 
-// interruptGuard is held for reading by every section that has to reach its
-// own end, and for writing by the interrupt handler. A signal received inside
-// a critical section waits for it rather than landing in the middle of it.
-var interruptGuard sync.RWMutex
+// inFlight counts the writes that have to reach their own end: the staging,
+// rename, and sync of one file. It is a counter rather than a lock so that a
+// hold taken inside another hold is harmless — Go's read lock is not
+// re-entrant once a writer waits, and a nested hold under one would deadlock
+// the very write the interrupt is waiting for.
+//
+// closing is the other half. Draining the count is not enough on its own:
+// writes arrive one after another, so a signal landing between two files
+// would find nothing in flight and exit while the next write was starting.
+var (
+	inFlightMu   sync.Mutex
+	inFlightIdle = sync.NewCond(&inFlightMu)
+	inFlight     int
+	closing      bool
+)
 
-// holdInterrupt marks a section an interrupt must not cut in half: an atomic
-// rename, a hook installed beside the manifest that claims it, a bundle swap.
+// holdInterrupt marks a write an interrupt must not cut in half. Once the
+// process is stopping, a write that has not begun does not begin.
 func holdInterrupt() func() {
-	interruptGuard.RLock()
-	return interruptGuard.RUnlock
+	inFlightMu.Lock()
+	for closing {
+		inFlightIdle.Wait()
+	}
+	inFlight++
+	inFlightMu.Unlock()
+	return func() {
+		inFlightMu.Lock()
+		inFlight--
+		if inFlight == 0 {
+			inFlightIdle.Broadcast()
+		}
+		inFlightMu.Unlock()
+	}
+}
+
+// stopNewWrites refuses every write that has not started yet.
+func stopNewWrites() {
+	inFlightMu.Lock()
+	closing = true
+	inFlightMu.Unlock()
+}
+
+// awaitWrites returns once the writes already in flight have finished.
+func awaitWrites() {
+	inFlightMu.Lock()
+	defer inFlightMu.Unlock()
+	for inFlight > 0 {
+		inFlightIdle.Wait()
+	}
 }
 
 // interruptGrace bounds how long an interrupt waits for a critical section.
@@ -41,15 +80,16 @@ func OnInterrupt(out io.Writer) func() {
 	go func() {
 		select {
 		case received := <-signals:
+			stopNewWrites()
 			finished := make(chan struct{})
 			go func() {
-				interruptGuard.Lock()
+				awaitWrites()
 				close(finished)
 			}()
 			select {
 			case <-finished:
 			case <-time.After(interruptGrace):
-				fmt.Fprintln(out, "\ninterrupted while writing; leaving the operation incomplete")
+				fmt.Fprintln(out, "\ninterrupted while writing; run the command again to finish it")
 			}
 			signal.Stop(signals)
 			// Exit the way the signal would have, so a shell and a parent

@@ -44,6 +44,7 @@ type miseStubRunner struct {
 	origins      map[string]string
 	missingTools string
 	version      string
+	documentErr  error
 }
 
 func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Result {
@@ -62,6 +63,9 @@ func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Res
 		}
 		return Result{Stdout: r.missingTools}
 	case name == "mise" && slices.Equal(args, []string{"config", "ls", "-J"}):
+		if r.documentErr != nil {
+			return Result{Stderr: "mise ERROR the machine document is invalid", Err: r.documentErr}
+		}
 		entries := make([]string, len(r.files))
 		for index, file := range r.files {
 			entries[index] = fmt.Sprintf(`{"path":%q}`, file)
@@ -380,5 +384,35 @@ func TestMiseRepositoriesRequireAnAbsolutePath(t *testing.T) {
 		t.Fatal("a relative declared repository path was accepted")
 	} else if !strings.Contains(err.Error(), "relative/checkout") {
 		t.Fatalf("refusal does not name the declaration: %v", err)
+	}
+}
+
+func TestAnUnreadableMachineDocumentIsNamedOnceNotAsPhaseDrift(t *testing.T) {
+	// mise returns exit 1 for real drift and for a document it cannot read.
+	// Classifying on that alone reported an invalid document as thirteen
+	// drifted phases, with the true cause below them in mise's own words.
+	failure := pruneExitError(t)
+	runner := &miseStubRunner{documentErr: failure, phase: map[string]Result{}}
+	for _, phase := range misePhases {
+		runner.phase[phase[0]] = Result{Err: failure}
+	}
+	checks := Inspector{Paths: testPaths(t), Machine: testMachine(), Runner: runner}.miseChecks()
+
+	unreadable := 0
+	for _, check := range checks {
+		if check.Label == "machine document unreadable" {
+			unreadable++
+			if !strings.Contains(check.Detail, "the machine document is invalid") {
+				t.Errorf("the check does not carry mise's own words: %q", check.Detail)
+			}
+		}
+		for _, phase := range misePhases {
+			if strings.Contains(check.Label, phase[0]) {
+				t.Errorf("an unreadable document was reported as %q", check.Label)
+			}
+		}
+	}
+	if unreadable != 1 {
+		t.Fatalf("the document was named %d times in %+v", unreadable, checks)
 	}
 }

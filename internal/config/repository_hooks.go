@@ -1,12 +1,9 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -65,11 +62,6 @@ func repositoryHookTemplateEnvironment(paths Paths) []string {
 	}
 }
 
-func repositoryHookDigest(body []byte) string {
-	digest := sha256.Sum256(body)
-	return "sha256:" + hex.EncodeToString(digest[:])
-}
-
 func repositoryHookPayloads(paths Paths, declarations []RepositoryHook) ([]repositoryHookPayload, error) {
 	payloads := make([]repositoryHookPayload, 0, len(declarations))
 	for _, declaration := range declarations {
@@ -86,7 +78,7 @@ func repositoryHookPayloads(paths Paths, declarations []RepositoryHook) ([]repos
 			return nil, fmt.Errorf("read repository hook %q source: %w", declaration.Name, err)
 		}
 		payloads = append(payloads, repositoryHookPayload{
-			Name: declaration.Name, Body: body, Mode: info.Mode().Perm(), Digest: repositoryHookDigest(body),
+			Name: declaration.Name, Body: body, Mode: info.Mode().Perm(), Digest: contentDigest(body),
 		})
 	}
 	return payloads, nil
@@ -195,32 +187,18 @@ func readRepositoryHookManifest(dir string) (repositoryHookManifest, error) {
 	if err != nil {
 		return repositoryHookManifest{}, err
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&manifest); err != nil {
+	if err := decodeExactJSON(data, &manifest); err != nil {
 		return repositoryHookManifest{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return repositoryHookManifest{}, errors.New("manifest contains trailing data")
 	}
 	if manifest.Schema != repositoryHookManifestSchema || manifest.Hooks == nil {
 		return repositoryHookManifest{}, errors.New("unsupported manifest")
 	}
 	for name, digest := range manifest.Hooks {
-		if !contractIDPattern.MatchString(name) || !validRepositoryHookDigest(digest) {
+		if !contractIDPattern.MatchString(name) || !validContentDigest(digest) {
 			return repositoryHookManifest{}, errors.New("invalid manifest entry")
 		}
 	}
 	return manifest, nil
-}
-
-func validRepositoryHookDigest(value string) bool {
-	digest, found := strings.CutPrefix(value, "sha256:")
-	if !found || len(digest) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(digest)
-	return err == nil
 }
 
 func repositoryHookPlacements(paths Paths, payloads []repositoryHookPayload, targets []repositoryHookTarget) ([]repositoryHookPlacement, error) {
@@ -304,7 +282,7 @@ func repositoryHookPlacementAt(paths Paths, target repositoryHookTarget, hook re
 	if err != nil {
 		return placement, fmt.Errorf("read %s hook %s: %w", target.Name, hook.Name, err)
 	}
-	digest := repositoryHookDigest(body)
+	digest := contentDigest(body)
 	recorded, recordedByConfig := manifest.Hooks[hook.Name]
 	placement.Managed = digest == hook.Digest || (recordedByConfig && recorded == digest)
 	placement.Current = digest == hook.Digest && info.Mode().Perm() == hook.Mode && recordedByConfig && recorded == hook.Digest
@@ -326,7 +304,7 @@ func pathInside(root, path string) bool {
 	return err == nil && relative != "." && filepath.IsLocal(relative)
 }
 
-func InspectRepositoryHooks(paths Paths, machine Machine, runner Runner) Resource {
+func inspectRepositoryHooks(paths Paths, machine Machine, runner Runner) Resource {
 	resource := Resource{ID: repositoryHooksID, Name: repositoryHooksName, Authoritative: true}
 	payloads, err := repositoryHookPayloads(paths, machine.RepositoryHooks)
 	if err != nil {
@@ -440,16 +418,11 @@ func (e Applier) applyRepositoryHookTargets(includeRepositories bool) (int, erro
 				manifestChanged = true
 			}
 		}
-		// Claim ownership before installing, and hold the pair together. An
-		// interrupted apply that has written the manifest leaves a claim on a
-		// hook that is not there,
+		// Claim ownership before installing. An interrupted apply that has
+		// written the manifest leaves a claim on a hook that is not there,
 		// which the next apply completes and prune ignores. The other order
 		// leaves an executable hook no record accounts for, which prune, and
 		// every later refresh, cannot see.
-		if manifestChanged || len(pending) > 0 {
-			release := holdInterrupt()
-			defer release()
-		}
 		if manifestChanged {
 			data, err := json.MarshalIndent(manifest, "", "  ")
 			if err != nil {

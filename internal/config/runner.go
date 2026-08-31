@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -35,9 +36,10 @@ type OSRunner struct {
 	Executables map[string]string
 }
 
-// commandWaitDelay bounds the wait on a command's output pipes after the
-// command itself is done with them.
-const commandWaitDelay = 2 * time.Second
+// CommandWaitDelay bounds the wait on a command's output pipes after the
+// command itself is done with them. Both launchers use it, so the two halves
+// of the process contract cannot drift apart.
+const CommandWaitDelay = 2 * time.Second
 
 func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	cmd := exec.CommandContext(ctx, r.executable(name), args...)
@@ -46,8 +48,9 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	InterruptGroup(cmd, commandWaitDelay)
+	settle := InterruptGroup(cmd, CommandWaitDelay)
 	err := cmd.Run()
+	settle(err)
 	return Result{Stdout: stdout.String(), Stderr: stderr.String(), Err: CommandFailure(cmd, err)}
 }
 
@@ -55,7 +58,15 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 // wait on its output pipes. Without both, a deadline is unenforceable: the
 // default cancellation kills the process Config started, while Wait goes on
 // waiting for every descendant that inherited its pipes.
-func InterruptGroup(cmd *exec.Cmd, delay time.Duration) {
+//
+// It returns a function to call with the command's own error once Wait has
+// returned. That cancels the pending group kill, so a signal cannot arrive
+// after the group is gone and land on a process that reused its identifier.
+func InterruptGroup(cmd *exec.Cmd, delay time.Duration) func(error) {
+	var (
+		mu         sync.Mutex
+		escalation *time.Timer
+	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = delay
 	cmd.Cancel = func() error {
@@ -67,11 +78,26 @@ func InterruptGroup(cmd *exec.Cmd, delay time.Duration) {
 		// A shell starts a background command with SIGINT ignored, and the
 		// escalation os/exec performs when WaitDelay elapses reaches only the
 		// process Config started. Without this the group survives a cancel.
-		time.AfterFunc(delay, func() { _ = syscall.Kill(group, syscall.SIGKILL) })
+		mu.Lock()
+		escalation = time.AfterFunc(delay, func() { _ = syscall.Kill(group, syscall.SIGKILL) })
+		mu.Unlock()
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		}
 		return err
+	}
+	return func(err error) {
+		// ErrWaitDelay means the pipes outlived the command, which is the one
+		// case the group kill is for. Every other ending has already reaped
+		// the group, so the pending signal has nothing left to reach.
+		if errors.Is(err, exec.ErrWaitDelay) {
+			return
+		}
+		mu.Lock()
+		if escalation != nil {
+			escalation.Stop()
+		}
+		mu.Unlock()
 	}
 }
 
@@ -140,7 +166,7 @@ type LiveRunner struct {
 	Stderr      io.Writer
 }
 
-func NewLiveRunner(dir string) LiveRunner {
+func newLiveRunner(dir string) LiveRunner {
 	return LiveRunner{
 		Dir: dir, Unset: gitLocalEnvironment,
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
@@ -150,15 +176,15 @@ func NewLiveRunner(dir string) LiveRunner {
 func NewMachineRunner(paths Paths) OSRunner {
 	return OSRunner{
 		Dir:         paths.Root,
-		Environment: MiseEnvironment(paths),
+		Environment: miseEnvironment(paths),
 		Unset:       gitLocalEnvironment,
 		Executables: map[string]string{"mise": misePath(paths)},
 	}
 }
 
-func NewMachineLiveRunner(paths Paths) LiveRunner {
-	runner := NewLiveRunner(paths.Root)
-	runner.Environment = MiseEnvironment(paths)
+func newMachineLiveRunner(paths Paths) LiveRunner {
+	runner := newLiveRunner(paths.Root)
+	runner.Environment = miseEnvironment(paths)
 	runner.Unset = gitLocalEnvironment
 	runner.Executables = map[string]string{"mise": misePath(paths)}
 	return runner
@@ -180,15 +206,10 @@ func (r LiveRunner) Command(name string, args ...string) error {
 	return nil
 }
 
-// ChildEnvironment overlays explicit values without leaving duplicate names
-// whose winner would depend on the child process's environment parser.
-func ChildEnvironment(overrides []string) []string {
-	return childEnvironment(overrides, nil)
-}
-
-// childEnvironment also drops the names in unset. An explicit override wins:
-// a value Config supplies is a decision, while unset only removes what the
-// caller happened to export.
+// childEnvironment overlays explicit values without leaving duplicate names
+// whose winner would depend on the child process's environment parser, and
+// drops the names in unset. An explicit override wins: a value Config supplies
+// is a decision, while unset only removes what the caller happened to export.
 func childEnvironment(overrides, unset []string) []string {
 	if len(overrides) == 0 && len(unset) == 0 {
 		return nil // os/exec inherits the current process for a nil Env.
@@ -227,7 +248,7 @@ var gitLocalEnvironment = []string{
 	"GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
 }
 
-// NewGitRunner reads a Git repository at dir and nothing else.
-func NewGitRunner(dir string) OSRunner {
+// newGitRunner reads a Git repository at dir and nothing else.
+func newGitRunner(dir string) OSRunner {
 	return OSRunner{Dir: dir, Unset: gitLocalEnvironment}
 }

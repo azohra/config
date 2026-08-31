@@ -44,7 +44,10 @@ mise document can remain an additional authority for that repository. Config
 therefore delegates tool and package liveness to mise's combined inventory
 instead of treating the machine document as an exclusive manifest.
 
-Config probes the phases separately rather than taking mise's aggregate.
+Config asks once whether mise can read the machine document at all, because a
+phase probe answers the same exit code for real drift and for a document mise
+rejects. Beyond that, Config probes the phases separately rather than taking
+mise's aggregate.
 The aggregate includes `repos`, where mise answers two questions at once:
 whether a checkout exists, which is a local stat, and whether it matches its
 remote, which is one network round trip per declared repository. Only presence
@@ -59,10 +62,14 @@ interleaving with another Config. The terminal interface holds no lock of its
 own, because the commands it launches take it for the work they do.
 
 An interrupt lands between writes, not inside one. SIGINT and SIGTERM end the
-process once no critical section is running: an atomic rename, a hook beside
-the manifest that claims it, a bundle swap. A section that has not finished
-within ten seconds is reported and abandoned. What an interrupted run staged
-is named by Config and swept by the next run rather than left for the operator.
+process once no file is mid-write; the staging, rename, and sync of a single
+artifact is the section a signal waits out. A write still running after ten
+seconds is reported and the process exits anyway.
+
+A signal can still land between two files, and the rest of the design is what
+makes that recoverable. Ownership is recorded before the hook it claims. A
+fact the next write destroys is recorded before that write. Config names what
+it stages, and the next run sweeps it.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
@@ -91,8 +98,12 @@ contract leaves no managed checkout behind. Before installation, Config gives
 the clone a local restore identity and atomically records pending progress under
 `~/Library/Application Support/Config/restore`. A later bootstrap resumes only
 when the repository, checkout, cloned commit, and versioned declaration plan
-all match and the checkout remains clean. Successful steps are recorded
-individually; completion closes the restore permanently for that checkout.
+all match and the checkout remains clean. A checkout whose commit has moved
+on, which is what saving a snapshot does, can no longer resume that restore,
+so bootstrap abandons the record and says so instead of refusing forever.
+Local changes stay a refusal: clear them and the restore resumes. Successful
+steps are recorded individually; completion closes the restore permanently for
+that checkout.
 
 Bootstrap atomically installs the running released executable at
 `~/.local/bin/config` after checkout validation and before restoration. Config
@@ -129,11 +140,14 @@ their clone template before mise runs and supplies that template to mise's
 child Git processes. It sweeps the declared repositories after bootstrap so
 existing and newly created checkouts converge to the same hook bodies. The
 selected mise configuration owns any custom ordering through mise lifecycle
-hooks. Converging mise also converges the declared native macOS facts. Config
-then executes the selected Finder Favorites, preference, Chrome PWA, and Dock
-actions. Independent failures are collected so one resource does not hide the
-rest of the plan, and a fact Config cannot read is reported rather than
-written over.
+hooks. The declared native macOS facts converge alongside mise rather than
+behind it. None of them touches anything mise installs, so a mise version
+Config cannot use neither hides them from status nor stops them converging. A
+fact Config cannot read is reported rather than written over, and a fact that
+fails is an advisory, so the facts beside it and the steps after it still run.
+Config then executes the selected Finder Favorites, preference, Chrome PWA,
+and Dock actions. Independent failures are collected so one resource does not
+hide the rest of the plan.
 
 Repository hooks are authoritative one-way state. A declaration names a hook
 and an executable source inside the managed repository. Config installs real
@@ -187,8 +201,9 @@ application and defaults domain; Config derives
 `snapshots/preferences/<id>.plist`. On an established Mac, Config can capture
 current settings: the whole domain, unfiltered, into a repository Config
 commits and pushes. A domain that holds nothing is refused, because `defaults`
-answers for a domain that does not exist. A pending bootstrap may restore
-existing backups after mise installs their applications. The restore validates
+answers with an empty dictionary for a domain that does not exist. A pending
+bootstrap may restore existing backups after mise installs their applications.
+The restore validates
 the plist, checks the bundle, quits a running application before import, and
 relaunches it afterward.
 
@@ -226,7 +241,9 @@ record are preserved. A baseline is eligible only after its schema and resource
 identity validate and the machine no longer declares that capability. A
 completed restore record is eligible only when it validates and belongs to a
 managed-checkout identity other than the current one. Pending and current
-records remain.
+records remain. A marker recording a step an interrupted run still owes is
+eligible only when the document no longer declares the capability that would
+act on it.
 
 The CLI and terminal interface print the complete plan before mutation. The
 terminal interface confirms on its own screen and then invokes the explicit

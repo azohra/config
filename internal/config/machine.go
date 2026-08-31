@@ -150,9 +150,9 @@ func validGitName(value string) bool {
 		!strings.HasSuffix(value, ".") && !strings.HasSuffix(value, "/")
 }
 
-// MiseEnvironment selects the repository's native mise configuration for a
+// miseEnvironment selects the repository's native mise configuration for a
 // Config child process and stops discovery at the managed checkout.
-func MiseEnvironment(paths Paths) []string {
+func miseEnvironment(paths Paths) []string {
 	return []string{
 		"MISE_AUTO_UPDATE=0",
 		"MISE_CONFIG_DIR=" + paths.InRoot("mise"),

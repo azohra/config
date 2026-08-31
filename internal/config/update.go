@@ -58,9 +58,9 @@ type Updater struct {
 }
 
 func NewUpdater(paths Paths, out io.Writer, version string) Updater {
-	command := ConfigCommandPath(paths)
+	command := configCommandPath(paths)
 	substrateEnvironment := []string{"MISE_AUTO_UPDATE=0", "MISE_NO_CONFIG=1"}
-	live := NewLiveRunner(paths.Home)
+	live := newLiveRunner(paths.Home)
 	live.Environment = substrateEnvironment
 	live.Executables = map[string]string{"mise": misePath(paths)}
 	return Updater{
@@ -82,7 +82,7 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 			"config": command,
 		}},
 		Substrate:         live,
-		Machine:           NewMachineLiveRunner(paths),
+		Machine:           newMachineLiveRunner(paths),
 		Log:               Logger{Out: out},
 		CurrentExecutable: os.Executable,
 		ValidateMachine: func() error {
@@ -160,7 +160,7 @@ func (u Updater) Update(scope UpdateScope) error {
 	}
 	u.Log.OK("Config " + installedVersion + " installed")
 
-	environment := ChildEnvironment([]string{updateReexecEnv + "=" + installedVersion})
+	environment := childEnvironment([]string{updateReexecEnv + "=" + installedVersion}, nil)
 	arguments := append([]string{u.Config, "update"}, scope.arguments()...)
 	if err := u.Reexec(u.Config, arguments, environment); err != nil {
 		return fmt.Errorf("re-exec Config %s: %w", installedVersion, err)

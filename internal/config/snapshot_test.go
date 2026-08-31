@@ -53,7 +53,7 @@ func snapshotFixture(t *testing.T) (Snapshotter, string, string) {
 	gitTest(t, root, "push", "--quiet", "--set-upstream", "origin", "main")
 
 	var output bytes.Buffer
-	live := NewLiveRunner(root)
+	live := newLiveRunner(root)
 	live.Stdout, live.Stderr = &output, &output
 	machine := testMachine()
 	machine.Repository.URL = remote
@@ -170,7 +170,7 @@ func TestSnapshotRejectedPushLeavesLocalCommit(t *testing.T) {
 func TestSnapshotSaveKeepsCommandsQuiet(t *testing.T) {
 	snapshotter, root, _ := snapshotFixture(t)
 	var chatter bytes.Buffer
-	live := NewLiveRunner(root)
+	live := newLiveRunner(root)
 	live.Stdout, live.Stderr = &chatter, &chatter
 	snapshotter.Live = live
 	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("quiet\n"), 0o644); err != nil {
@@ -342,7 +342,7 @@ func TestSnapshotRefusesWhenTheRepositoryCannotBeRead(t *testing.T) {
 func TestSnapshotDoesNotCommitWhatAKilledCaptureStranded(t *testing.T) {
 	// atomicWrite stages beside its target inside the managed checkout, and
 	// git add -A stages everything, so a capture killed mid-rename would put
-	// its temporary file in the operator's permanent history.
+	// its temporary file in the repository's permanent history.
 	snapshotter, root, _ := snapshotFixture(t)
 	stranded := filepath.Join(root, "snapshots", "dock.apps.tmp.4127")
 	if err := os.MkdirAll(filepath.Dir(stranded), 0o755); err != nil {

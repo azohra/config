@@ -27,7 +27,7 @@ func TestPendingRestoreRefusesChangedCheckoutState(t *testing.T) {
 		if err := os.WriteFile(paths.InRoot("local-change"), []byte("changed\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := pendingRestore(paths, machine); err == nil || !strings.Contains(err.Error(), "local changes") {
+		if _, _, err := pendingRestore(paths, machine, io.Discard); err == nil || !strings.Contains(err.Error(), "local changes") {
 			t.Fatalf("pending restore with local changes = %v", err)
 		}
 	})
@@ -41,8 +41,28 @@ func TestPendingRestoreRefusesChangedCheckoutState(t *testing.T) {
 		}
 		gitTest(t, paths.Root, "add", "tracked-change")
 		gitTest(t, paths.Root, "commit", "--quiet", "-m", "Change pending restore")
-		if _, _, err := pendingRestore(paths, machine); err == nil || !strings.Contains(err.Error(), "checkout changed") {
-			t.Fatalf("pending restore after another commit = %v", err)
+		// HEAD moving is what a snapshot save does, and the record is bound to
+		// the commit it was cloned at. Refusing forever left every later
+		// bootstrap failing for a restore nothing could finish.
+		var said strings.Builder
+		progress, pending, err := pendingRestore(paths, machine, &said)
+		if err != nil || pending {
+			t.Fatalf("pending restore after another commit = pending %t, %v", pending, err)
+		}
+		if !strings.Contains(said.String(), "abandoned the pending bootstrap restore") {
+			t.Fatalf("the abandonment was not reported: %q", said.String())
+		}
+		identifier, found, idErr := checkoutRestoreID(paths)
+		if idErr != nil || !found {
+			t.Fatalf("restore identity = found %t, %v", found, idErr)
+		}
+		if _, statErr := os.Stat(restoreStatePath(paths, identifier)); !os.IsNotExist(statErr) {
+			t.Fatalf("the abandoned record survived: %v", statErr)
+		}
+		_ = progress
+		// A second bootstrap on the same checkout now starts clean.
+		if _, pending, err = pendingRestore(paths, machine, io.Discard); err != nil || pending {
+			t.Fatalf("a later bootstrap still saw a pending restore: pending %t, %v", pending, err)
 		}
 	})
 
@@ -69,8 +89,39 @@ func TestPendingRestoreRefusesChangedCheckoutState(t *testing.T) {
 		if err := atomicWrite(statePath, append(data, '\n'), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := pendingRestore(paths, machine); err == nil || !strings.Contains(err.Error(), "restore plan changed") {
+		if _, _, err := pendingRestore(paths, machine, io.Discard); err == nil || !strings.Contains(err.Error(), "restore plan changed") {
 			t.Fatalf("pending restore with another plan = %v", err)
 		}
 	})
+}
+
+func TestASavedSnapshotDoesNotBlockEveryLaterBootstrap(t *testing.T) {
+	// The record binds resumption to the commit cloned at bootstrap, and
+	// Config's own Save moves HEAD. Nothing else consulted the record, so a
+	// capture and save between two bootstrap runs refused every later one.
+	paths, machine := pendingRestoreFixture(t)
+	gitTest(t, paths.Root, "config", "user.name", "Config Test")
+	gitTest(t, paths.Root, "config", "user.email", "config@example.invalid")
+	if err := os.WriteFile(paths.InRoot("snapshots", "captured"), []byte("state\n"), 0o600); err != nil {
+		if err := os.MkdirAll(paths.InRoot("snapshots"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.InRoot("snapshots", "captured"), []byte("state\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitTest(t, paths.Root, "add", "-A")
+	gitTest(t, paths.Root, "commit", "--quiet", "-m", "Update machine snapshot")
+
+	var said strings.Builder
+	_, pending, err := pendingRestore(paths, machine, &said)
+	if err != nil {
+		t.Fatalf("a saved snapshot left bootstrap refusing: %v", err)
+	}
+	if pending {
+		t.Fatal("a restore bound to an older commit was reported resumable")
+	}
+	if !strings.Contains(said.String(), "abandoned") {
+		t.Fatalf("the abandonment was not reported: %q", said.String())
+	}
 }

@@ -12,7 +12,7 @@ You choose the machine repository and keep control of its authentication.
 Config requires macOS, Git, and mise 2026.8.14 at `~/.local/bin/mise`.
 
 ```bash
-mise x github:azohra/config@0.9.0 -- \
+mise x github:azohra/config@0.10.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -72,15 +72,15 @@ domain = "com.example.ExampleApp"
 `[macos]` declares native settings Config converges on every apply. The two
 keys opt in differently: `current_host_tap_to_click` is the value Config
 keeps, so `false` declares the setting off, while `clear_user_key_mapping`
-only means anything when it is `true` — leave it out to let the Mac keep its
-own mapping. `[macos.spotlight]` names the shortcut by its symbolic hotkey id
+only means anything when it is `true`. Leave it out and the Mac keeps its own
+mapping. `[macos.spotlight]` names the shortcut by its symbolic hotkey id
 and carries the whole binding, so a Mac bound to different keys is drift.
 Config reports a setting it could not read rather than writing over it.
 
 Each `[[preferences]]` entry captures the complete `defaults` domain it names,
-byte for byte and unfiltered, into the machine repository — which Config then
-commits and pushes. Declare a domain only if everything in it belongs in that
-repository. A domain that holds nothing is refused rather than captured.
+byte for byte and unfiltered, into the machine repository, which Config then
+commits and pushes. Declare a domain only if everything in it belongs there.
+A domain that holds nothing is refused rather than captured.
 
 The booleans belong before the first TOML table. Mise keeps its native syntax:
 

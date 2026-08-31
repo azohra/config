@@ -68,6 +68,15 @@ func (i Inspector) miseChecks() []Check {
 	if !supportsTestedMise(currentVersion) {
 		return []Check{no("mise "+currentVersion+" is unsupported", "install mise "+testedMiseVersion+" at ~/.local/bin/mise")}
 	}
+	// Every phase probe returns exit 1 for real drift and for a document mise
+	// cannot read, so a broken machine document reported as thirteen drifted
+	// phases with the true cause buried below them. Ask once, first.
+	if listing := run(i.Runner, "mise", "config", "ls", "-J"); listing.Err != nil {
+		return []Check{
+			yes("mise " + currentVersion),
+			no("machine document unreadable", listing.Failure().Error()),
+		}
+	}
 	// The three groups ask mise and git independent questions, so the slowest
 	// of them sets the cost rather than their sum.
 	var bootstrap, tools, repositories []Check
@@ -88,7 +97,7 @@ func (i Inspector) miseChecks() []Check {
 	checks = append(checks, bootstrap...)
 	checks = append(checks, tools...)
 	checks = append(checks, repositories...)
-	return append(checks, setupChecks(i.Paths, i.Runner, miseFacts(i.Machine))...)
+	return checks
 }
 
 // bootstrapChecks probes every declared phase at once. Naming the phases
@@ -212,6 +221,10 @@ func (i Inspector) repositoryChecks() []Check {
 func (i Inspector) setup() Resource {
 	checks := i.substrateChecks()
 	checks = append(checks, i.miseChecks()...)
+	// The declared macOS facts read defaults, plutil and hidutil. None of them
+	// depends on anything mise installs, so they are their own group rather
+	// than rows past mise's version gate that a wrong mise hides entirely.
+	checks = append(checks, setupChecks(i.Paths, i.Runner, macOSFacts(i.Machine))...)
 	return authoritativeResource(setupID, setupName, checks)
 }
 
@@ -293,7 +306,7 @@ func (i Inspector) Inspect() Report { return i.inspect(true) }
 func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(machineSetup bool) Report {
-	bidir := NewBidirectional(i.Paths, i.Runner)
+	bidir := newBidirectional(i.Paths, i.Runner)
 	var setup, chromePWAs, dock, finderFavorites, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
@@ -304,7 +317,7 @@ func (i Inspector) inspect(machineSetup bool) Report {
 		tasks = append(tasks, func() { setup = i.setup() })
 		if len(i.Machine.RepositoryHooks) > 0 {
 			tasks = append(tasks, func() {
-				repositoryHooks = InspectRepositoryHooks(i.Paths, i.Machine, i.Runner)
+				repositoryHooks = inspectRepositoryHooks(i.Paths, i.Machine, i.Runner)
 			})
 		}
 	}

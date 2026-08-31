@@ -25,9 +25,9 @@ func TestClassify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Classify(json.RawMessage(tt.saved), json.RawMessage(tt.live), base, tt.hasBase)
+			got := classify(json.RawMessage(tt.saved), json.RawMessage(tt.live), base, tt.hasBase)
 			if got != tt.want {
-				t.Fatalf("Classify() = %q, want %q", got, tt.want)
+				t.Fatalf("classify() = %q, want %q", got, tt.want)
 			}
 		})
 	}

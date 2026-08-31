@@ -2,11 +2,11 @@ package config
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -55,7 +55,7 @@ func beginRestore(paths, checkout Paths, machine Machine) (restoreProgress, erro
 	if err != nil {
 		return restoreProgress{}, fmt.Errorf("create restore identity: %w", err)
 	}
-	configured := run(NewGitRunner(checkout.Root), "git", "config", "--local", restoreCheckoutKey, identifier)
+	configured := run(newGitRunner(checkout.Root), "git", "config", "--local", restoreCheckoutKey, identifier)
 	if configured.Err != nil {
 		return restoreProgress{}, fmt.Errorf("record checkout identity: %w", configured.Failure())
 	}
@@ -76,7 +76,7 @@ func beginRestore(paths, checkout Paths, machine Machine) (restoreProgress, erro
 	return progress, nil
 }
 
-func pendingRestore(paths Paths, machine Machine) (restoreProgress, bool, error) {
+func pendingRestore(paths Paths, machine Machine, out io.Writer) (restoreProgress, bool, error) {
 	identifier, found, err := checkoutRestoreID(paths)
 	if err != nil || !found {
 		return restoreProgress{}, false, err
@@ -89,7 +89,7 @@ func pendingRestore(paths Paths, machine Machine) (restoreProgress, bool, error)
 		return restoreProgress{}, false, fmt.Errorf("read bootstrap restore state: %w", err)
 	}
 	var record restoreRecord
-	if err := json.Unmarshal(data, &record); err != nil {
+	if err := decodeExactJSON(data, &record); err != nil {
 		return restoreProgress{}, false, fmt.Errorf("read bootstrap restore state: %w", err)
 	}
 	if err := record.validate(); err != nil {
@@ -107,10 +107,35 @@ func pendingRestore(paths Paths, machine Machine) (restoreProgress, bool, error)
 		return progress, false, nil
 	}
 	if err := progress.validatePending(machine); err != nil {
-		return restoreProgress{}, false, err
+		var advanced checkoutAdvancedError
+		if !errors.As(err, &advanced) {
+			return restoreProgress{}, false, err
+		}
+		// A capture and save between two bootstrap runs moves HEAD, and this
+		// record is bound to the commit it was cloned at. Keeping it refused
+		// every later bootstrap forever, for a restore nothing can finish.
+		if removeErr := progress.abandon(); removeErr != nil {
+			return restoreProgress{}, false, removeErr
+		}
+		fmt.Fprintln(out, "abandoned the pending bootstrap restore: "+advanced.Error())
+		return restoreProgress{}, false, nil
 	}
 	return progress, true, nil
 }
+
+// abandon removes a record whose restore can no longer resume. The checkout
+// keeps whatever the restore already applied; what it loses is a claim that
+// more is still coming.
+func (p restoreProgress) abandon() error {
+	return os.Remove(restoreStatePath(p.paths, p.record.Checkout))
+}
+
+// checkoutAdvancedError marks the one validatePending failure a later run can
+// resolve by itself: the checkout moved on, which is exactly what a snapshot
+// save does. Every other failure names a state that needs a human decision.
+type checkoutAdvancedError struct{ message string }
+
+func (e checkoutAdvancedError) Error() string { return e.message }
 
 func (p restoreProgress) validatePending(machine Machine) error {
 	if p.record.Status != restorePendingState {
@@ -121,7 +146,9 @@ func (p restoreProgress) validatePending(machine Machine) error {
 		return err
 	}
 	if commit != p.record.Commit {
-		return fmt.Errorf("managed checkout changed from %s to %s while bootstrap restore is pending", shortCommit(p.record.Commit), shortCommit(commit))
+		return checkoutAdvancedError{fmt.Sprintf(
+			"managed checkout moved from %s to %s since the restore began",
+			shortCommit(p.record.Commit), shortCommit(commit))}
 	}
 	plan, err := restorePlanIdentity(p.paths, machine)
 	if err != nil {
@@ -134,12 +161,14 @@ func (p restoreProgress) validatePending(machine Machine) error {
 }
 
 func cleanCheckoutCommit(paths Paths) (string, error) {
-	runner := NewGitRunner(paths.Root)
+	runner := newGitRunner(paths.Root)
 	status := run(runner, "git", "status", "--porcelain=v1", "--untracked-files=all")
 	if status.Err != nil {
 		return "", fmt.Errorf("inspect bootstrap restore checkout: %w", status.Failure())
 	}
 	if status.Output() != "" {
+		// Recoverable by hand, so it stays a refusal: committing or discarding
+		// the changes resumes the restore that is still pending.
 		return "", errors.New("managed checkout has local changes while bootstrap restore is pending")
 	}
 	head := run(runner, "git", "rev-parse", "--verify", "HEAD")
@@ -166,8 +195,7 @@ func restorePlanIdentity(paths Paths, machine Machine) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode bootstrap restore plan: %w", err)
 	}
-	digest := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(digest[:]), nil
+	return contentDigest(data), nil
 }
 
 func restoreStepIDs(machine Machine) []string {
@@ -195,7 +223,7 @@ func shortCommit(commit string) string {
 }
 
 func checkoutRestoreID(paths Paths) (string, bool, error) {
-	return checkoutRestoreIDWithRunner(NewGitRunner(paths.Root))
+	return checkoutRestoreIDWithRunner(newGitRunner(paths.Root))
 }
 
 func checkoutRestoreIDWithRunner(runner Runner) (string, bool, error) {
@@ -232,15 +260,6 @@ func validRestoreID(identifier string) bool {
 	return err == nil
 }
 
-func validRestorePlan(plan string) bool {
-	digest, found := strings.CutPrefix(plan, "sha256:")
-	if !found || len(digest) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(digest)
-	return err == nil
-}
-
 func validCommit(commit string) bool {
 	if len(commit) != 40 && len(commit) != 64 {
 		return false
@@ -254,7 +273,7 @@ func restoreStatePath(paths Paths, identifier string) string {
 }
 
 func (r restoreRecord) validate() error {
-	if r.Schema != restoreSchema || r.Repository == "" || !validRestoreID(r.Checkout) || !validCommit(r.Commit) || !validRestorePlan(r.Plan) {
+	if r.Schema != restoreSchema || r.Repository == "" || !validRestoreID(r.Checkout) || !validCommit(r.Commit) || !validContentDigest(r.Plan) {
 		return errors.New("bootstrap restore state is invalid")
 	}
 	if r.Status != restorePendingState && r.Status != restoreCompleteState {

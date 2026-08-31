@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-func ConfigCommandPath(paths Paths) string {
+func configCommandPath(paths Paths) string {
 	return paths.InHome(".local", "bin", "config")
 }
 
@@ -21,15 +21,15 @@ func InstallCurrent(paths Paths, version string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("locate running Config: %w", err)
 	}
-	destination := ConfigCommandPath(paths)
+	destination := configCommandPath(paths)
 	if !stableConfigVersion(version) {
 		Logger{Out: out}.Warn(destination + " is now an unversioned development build; " +
 			"config update will not move it forward until a release replaces it")
 	}
-	return InstallExecutable(destination, executable)
+	return installExecutable(destination, executable)
 }
 
-func InstallExecutable(destination, source string) error {
+func installExecutable(destination, source string) error {
 	sourceInfo, err := os.Stat(source)
 	if err != nil {
 		return fmt.Errorf("inspect Config executable: %w", err)

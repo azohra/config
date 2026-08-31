@@ -2,15 +2,14 @@ package config
 
 type Bidirectional struct {
 	Paths     Paths
-	Runner    Runner
 	Dock      dockStore
 	Baselines Baselines
 }
 
-func NewBidirectional(paths Paths, runner Runner) Bidirectional {
+func newBidirectional(paths Paths, runner Runner) Bidirectional {
 	return Bidirectional{
-		Paths: paths, Runner: runner,
-		Dock:      defaultsDockStore{Runner: runner, Live: NewMachineLiveRunner(paths)},
+		Paths:     paths,
+		Dock:      defaultsDockStore{Runner: runner, Live: newMachineLiveRunner(paths)},
 		Baselines: Baselines{Dir: paths.StateDir},
 	}
 }

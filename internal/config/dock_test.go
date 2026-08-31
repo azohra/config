@@ -63,7 +63,7 @@ func TestDockStoreReadsOnlyThePersistentAppsKey(t *testing.T) {
 
 func TestDockStoreWritesOnlyThePersistentAppsKey(t *testing.T) {
 	commands := fakeTools(t, fakeTool{name: "defaults"})
-	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	store := defaultsDockStore{Live: newLiveRunner(t.TempDir())}
 	if err := store.Write(dockState{Present: true, Tiles: []any{newDockAppTile("/Applications/Example.app", 1_000_000_001)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestDockStoreWritesOnlyThePersistentAppsKey(t *testing.T) {
 
 func TestDockStoreWriteFailureDoesNotPrintThePreferenceValue(t *testing.T) {
 	fakeTools(t, fakeTool{name: "defaults", exit: 1})
-	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	store := defaultsDockStore{Live: newLiveRunner(t.TempDir())}
 	err := store.Write(dockState{Present: true, Tiles: []any{newDockAppTile("/Applications/Private App.app", 1_000_000_001)}})
 	if err == nil || !strings.Contains(err.Error(), "defaults write "+dockDomain+" "+dockKey) {
 		t.Fatalf("Dock write error = %v", err)
@@ -92,7 +92,7 @@ func TestDockStoreWriteFailureDoesNotPrintThePreferenceValue(t *testing.T) {
 
 func TestDockStoreDeletesOnlyTheOriginallyMissingKey(t *testing.T) {
 	commands := fakeTools(t, fakeTool{name: "defaults"})
-	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	store := defaultsDockStore{Live: newLiveRunner(t.TempDir())}
 	if err := store.Write(dockState{}); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestDockStoreWritePreservesTileValueTypes(t *testing.T) {
 		"tile-type": "file-tile",
 		"tile-data": map[string]any{"dock-extra": false, "file-type": uint64(41)},
 	}
-	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	store := defaultsDockStore{Live: newLiveRunner(t.TempDir())}
 	if err := store.Write(dockState{Present: true, Tiles: []any{tile}}); err != nil {
 		t.Fatal(err)
 	}

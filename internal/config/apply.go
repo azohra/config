@@ -85,10 +85,10 @@ func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 		Paths:           paths,
 		Machine:         machine,
 		Runner:          runner,
-		Live:            NewMachineLiveRunner(paths),
+		Live:            newMachineLiveRunner(paths),
 		FinderFavorites: newFinderFavoritesStore(),
 		Log:             Logger{Out: out},
-		Bidir:           NewBidirectional(paths, runner),
+		Bidir:           newBidirectional(paths, runner),
 	}
 }
 
@@ -261,6 +261,11 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 
 // Mise's declared packages establish the commands every later phase consumes.
 func (e Applier) applyMise() error {
+	// The declared macOS facts converge whether or not mise is usable: none of
+	// them touches anything mise installs, and mise's gate is the one stop a
+	// pending bootstrap honours. A fact that fails is an advisory, so the
+	// facts beside it and the steps after it still run.
+	defer e.convergeMacOS()
 	if !e.Runner.Exists("mise") {
 		return fmt.Errorf("mise unavailable at %s", misePath(e.Paths))
 	}
@@ -289,13 +294,6 @@ func (e Applier) applyMise() error {
 		if changed > 0 {
 			e.Log.OK(FormatCount(changed, "hook copy refreshed", "hook copies refreshed"))
 		}
-	}
-	changed, err := e.converge(miseFacts(e.Machine))
-	if err != nil {
-		return err
-	}
-	if changed > 0 {
-		e.Log.OK("declared macOS settings applied")
 	}
 	e.Log.OK("mise bootstrap state current")
 	return nil
@@ -329,7 +327,7 @@ func (e Applier) applyDock() error {
 			return advisoryError{fmt.Sprintf("%s is unavailable; Dock left untouched", filepath.Base(app))}
 		}
 	}
-	store := e.Bidir.dockStore()
+	store := e.Bidir.Dock
 	original, err := store.Read()
 	if err != nil {
 		return fmt.Errorf("read Dock layout: %w", err)
@@ -381,4 +379,17 @@ func (e Applier) applyDock() error {
 	clearMarker(e.Paths, dockRestartMarker)
 	e.Log.OK("saved layout restored")
 	return nil
+}
+
+// convergeMacOS applies the declared native settings and reports what it could
+// not do without failing the step. Machine setup records nothing in the
+// repository, so one unreadable probe must not stop a restore.
+func (e Applier) convergeMacOS() {
+	changed, err := e.converge(macOSFacts(e.Machine))
+	if changed > 0 {
+		e.Log.OK("declared macOS settings applied")
+	}
+	if err != nil {
+		e.Log.Warn(err.Error())
+	}
 }

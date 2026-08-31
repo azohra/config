@@ -57,7 +57,7 @@ func (r Resource) Allows(action Action) bool {
 
 // NeedsDecision is the unresolved-choice verdict. A capability that has never
 // been captured owns no snapshot content, so it cannot make a commit wrong and
-// is not a choice the operator is being asked to make.
+// is not a choice anyone is being asked to make.
 func (r Resource) NeedsDecision() bool {
 	return r.Bidirectional && r.State != Uncaptured && len(r.Actions) > 0
 }

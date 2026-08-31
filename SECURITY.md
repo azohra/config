@@ -12,6 +12,9 @@ The most sensitive boundaries are release acquisition and replacement,
 repository locator validation, managed checkout replacement, child-process
 environment scoping, bidirectional capture, and snapshot destination
 enforcement. Released updates use Config's canonical mise binary with GitHub
-artifact attestation enabled, resolve an exact stable version, and refuse a
-downgrade before atomically replacing the permanent command. Reports that cross
+artifact attestation and SLSA verification pinned rather than inherited,
+resolve an exact stable version, and refuse a downgrade before atomically
+replacing the permanent command. Releases are built and published by separate
+workflow jobs, and only the publishing one holds write or signing credentials;
+publishing outside that workflow is refused. Reports that cross
 one of those boundaries are especially useful.

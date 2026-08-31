@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -66,7 +67,7 @@ func TestDashboardShowsBidirectionalAttentionWithoutRepeatingSnapshot(t *testing
 		width: 80, height: 24,
 	}
 	view := m.renderDashboard()
-	for _, present := range []string{"Your choice is needed", "Needs attention", "Dock", "Review changes", "Save snapshot"} {
+	for _, present := range []string{"Your choice is needed", "Not current", "Dock", "Review changes", "Save snapshot"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("dashboard missing %q:\n%s", present, view)
 		}
@@ -216,5 +217,24 @@ func TestDashboardAllClearNamesTheDeclaredBranch(t *testing.T) {
 	}
 	if strings.Contains(detail, "origin/main") {
 		t.Fatalf("all-clear detail names a branch the machine does not use: %q", detail)
+	}
+}
+
+func TestDashboardListsWhatSymbolCallsUnsettled(t *testing.T) {
+	// internal/config documents Resource.Symbol as the one state-to-severity
+	// answer every status surface gives; the dashboard used to define a third
+	// rule beside it and Report.NeedsAttention.
+	report := config.Report{Resources: []config.Resource{
+		{ID: "settled", Name: "Settled", State: config.Current},
+		{ID: "uncaptured", Name: "Uncaptured", State: config.Uncaptured, Actions: []config.Action{config.Capture}},
+		{ID: "failing", Name: "Failing", State: config.Current, Checks: []config.Check{{Label: "probe", OK: false}}},
+		{ID: "drifted", Name: "Drifted", State: config.Drift},
+	}}
+	listed := unsettledResources(report)
+	for _, resource := range report.Resources {
+		shown := slices.ContainsFunc(listed, func(r config.Resource) bool { return r.ID == resource.ID })
+		if want := resource.Symbol() != config.GlyphOK; shown != want {
+			t.Errorf("%s listed=%v, but Symbol says %q", resource.ID, shown, resource.Symbol())
+		}
 	}
 }

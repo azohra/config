@@ -326,7 +326,7 @@ func (b Bidirectional) InspectFinderFavorites(store finderFavoritesStore) Resour
 		return resource
 	}
 	baseline, hasBaseline, _ := b.Baselines.Load(resource.ID)
-	finderFavoritesWords.offer(&resource, Classify(saved, live, baseline, hasBaseline))
+	finderFavoritesWords.offer(&resource, classify(saved, live, baseline, hasBaseline))
 	resource.Details = finderFavoritesDiff(favorites, liveFavorites)
 	if len(missing) > 0 {
 		resource.Checks = append(resource.Checks, Check{Label: FormatCount(len(missing), "saved Favorite unavailable", "saved Favorites unavailable")})

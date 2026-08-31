@@ -46,7 +46,7 @@ func TestSetupProbesReadEveryFieldTheirFixWrites(t *testing.T) {
 	rebound := `{"enabled":"0","value":{"type":"standard","parameters":["49","49","1048576"]}}`
 	checks := setupChecks(testPaths(t), setupRunner{answers: map[string]string{
 		"defaults": "1", "hidutil": "()", "plutil": rebound,
-	}}, miseFacts(testMachine()))
+	}}, macOSFacts(testMachine()))
 	for _, check := range checks {
 		if strings.HasPrefix(check.Label, "Spotlight") && check.OK {
 			t.Fatalf("a rebound Spotlight shortcut reported as matching: %#v", check)
@@ -78,7 +78,7 @@ func TestSetupReportsAnUnreadableProbeInsteadOfDrift(t *testing.T) {
 		answers:     map[string]string{"defaults": "1", "plutil": spotlightDeclared},
 		unavailable: map[string]bool{"hidutil": true},
 	}
-	checks := setupChecks(paths, runner, miseFacts(testMachine()))
+	checks := setupChecks(paths, runner, macOSFacts(testMachine()))
 	var labels []string
 	for _, check := range checks {
 		if !check.OK {
@@ -98,7 +98,7 @@ func TestConvergeNeverWritesOnAProbeItCouldNotRun(t *testing.T) {
 		answers:     map[string]string{"defaults": "1", "plutil": spotlightDeclared},
 		unavailable: map[string]bool{"hidutil": true},
 	})
-	changed, err := applier.converge(miseFacts(applier.Machine))
+	changed, err := applier.converge(macOSFacts(applier.Machine))
 	if err == nil {
 		t.Fatal("converge hid a probe it could not run")
 	}
@@ -119,7 +119,7 @@ func TestConvergeAttemptsEveryFactAndRunsTheRealFixes(t *testing.T) {
 		answers:     map[string]string{"hidutil": "(mapped)", "plutil": `{"enabled":"1","value":{"type":"standard","parameters":["1","2","3"]}}`},
 		unavailable: map[string]bool{"defaults": true},
 	})
-	changed, err := applier.converge(miseFacts(applier.Machine))
+	changed, err := applier.converge(macOSFacts(applier.Machine))
 	if err == nil {
 		t.Fatal("converge hid the unreadable tap-to-click probe")
 	}
@@ -138,4 +138,57 @@ func TestConvergeAttemptsEveryFactAndRunsTheRealFixes(t *testing.T) {
 	if strings.Contains(issued, "-currentHost write") {
 		t.Fatal("converge wrote tap-to-click from a probe it could not run")
 	}
+}
+
+func TestMacOSFactsDoNotDependOnMise(t *testing.T) {
+	// The three facts invoke defaults, plutil and hidutil. None of them
+	// touches anything mise installs, yet they were reported only past mise's
+	// version gate and converged only past its deliberate stop.
+	paths := testPaths(t)
+	machine := testMachine()
+	probes := setupRunner{answers: map[string]string{
+		"defaults": "0", "hidutil": "(mapped)", "plutil": spotlightDeclared,
+	}}
+
+	// Inspection: a mise Config cannot use hides the whole substrate, not the
+	// native settings beside it.
+	resource := Inspector{Paths: paths, Machine: machine, Runner: unsupportedMiseRunner{setupRunner: probes}}.setup()
+	var labels []string
+	for _, check := range resource.Checks {
+		labels = append(labels, check.Label)
+	}
+	for _, fact := range macOSFacts(machine) {
+		if !slices.Contains(labels, fact.ok) && !slices.Contains(labels, fact.drifted) &&
+			!slices.Contains(labels, fact.unreadable) {
+			t.Errorf("an unsupported mise hid the %q fact: %v", fact.ok, labels)
+		}
+	}
+
+	// Apply: mise failing is the one deliberate stop, and the facts still run.
+	commands := fakeTools(t, fakeTool{name: "mise", exit: 1},
+		fakeTool{name: "defaults"}, fakeTool{name: "hidutil"}, fakeTool{name: "plutil"})
+	applier, chatter := testApplier(t, paths, machine, probes)
+	if err := applier.applyMise(); err == nil {
+		t.Fatal("a failed mise bootstrap was reported as success")
+	}
+	issued := strings.Join(commands(), "\n")
+	for _, wanted := range []string{"-currentHost write", `hidutil property --set`} {
+		if !strings.Contains(issued, wanted) {
+			t.Errorf("a failed mise skipped %q:\n%s\n%s", wanted, issued, chatter.String())
+		}
+	}
+}
+
+// unsupportedMiseRunner answers the setup probes and reports a mise Config
+// does not accept.
+type unsupportedMiseRunner struct{ setupRunner }
+
+func (r unsupportedMiseRunner) Run(ctx context.Context, name string, args ...string) Result {
+	if name == "mise" {
+		if len(args) == 1 && args[0] == "--version" {
+			return Result{Stdout: "1999.1.1 macos-arm64"}
+		}
+		return Result{Err: errors.New("mise is unsupported")}
+	}
+	return r.setupRunner.Run(ctx, name, args...)
 }

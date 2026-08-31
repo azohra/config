@@ -4,7 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -70,14 +69,15 @@ func runOperation(ctx context.Context, dir, name string, args []string, events c
 		defer close(events)
 		command := exec.CommandContext(ctx, name, args...)
 		command.Dir = dir
-		config.InterruptGroup(command, 2*time.Second)
+		settle := config.InterruptGroup(command, config.CommandWaitDelay)
 		writer := eventWriter{ctx: ctx, events: events}
 		command.Stdout = writer
 		command.Stderr = writer
 		err := command.Run()
+		settle(err)
 		// A successful operation whose descendant still holds the output pipes
 		// ends in ErrWaitDelay. Reporting that as a failed Apply, Save, or
-		// Update tells the operator their machine did not converge when it did.
+		// Update reports a machine that did not converge when it did.
 		events <- operationEvent{err: config.CommandFailure(command, err), done: true}
 		return nil
 	}

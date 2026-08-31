@@ -44,7 +44,7 @@ func TestStepGlyphRecognizesEveryLoggerStep(t *testing.T) {
 	}
 }
 
-// converged answers every miseFacts probe as already-correct, so applyMise
+// converged answers every macOSFacts probe as already-correct, so applyMise
 // reaches its one live command and stops: nothing to fix, no restarts.
 type converged struct{}
 
@@ -681,5 +681,39 @@ func TestDockRestartSurvivesAKillBetweenTheWriteAndTheRestart(t *testing.T) {
 	}
 	if strings.Contains(issued, "defaults write") {
 		t.Fatalf("a matching layout was rewritten:\n%s", issued)
+	}
+}
+
+func TestPreferenceRelaunchSurvivesAKillAfterTheQuit(t *testing.T) {
+	// Whether to relaunch is a fact about the Mac before the quit, and the
+	// quit destroys it. A run killed after quitting left the application
+	// closed, and the next restore, seeing it closed, never opened it again.
+	paths := testPaths(t)
+	machine := testMachine()
+	preference := machine.Preferences[0]
+	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
+	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := setMarker(paths, relaunchMarker(preference.Bundle)); err != nil {
+		t.Fatal(err)
+	}
+	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
+	// quit: true means the application is already closed, which is what the
+	// killed run left behind.
+	applier, chatter := testApplier(t, paths, machine, &runningAppRunner{quit: true})
+
+	if err := applier.restorePreference(preference); err != nil {
+		t.Fatalf("restore: %v\n%s", err, chatter.String())
+	}
+	issued := strings.Join(commands(), "\n")
+	if !strings.Contains(issued, "open -b "+preference.Bundle) {
+		t.Fatalf("the application was left closed:\n%s", issued)
+	}
+	if strings.Contains(issued, "osascript") {
+		t.Fatalf("an application that was already closed was quit again:\n%s", issued)
+	}
+	if markerSet(paths, relaunchMarker(preference.Bundle)) {
+		t.Fatal("the relaunch marker outlived the relaunch")
 	}
 }

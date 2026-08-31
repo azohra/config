@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"os"
 	"reflect"
 	"slices"
@@ -94,7 +95,7 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 		t.Fatalf("restore progress after partial failure = %v", progress.record.Completed)
 	}
 	beforeRetry := strings.Join(commands(), "\n")
-	reloaded, pending, err := pendingRestore(paths, machine)
+	reloaded, pending, err := pendingRestore(paths, machine, io.Discard)
 	if err != nil || !pending {
 		t.Fatalf("reload restore progress = pending %t, %v", pending, err)
 	}
@@ -123,8 +124,9 @@ func TestPendingRestoreStopsWhenSetupFails(t *testing.T) {
 	if progress.done(restoreSetupStep) {
 		t.Fatal("a failed setup was recorded as complete")
 	}
-	if strings.Contains(strings.Join(commands(), "\n"), "defaults") {
-		t.Fatal("the restore continued after setup failed")
+	issued := strings.Join(commands(), "\n")
+	if strings.Contains(issued, dockDomain) || strings.Contains(issued, "killall") {
+		t.Fatalf("the restore continued into the Dock after setup failed:\n%s", issued)
 	}
 }
 

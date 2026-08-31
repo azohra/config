@@ -131,7 +131,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	manifestPath := filepath.Join(hooks, repositoryHookManifestName)
 	manifest := repositoryHookManifest{
 		Schema: repositoryHookManifestSchema,
-		Hooks:  map[string]string{"post-checkout": repositoryHookDigest(hookBody)},
+		Hooks:  map[string]string{"post-checkout": contentDigest(hookBody)},
 	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
@@ -388,7 +388,7 @@ func TestPruneRefusesEveryFileThatChangedAfterPreview(t *testing.T) {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file := pruneFile{Label: "a baseline", Path: path, Digest: repositoryHookDigest(body)}
+	file := pruneFile{Label: "a baseline", Path: path, Digest: contentDigest(body)}
 
 	if err := os.WriteFile(path, []byte("{\"schema\":2}\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -430,7 +430,7 @@ func TestPruneRefusesEveryFileThatChangedAfterPreview(t *testing.T) {
 func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 	dir := t.TempDir()
 	body := []byte("#!/bin/sh\nexit 0\n")
-	digest := repositoryHookDigest(body)
+	digest := contentDigest(body)
 	hookPath := filepath.Join(dir, "post-checkout")
 	manifestPath := filepath.Join(dir, repositoryHookManifestName)
 	writeManifest := func(hookDigest string) []byte {
@@ -450,12 +450,12 @@ func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := pruneHookTarget{
-		Name: "a repository", Dir: dir, ManifestDigest: repositoryHookDigest(manifestBytes),
+		Name: "a repository", Dir: dir, ManifestDigest: contentDigest(manifestBytes),
 		Hooks: []pruneHook{{Name: "post-checkout", Digest: digest, RemoveFile: true}},
 	}
 
 	// The manifest moved: something re-claimed the hook after the preview.
-	writeManifest(repositoryHookDigest([]byte("#!/bin/sh\nexit 1\n")))
+	writeManifest(contentDigest([]byte("#!/bin/sh\nexit 1\n")))
 	if err := applyPruneHooks(target); err == nil {
 		t.Fatal("a hook whose ownership moved after preview was deleted")
 	}
@@ -465,7 +465,7 @@ func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 
 	// The manifest is back, but the hook body itself changed.
 	manifestBytes = writeManifest(digest)
-	target.ManifestDigest = repositoryHookDigest(manifestBytes)
+	target.ManifestDigest = contentDigest(manifestBytes)
 	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\necho mine\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -488,5 +488,64 @@ func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 	}
 	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
 		t.Fatal("an emptied ownership manifest survived the prune")
+	}
+}
+
+func TestPruneReclaimsOnlyTheMarkersNothingWillActOn(t *testing.T) {
+	// A marker records a step a killed run still owes. One the document no
+	// longer declares is a step nothing will ever take, and nothing else
+	// removes it.
+	fixture := newPruneFixture(t)
+	pruner := fixture.pruner
+	pruner.Machine.Dock = true
+	pruner.Machine.Preferences = []PreferenceBackup{{
+		ID: "example-app", Name: "Example App",
+		Bundle: "com.example.ExampleApp", Domain: "com.example.ExampleApp",
+	}}
+	for _, name := range []string{
+		dockRestartMarker,
+		relaunchMarker("com.example.ExampleApp"),
+		relaunchMarker("com.example.Retired"),
+	} {
+		if err := setMarker(pruner.Paths, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	planned, warnings, err := pruner.planPendingMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if len(planned) != 1 || filepath.Base(planned[0].Path) != relaunchMarker("com.example.Retired") {
+		t.Fatalf("planned = %+v, want only the undeclared relaunch", planned)
+	}
+	if err := applyPruneFile(planned[0]); err != nil {
+		t.Fatal(err)
+	}
+	if markerSet(pruner.Paths, relaunchMarker("com.example.Retired")) {
+		t.Fatal("the undeclared marker survived the prune")
+	}
+	for _, kept := range []string{dockRestartMarker, relaunchMarker("com.example.ExampleApp")} {
+		if !markerSet(pruner.Paths, kept) {
+			t.Fatalf("prune removed %s, which the machine still declares", kept)
+		}
+	}
+
+	// A file Config did not write is left alone.
+	stray := filepath.Join(pruner.Paths.StateDir, "pending", "relaunch-com.example.Stray")
+	if err := os.WriteFile(stray, []byte("not a marker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planned, warnings, err = pruner.planPendingMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(planned) != 0 {
+		t.Fatalf("an unrecognised file was planned for deletion: %+v", planned)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "unrecognised") {
+		t.Fatalf("warnings = %v", warnings)
 	}
 }

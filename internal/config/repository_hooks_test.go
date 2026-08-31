@@ -138,7 +138,7 @@ func TestRepositoryHooksReconcileTemplateAndDeclaredRepositories(t *testing.T) {
 	}
 	managedRootHook := fixture.paths.InRoot(".git", "hooks", "post-checkout")
 
-	resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+	resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
 	if resource.State != Drift || !resource.Allows(Apply) {
 		t.Fatalf("unreconciled hooks = %+v", resource)
 	}
@@ -167,11 +167,11 @@ func TestRepositoryHooksReconcileTemplateAndDeclaredRepositories(t *testing.T) {
 			t.Errorf("%s body = %q, %v", hook, got, err)
 		}
 		manifest, err := readRepositoryHookManifest(filepath.Dir(hook))
-		if err != nil || manifest.Hooks["post-checkout"] != repositoryHookDigest(want) {
+		if err != nil || manifest.Hooks["post-checkout"] != contentDigest(want) {
 			t.Errorf("%s manifest = %+v, %v", hook, manifest, err)
 		}
 	}
-	if current := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); current.State != Current {
+	if current := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); current.State != Current {
 		t.Fatalf("reconciled hooks = %+v", current)
 	}
 }
@@ -186,7 +186,7 @@ func TestRepositoryHooksRefreshOnlyCopiesConfigStillOwns(t *testing.T) {
 	if err := atomicWrite(fixture.source, updated, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); resource.State != Drift || !resource.Allows(Apply) {
+	if resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); resource.State != Drift || !resource.Allows(Apply) {
 		t.Fatalf("changed declaration = %+v", resource)
 	}
 	if _, err := applier.applyRepositoryHookTargets(true); err != nil {
@@ -201,7 +201,7 @@ func TestRepositoryHooksRefreshOnlyCopiesConfigStillOwns(t *testing.T) {
 	if err := atomicWrite(repoHook, foreign, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+	resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
 	if resource.State != Drift || resource.Allows(Apply) || resource.Failed() == 0 {
 		t.Fatalf("foreign hook = %+v", resource)
 	}
@@ -227,7 +227,7 @@ func TestRepositoryHooksPreserveRepositoryOwnedHookConfiguration(t *testing.T) {
 		fixture.runner.hookDirs = map[string]string{
 			fixture.repo: filepath.Join(fixture.repo, "repository-hooks"),
 		}
-		resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+		resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
 		if resource.State != Drift || resource.Allows(Apply) || resource.Failed() == 0 ||
 			!strings.Contains(strings.Join(resource.Details, "\n"), "core.hooksPath") {
 			t.Fatalf("redirected hooks = %+v", resource)
@@ -251,7 +251,7 @@ func TestRepositoryHooksPreserveRepositoryOwnedHookConfiguration(t *testing.T) {
 		if err := os.Symlink(external, hooksDir); err != nil {
 			t.Fatal(err)
 		}
-		resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+		resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
 		if resource.State != Drift || resource.Allows(Apply) || resource.Failed() == 0 ||
 			!strings.Contains(strings.Join(resource.Details, "\n"), "directory is a repository-owned symlink") {
 			t.Fatalf("linked hooks directory = %+v", resource)
@@ -282,7 +282,7 @@ func TestGitCopiesThePreparedHookAndOwnershipManifest(t *testing.T) {
 	}
 	repository := filepath.Join(fixture.paths.Home, "fresh")
 	command := exec.Command("git", "init", "--quiet", repository)
-	command.Env = ChildEnvironment(repositoryHookTemplateEnvironment(fixture.paths))
+	command.Env = childEnvironment(repositoryHookTemplateEnvironment(fixture.paths), nil)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
@@ -400,10 +400,10 @@ func TestApplyRoutesTheRepositoryHooksSelection(t *testing.T) {
 		t.Fatalf("installed hook = %q, want the declared source", body)
 	}
 	manifest, err := readRepositoryHookManifest(filepath.Dir(hook))
-	if err != nil || manifest.Hooks["post-checkout"] != repositoryHookDigest(source) {
+	if err != nil || manifest.Hooks["post-checkout"] != contentDigest(source) {
 		t.Fatalf("ownership was not recorded: %+v %v", manifest, err)
 	}
-	if resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); resource.State != Current {
+	if resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); resource.State != Current {
 		t.Fatalf("hooks after apply = %+v", resource)
 	}
 }

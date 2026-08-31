@@ -217,9 +217,7 @@ func (b Bidirectional) chromePWASaved() (json.RawMessage, []chromePWA, bool, err
 		return nil, nil, false, err
 	}
 	var snapshot chromePWASnapshot
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&snapshot); err != nil {
+	if err := decodeExactJSON(data, &snapshot); err != nil {
 		return nil, nil, true, err
 	}
 	if snapshot.Schema != chromePWAsSchema || snapshot.Apps == nil {
@@ -361,7 +359,7 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 		resource.ActionLabels = map[Action]string{Apply: "Restore the saved PWAs"}
 		return resource
 	}
-	chromePWAWords.offer(&resource, Classify(saved, live, baseline, hasBaseline))
+	chromePWAWords.offer(&resource, classify(saved, live, baseline, hasBaseline))
 	return resource
 }
 
@@ -540,7 +538,7 @@ func (e Applier) applyChromePWAs() error {
 		liveByID[app.ID] = app
 	}
 	// Nothing else removes what a killed restore staged here, and a stray
-	// half-built bundle sits among the operator's applications.
+	// half-built bundle sits among the installed applications.
 	sweepStaging(chromePWALiveDir(e.Paths), ".config-pwas.")
 	stage, err := os.MkdirTemp(chromePWALiveDir(e.Paths), ".config-pwas.*")
 	if errors.Is(err, os.ErrNotExist) {
@@ -575,7 +573,6 @@ func (e Applier) applyChromePWAs() error {
 	for _, app := range saved {
 		desiredIDs[app.ID] = true
 	}
-	defer holdInterrupt()()
 	destinations := make(map[string]string, len(saved))
 	for _, app := range saved {
 		destinations[app.ID] = filepath.Join(chromePWALiveDir(e.Paths), app.Name+".app")
@@ -584,9 +581,8 @@ func (e Applier) applyChromePWAs() error {
 	for _, app := range live {
 		_, replacing := staged[app.ID]
 		// A replacement that keeps its bundle name is trashed immediately
-		// before its rename below, so the window in which the operator has
-		// neither the old bundle nor the new one is one rename wide. Trashing
-		// every replacement up front made that window the whole install.
+		// before its rename below, so the window in which neither the old
+		// bundle nor the new one is installed is one rename wide.
 		renamedAway := replacing && !samePath(app.Path, destinations[app.ID])
 		if !desiredIDs[app.ID] || renamedAway {
 			if err := e.Live.Command("trash", app.Path); err != nil {
