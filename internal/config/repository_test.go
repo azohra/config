@@ -179,6 +179,7 @@ func TestRepositoryLocatorNeverCarriesCredentials(t *testing.T) {
 		"https://token@github.com/owner/repository.git",
 		"https://user:token@github.com/owner/repository.git",
 		"https://github.com/owner/repository.git?token=secret",
+		"git@user:token@github.com:owner/repository.git",
 	} {
 		if _, err := repositoryIdentity(locator); err == nil {
 			t.Errorf("credential-bearing locator accepted: %s", locator)
