@@ -103,7 +103,11 @@ func (b Bidirectional) dockSaved() (json.RawMessage, []string, []string, bool, e
 			present = append(present, line)
 		}
 	}
-	canonical, err := json.Marshal(present)
+	// Canonicalize what the snapshot records, not what survives on disk. The
+	// live side is every decodable tile, so filtering this one by existence
+	// would compare two different reductions and leave a resource whose saved
+	// app was deleted permanently unable to converge.
+	canonical, err := json.Marshal(all)
 	return canonical, all, present, true, err
 }
 

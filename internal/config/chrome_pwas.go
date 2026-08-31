@@ -343,6 +343,7 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 		resource.Checks = append(resource.Checks, no("installed PWA readable", problem))
 	}
 	resource.Details = chromePWADiff(savedApps, liveApps)
+	baseline, hasBaseline, _ := b.Baselines.Load(resource.ID)
 	switch {
 	case !hasSaved:
 		resource.State = Uncaptured
@@ -350,14 +351,16 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 		resource.Actions = []Action{Capture}
 		resource.ActionLabels = map[Action]string{Capture: "Capture this Mac's PWAs"}
 		return resource
-	case len(liveApps) == 0 && len(savedApps) > 0:
+	// Only before the two sides have ever agreed. Once a baseline exists,
+	// three-way reconciliation can tell a machine that has not restored yet
+	// from one whose PWAs were deliberately removed, and this arm cannot.
+	case len(liveApps) == 0 && len(savedApps) > 0 && !hasBaseline:
 		resource.State = SavedChanged
 		resource.Summary = FormatCount(len(savedApps), "saved PWA is not restored", "saved PWAs are not restored")
 		resource.Actions = []Action{Apply}
 		resource.ActionLabels = map[Action]string{Apply: "Restore the saved PWAs"}
 		return resource
 	}
-	baseline, hasBaseline, _ := b.Baselines.Load(resource.ID)
 	chromePWAWords.offer(&resource, Classify(saved, live, baseline, hasBaseline))
 	return resource
 }

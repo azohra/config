@@ -291,3 +291,41 @@ func TestDockStoreWritePreservesTileValueTypes(t *testing.T) {
 		t.Fatal("the written tile no longer carries a Dock GUID")
 	}
 }
+
+func TestDockDoesNotWedgeWhenASavedAppLeavesTheDisk(t *testing.T) {
+	// The saved layout and the Dock hold the same two apps; one of them was
+	// deleted from disk. Reducing only the saved side by existence compared
+	// two different lists, reported the saved side as changed, and offered a
+	// capture that rewrote the same tiles and could never clear it.
+	paths := testPaths(t)
+	present := paths.InHome("Applications", "Present.app")
+	if err := os.MkdirAll(present, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const deleted = "/Applications/Deleted.app"
+	if err := atomicWrite(dockSnapshotPath(paths),
+		[]byte("~/Applications/Present.app\n"+deleted+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bidir := testBidirectional(paths, dockRunner{state: dockState{Present: true, Tiles: []any{
+		newDockAppTile(present, 1_000_000_001),
+		newDockAppTile(deleted, 1_000_000_002),
+	}}})
+	live, _, err := bidir.dockLive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bidir.Baselines.Save(dockID, live); err != nil {
+		t.Fatal(err)
+	}
+	resource := bidir.InspectDock()
+	if resource.State != Current {
+		t.Fatalf("agreeing Dock reported as %q: %#v", resource.State, resource)
+	}
+	if resource.NeedsDecision() {
+		t.Fatalf("Dock asked for a choice it cannot clear: %#v", resource.Actions)
+	}
+	if resource.Failed() == 0 {
+		t.Fatal("the unavailable saved app was not reported")
+	}
+}
