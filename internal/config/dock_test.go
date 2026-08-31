@@ -257,3 +257,37 @@ func TestDockReadFailureReachesTheResource(t *testing.T) {
 		t.Fatalf("check detail = %q", detail)
 	}
 }
+
+func TestDockStoreWritePreservesTileValueTypes(t *testing.T) {
+	// defaults reads the value argument as a property list. OpenStep has no
+	// integer or boolean type, so encoding tiles that way silently rewrites
+	// GUID, file-type, and dock-extra in the user's Dock as strings.
+	fakeTools(t, fakeTool{name: "defaults"})
+	tile := map[string]any{
+		"GUID":      uint64(1_000_000_001),
+		"tile-type": "file-tile",
+		"tile-data": map[string]any{"dock-extra": false, "file-type": uint64(41)},
+	}
+	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	if err := store.Write(dockState{Present: true, Tiles: []any{tile}}); err != nil {
+		t.Fatal(err)
+	}
+	logged, err := os.ReadFile(os.Getenv("COMMAND_LOG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, value, found := strings.Cut(string(logged), dockKey+" ")
+	if !found {
+		t.Fatalf("Dock write = %q", logged)
+	}
+	var written []any
+	if _, err := plist.Unmarshal([]byte(strings.TrimSpace(value)), &written); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(written, []any{tile}) {
+		t.Fatalf("Dock tiles round-tripped as %#v", written)
+	}
+	if _, ok := dockGUID(written[0]); !ok {
+		t.Fatal("the written tile no longer carries a Dock GUID")
+	}
+}
