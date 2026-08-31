@@ -80,7 +80,7 @@ func run() error {
 		if len(args) != 1 {
 			return errors.New("usage: config install")
 		}
-		return config.InstallCurrent(paths)
+		return config.InstallCurrent(paths, version, os.Stdout)
 	}
 	if len(args) > 0 && args[0] == "update" {
 		scope := config.UpdateAll
@@ -106,7 +106,7 @@ func run() error {
 		}
 		machine, restorePending, err = config.MaterializeRepository(paths, args[1], os.Stdout, os.Stderr)
 		if err == nil {
-			err = config.InstallCurrent(paths)
+			err = config.InstallCurrent(paths, version, os.Stdout)
 		}
 		args = nil
 	} else {

@@ -101,6 +101,9 @@ func (u Updater) Update(scope UpdateScope) error {
 		return fmt.Errorf("mise unavailable at %s", u.Mise)
 	}
 	if u.Version == "dev" {
+		// Say it. Otherwise a machine whose canonical command is a local build
+		// looks up to date forever.
+		u.Log.Warn("this is an unversioned development build; skipping the Config release transition")
 		if err := u.ValidateMachine(); err != nil {
 			return err
 		}

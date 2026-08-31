@@ -107,3 +107,20 @@ func TestPreferenceBackupRefusesADomainThatHoldsNothing(t *testing.T) {
 		t.Fatalf("empty saved domain = %#v", resource)
 	}
 }
+
+func TestPreferenceThatCannotBeReadCanStillBeRecaptured(t *testing.T) {
+	// Without an action the resource fails preflight forever and the product
+	// offers no way to replace the artifact it cannot read.
+	paths := testPaths(t)
+	preference := testMachine().Preferences[0]
+	if err := atomicWrite(preference.snapshotPath(paths), []byte("not a property list"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resource := preference.Inspect(paths)
+	if resource.State != Unavailable || resource.Failed() == 0 {
+		t.Fatalf("corrupt backup = %#v", resource)
+	}
+	if !resource.Allows(Capture) {
+		t.Fatalf("no way to replace an unreadable backup: %#v", resource.Actions)
+	}
+}

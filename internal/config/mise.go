@@ -135,7 +135,12 @@ func miseRepositories(paths Paths, runner Runner) ([]miseRepository, error) {
 			if strings.HasPrefix(path, "~/") {
 				path = filepath.Join(paths.Home, strings.TrimPrefix(path, "~/"))
 			}
-			if path = filepath.Clean(path); !seen[path] {
+			// A relative key would be resolved against a different directory
+			// by each half of the check that follows.
+			if path = filepath.Clean(path); !filepath.IsAbs(path) {
+				return nil, fmt.Errorf("declared repository %q in %s is not an absolute path", key, file.Path)
+			}
+			if !seen[path] {
 				seen[path] = true
 				declared = append(declared, miseRepository{Path: path, URL: declaration.URL})
 			}

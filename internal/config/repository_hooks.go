@@ -18,7 +18,6 @@ const (
 	repositoryHooksName          = "Repository hooks"
 	repositoryHookManifestName   = "config-hooks.json"
 	repositoryHookManifestSchema = 1
-	legacyRepositoryHookMarker   = "# managed-by: config git-hooks"
 )
 
 // RepositoryHook declares one hook body owned by the machine repository.
@@ -307,7 +306,7 @@ func repositoryHookPlacementAt(paths Paths, target repositoryHookTarget, hook re
 	}
 	digest := repositoryHookDigest(body)
 	recorded, recordedByConfig := manifest.Hooks[hook.Name]
-	placement.Managed = digest == hook.Digest || (recordedByConfig && recorded == digest) || containsHookMarker(body, legacyRepositoryHookMarker)
+	placement.Managed = digest == hook.Digest || (recordedByConfig && recorded == digest)
 	placement.Current = digest == hook.Digest && info.Mode().Perm() == hook.Mode && recordedByConfig && recorded == hook.Digest
 	switch {
 	case placement.Current:
@@ -325,15 +324,6 @@ func repositoryHookPlacementAt(paths Paths, target repositoryHookTarget, hook re
 func pathInside(root, path string) bool {
 	relative, err := filepath.Rel(root, filepath.Clean(path))
 	return err == nil && relative != "." && filepath.IsLocal(relative)
-}
-
-func containsHookMarker(body []byte, marker string) bool {
-	for line := range strings.SplitSeq(string(body), "\n") {
-		if strings.TrimSpace(line) == marker {
-			return true
-		}
-	}
-	return false
 }
 
 func InspectRepositoryHooks(paths Paths, machine Machine, runner Runner) Resource {

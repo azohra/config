@@ -44,6 +44,11 @@ func (p PreferenceBackup) Inspect(paths Paths) Resource {
 			Label:  "Saved settings valid",
 			Detail: err.Error(),
 		}}
+		// Capture is the only way to replace an artifact Config cannot read.
+		// Without it the resource fails preflight forever and the product
+		// offers no action that clears it.
+		resource.Actions = []Action{Capture}
+		resource.ActionLabels = map[Action]string{Capture: "Recapture current settings"}
 		return resource
 	}
 	resource.State = Current

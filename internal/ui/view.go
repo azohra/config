@@ -177,7 +177,11 @@ func dashboardHealth(report config.Report) (string, string) {
 		parts = append(parts, config.FormatCount(advisories, "advisory", "advisories"))
 	}
 	if len(parts) == 0 {
-		return headline, "Machine state and origin/main agree; cleanup runs on demand."
+		destination := report.Snapshot.Destination
+		if destination == "" {
+			destination = report.Snapshot.Upstream
+		}
+		return headline, "Machine state and " + destination + " agree; cleanup runs on demand."
 	}
 	return headline, strings.Join(parts, " · ")
 }

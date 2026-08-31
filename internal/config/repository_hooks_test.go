@@ -137,13 +137,10 @@ func TestRepositoryHooksReconcileTemplateAndDeclaredRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	managedRootHook := fixture.paths.InRoot(".git", "hooks", "post-checkout")
-	if err := os.WriteFile(managedRootHook, []byte("#!/bin/sh\n"+legacyRepositoryHookMarker+"\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
 	if resource.State != Drift || !resource.Allows(Apply) {
-		t.Fatalf("legacy hooks = %+v", resource)
+		t.Fatalf("unreconciled hooks = %+v", resource)
 	}
 	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
 	changed, err := applier.applyRepositoryHookTargets(true)
@@ -358,5 +355,26 @@ func TestRepositoryHooksClaimOwnershipBeforeInstalling(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(hooks, "post-checkout")); !os.IsNotExist(statErr) {
 		t.Fatal("a hook was installed with no ownership record")
+	}
+}
+
+func TestRepositoryHookMarkerDoesNotGrantOwnership(t *testing.T) {
+	// Ownership comes from Config's own manifest. A hook can claim anything in
+	// a comment, and a repository Config never authored is not Config's to
+	// overwrite on the strength of one.
+	fixture := newRepositoryHooksFixture(t)
+	claimant := filepath.Join(fixture.repo, ".git", "hooks", "post-checkout")
+	body := []byte("#!/bin/sh\n# managed-by: config git-hooks\nexit 0\n")
+	if err := os.WriteFile(claimant, body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+	if _, err := applier.applyRepositoryHookTargets(true); err == nil ||
+		!strings.Contains(err.Error(), "repository-owned hook") {
+		t.Fatalf("a self-declared hook was adopted: %v", err)
+	}
+	got, err := os.ReadFile(claimant)
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("the repository's own hook was rewritten: %q %v", got, err)
 	}
 }

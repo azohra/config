@@ -113,14 +113,16 @@ Apply first converges mise with:
 mise bootstrap --yes --skip-dirty
 ```
 
-When repository hooks are declared, Config prepares their clone template before
-mise runs and supplies that template to mise's child Git processes. It sweeps
-the declared repositories after bootstrap so existing and newly created
-checkouts converge to the same hook bodies. The selected mise configuration
-owns any custom ordering through mise lifecycle hooks. Config then converges
-declared native macOS facts and executes selected repository hook, Finder
-Favorites, preference, Chrome PWA, and Dock actions. Independent failures are
-collected so one resource does not hide the rest of the plan.
+When repository hooks are declared, Config reconciles them first. It prepares
+their clone template before mise runs and supplies that template to mise's
+child Git processes. It sweeps the declared repositories after bootstrap so
+existing and newly created checkouts converge to the same hook bodies. The
+selected mise configuration owns any custom ordering through mise lifecycle
+hooks. Converging mise also converges the declared native macOS facts. Config
+then executes the selected Finder Favorites, preference, Chrome PWA, and Dock
+actions. Independent failures are collected so one resource does not hide the
+rest of the plan, and a fact Config cannot read is reported rather than
+written over.
 
 Repository hooks are authoritative one-way state. A declaration names a hook
 and an executable source inside the managed repository. Config installs real
@@ -172,9 +174,12 @@ plist input before replacing saved state.
 Preference plists use a different contract. Their declaration identifies the
 application and defaults domain; Config derives
 `snapshots/preferences/<id>.plist`. On an established Mac, Config can capture
-current settings. A pending bootstrap may restore existing backups after mise
-installs their applications. The restore validates the plist, checks the
-bundle, quits a running application before import, and relaunches it afterward.
+current settings: the whole domain, unfiltered, into a repository Config
+commits and pushes. A domain that holds nothing is refused, because `defaults`
+answers for a domain that does not exist. A pending bootstrap may restore
+existing backups after mise installs their applications. The restore validates
+the plist, checks the bundle, quits a running application before import, and
+relaunches it afterward.
 
 ## Snapshot safety
 
@@ -196,10 +201,12 @@ Config state.
 ## Pruning
 
 Pruning crosses two ownership domains without merging them. Mise computes
-prunable tool versions and provider-owned packages from its shared inventory,
-and removes dead links from its own tracked and trusted configuration ledgers.
-Config discovers package managers from mise rather than maintaining its own
-provider list. A provider with no prune operation is reported and left alone.
+prunable tool versions and provider-owned packages from its shared inventory.
+Config asks mise where its state lives, reads the tracked and trusted
+configuration ledgers there to name the links that no longer resolve, and
+leaves every deletion to mise. Config discovers package managers from mise
+rather than maintaining its own provider list. A provider with no prune
+operation is reported and left alone.
 
 Config directly removes only artifacts with verifiable Config provenance. An
 undeclared repository hook is eligible when its bytes still match the digest

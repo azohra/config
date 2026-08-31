@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -266,5 +268,117 @@ func TestMisePhasesCoverEveryBootstrapPhase(t *testing.T) {
 			continue
 		}
 		t.Errorf("mise bootstrap %s offers a status verb that misePhases does not cover", command)
+	}
+
+	// The other direction. Covering what mise offers still holds when mise
+	// removes or renames a phase, and Config would go on asking for one that
+	// no longer exists.
+	for _, phase := range misePhases {
+		if !commands[phase[0]] {
+			t.Errorf("misePhases names %q, which mise %s no longer offers", phase[0], testedMiseVersion)
+		}
+	}
+	if !commands["repos"] {
+		t.Errorf("mise %s no longer offers the repos phase Config probes itself", testedMiseVersion)
+	}
+}
+
+func TestTestedMiseVersionIsTheOnlyOneTheRepositoryNames(t *testing.T) {
+	// The version Config accepts at runtime is restated by hand in the
+	// workflows and the README. Nothing proved they agree, and they drift.
+	for _, file := range []string{
+		"../../.github/workflows/check.yml",
+		"../../.github/workflows/release.yml",
+		"../../README.md",
+	} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := miseVersionPattern.FindAllString(string(data), -1)
+		if len(found) == 0 {
+			t.Errorf("%s names no mise version", file)
+		}
+		for _, version := range found {
+			if version != testedMiseVersion {
+				t.Errorf("%s names mise %s, not the tested %s", file, version, testedMiseVersion)
+			}
+		}
+	}
+	// min_version is a floor for developing this repository, so it may lag the
+	// tested version but must never lead it.
+	data, err := os.ReadFile("../../mise.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	floor := miseVersionPattern.FindString(string(data))
+	if floor == "" {
+		t.Fatal("mise.toml names no mise version")
+	}
+	if miseVersionOrder(floor) > miseVersionOrder(testedMiseVersion) {
+		t.Errorf("mise.toml requires mise %s, ahead of the tested %s", floor, testedMiseVersion)
+	}
+}
+
+// miseVersionOrder collapses a calendar version into one comparable number.
+func miseVersionOrder(version string) int {
+	order := 0
+	for _, field := range strings.Split(version, ".") {
+		number, err := strconv.Atoi(field)
+		if err != nil {
+			return -1
+		}
+		order = order*1000 + number
+	}
+	return order
+}
+
+var miseVersionPattern = regexp.MustCompile(`\b20[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}\b`)
+
+// miseRepositoriesRunner answers the two commands miseRepositories issues.
+type miseRepositoriesRunner struct{ repos string }
+
+func (r miseRepositoriesRunner) Run(_ context.Context, name string, args ...string) Result {
+	if name != "mise" || len(args) < 2 || args[0] != "config" {
+		return Result{Err: fmt.Errorf("unexpected command %s %s", name, strings.Join(args, " "))}
+	}
+	switch args[1] {
+	case "ls":
+		return Result{Stdout: `[{"path":"/machine/mise/config.toml"}]`}
+	case "get":
+		return Result{Stdout: r.repos}
+	}
+	return Result{Err: fmt.Errorf("unexpected command %s %s", name, strings.Join(args, " "))}
+}
+
+func (miseRepositoriesRunner) Exists(string) bool { return true }
+
+func TestMiseRepositoriesRequireAnAbsolutePath(t *testing.T) {
+	// os.Stat resolves a relative path against Config's working directory
+	// while the declared-repository check resolves it elsewhere, so the two
+	// halves of one check would answer about different directories.
+	paths := testPaths(t)
+	const url = "url = \"https://github.com/owner/machine.git\"\n"
+
+	declared, err := miseRepositories(paths, miseRepositoriesRunner{repos: "[\"/opt/checkout\"]\n" + url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declared) != 1 || declared[0].Path != "/opt/checkout" {
+		t.Fatalf("absolute declaration = %#v", declared)
+	}
+
+	declared, err = miseRepositories(paths, miseRepositoriesRunner{repos: "[\"~/code/machine\"]\n" + url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declared) != 1 || declared[0].Path != paths.InHome("code", "machine") {
+		t.Fatalf("home declaration = %#v", declared)
+	}
+
+	if _, err := miseRepositories(paths, miseRepositoriesRunner{repos: "[\"relative/checkout\"]\n" + url}); err == nil {
+		t.Fatal("a relative declared repository path was accepted")
+	} else if !strings.Contains(err.Error(), "relative/checkout") {
+		t.Fatalf("refusal does not name the declaration: %v", err)
 	}
 }

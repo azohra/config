@@ -12,13 +12,21 @@ func ConfigCommandPath(paths Paths) string {
 	return paths.InHome(".local", "bin", "config")
 }
 
-// InstallCurrent makes the running released binary Config's permanent command.
-func InstallCurrent(paths Paths) error {
+// InstallCurrent makes the running binary Config's permanent command. A
+// development build carries no release version and `config update` skips the
+// release transition for one, so installing it says so rather than leaving the
+// canonical command quietly pinned to a local build.
+func InstallCurrent(paths Paths, version string, out io.Writer) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate running Config: %w", err)
 	}
-	return InstallExecutable(ConfigCommandPath(paths), executable)
+	destination := ConfigCommandPath(paths)
+	if !stableConfigVersion(version) {
+		Logger{Out: out}.Warn(destination + " is now an unversioned development build; " +
+			"config update will not move it forward until a release replaces it")
+	}
+	return InstallExecutable(destination, executable)
 }
 
 func InstallExecutable(destination, source string) error {
