@@ -21,8 +21,14 @@ func (p PreferenceBackup) snapshotPath(paths Paths) string {
 func (p PreferenceBackup) Inspect(paths Paths) Resource {
 	resource := Resource{ID: p.ID, Name: p.Name}
 	data, err := os.ReadFile(p.snapshotPath(paths))
+	var values map[string]any
 	if err == nil {
-		_, err = decodePlist(data)
+		values, err = decodePlist(data)
+	}
+	if err == nil && len(values) == 0 {
+		// An empty saved domain records nothing. Report it the way a missing
+		// artifact is reported so Capture stays on offer.
+		err = os.ErrNotExist
 	}
 	if os.IsNotExist(err) {
 		resource.State = Uncaptured
@@ -54,8 +60,15 @@ func (p PreferenceBackup) Backup(paths Paths, runner Runner) error {
 		return fmt.Errorf("export %s: %w", p.Name, result.Failure())
 	}
 	data := []byte(result.Stdout)
-	if _, err := decodePlist(data); err != nil {
+	values, err := decodePlist(data)
+	if err != nil {
 		return fmt.Errorf("export %s: %w", p.Name, err)
+	}
+	// defaults exits 0 for a domain that does not exist and prints an empty
+	// dictionary. Storing that would record "captured" over settings that were
+	// never read, so a domain with nothing in it is a refusal, not a backup.
+	if len(values) == 0 {
+		return fmt.Errorf("export %s: %s holds no settings", p.Name, p.Domain)
 	}
 	return atomicWrite(p.snapshotPath(paths), data, 0o600)
 }
