@@ -108,9 +108,16 @@ case "$origin" in
   *) refuse "origin is not azohra/config" ;;
 esac
 [ "$(git describe --tags --exact-match 2>/dev/null || true)" = "$tag" ] || refuse "$tag is not the tag at HEAD"
+# A release is published by the workflow so its artifacts carry provenance.
+# Config refuses a release it cannot verify, so one published by hand is one
+# nobody can install.
+[ "${GITHUB_ACTIONS:-}" = "true" ] || refuse "a release is published by the Release workflow"
 # A pin the README documents is the version a new machine installs, so it
-# cannot lag the release being published.
-grep -n 'github:azohra/config[@"]' README.md | grep -v "${tag#v}" &&
+# cannot lag the release being published. Assert the pin positively: a README
+# that names no version passed the old check silently.
+pins=$(grep -o 'github:azohra/config@[0-9A-Za-z.-]*' README.md || true)
+[ -n "$pins" ] || refuse "README pins no Config version for a new machine to install"
+printf '%s\n' "$pins" | grep -qvFx "github:azohra/config@${tag#v}" &&
   refuse "README pins a version other than ${tag#v}"
 [ -n "${GITHUB_TOKEN:-}" ] || refuse "GITHUB_TOKEN is unset"
 command -v gh >/dev/null 2>&1 || refuse "GitHub CLI is unavailable"
