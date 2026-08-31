@@ -70,9 +70,9 @@ func run() error {
 		return err
 	}
 	defer config.OnInterrupt(os.Stderr)()
-	// An argument error is an argument error. Deciding these after the machine
-	// document loads reported a typo on a Mac with no managed checkout as a
-	// missing repository, and prescribed bootstrap.
+	// Deciding these after the machine document loads reported a typo on a Mac
+	// with no managed checkout as a missing repository, and prescribed
+	// bootstrap.
 	if err := checkArguments(args); err != nil {
 		return err
 	}

@@ -444,7 +444,7 @@ func TestChromePWAsIgnoreContentChromeOwns(t *testing.T) {
 
 func TestChromePWAsUseThreeWayReconciliationOnceTheSidesHaveAgreed(t *testing.T) {
 	// Removing every PWA from a Mac whose sides have agreed is a live change
-	// the operator may want to keep. Answering "the saved side changed" and
+	// someone may want to keep. Answering "the saved side changed" and
 	// offering only a restore returned before the baseline was ever read.
 	paths := testPaths(t)
 	icon := []byte("icon")

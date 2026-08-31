@@ -342,7 +342,7 @@ func TestSnapshotRefusesWhenTheRepositoryCannotBeRead(t *testing.T) {
 func TestSnapshotDoesNotCommitWhatAKilledCaptureStranded(t *testing.T) {
 	// atomicWrite stages beside its target inside the managed checkout, and
 	// git add -A stages everything, so a capture killed mid-rename would put
-	// its temporary file in the operator's permanent history.
+	// its temporary file in the repository's permanent history.
 	snapshotter, root, _ := snapshotFixture(t)
 	stranded := filepath.Join(root, "snapshots", "dock.apps.tmp.4127")
 	if err := os.MkdirAll(filepath.Dir(stranded), 0o755); err != nil {

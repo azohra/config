@@ -122,6 +122,6 @@ func TestASavedSnapshotDoesNotBlockEveryLaterBootstrap(t *testing.T) {
 		t.Fatal("a restore bound to an older commit was reported resumable")
 	}
 	if !strings.Contains(said.String(), "abandoned") {
-		t.Fatalf("the operator was not told: %q", said.String())
+		t.Fatalf("the abandonment was not reported: %q", said.String())
 	}
 }

@@ -133,7 +133,7 @@ func (p restoreProgress) abandon() error {
 
 // checkoutAdvancedError marks the one validatePending failure a later run can
 // resolve by itself: the checkout moved on, which is exactly what a snapshot
-// save does. Every other failure names a state the operator has to look at.
+// save does. Every other failure names a state that needs a human decision.
 type checkoutAdvancedError struct{ message string }
 
 func (e checkoutAdvancedError) Error() string { return e.message }
@@ -148,7 +148,7 @@ func (p restoreProgress) validatePending(machine Machine) error {
 	}
 	if commit != p.record.Commit {
 		return checkoutAdvancedError{fmt.Sprintf(
-			"managed checkout changed from %s to %s while bootstrap restore is pending",
+			"managed checkout moved from %s to %s since the restore began",
 			shortCommit(p.record.Commit), shortCommit(commit))}
 	}
 	plan, err := restorePlanIdentity(p.paths, machine)
@@ -168,8 +168,8 @@ func cleanCheckoutCommit(paths Paths) (string, error) {
 		return "", fmt.Errorf("inspect bootstrap restore checkout: %w", status.Failure())
 	}
 	if status.Output() != "" {
-		// Recoverable by hand, so it stays a refusal: the operator can commit
-		// or discard and resume the restore that is still pending.
+		// Recoverable by hand, so it stays a refusal: committing or discarding
+		// the changes resumes the restore that is still pending.
 		return "", errors.New("managed checkout has local changes while bootstrap restore is pending")
 	}
 	head := run(runner, "git", "rev-parse", "--verify", "HEAD")

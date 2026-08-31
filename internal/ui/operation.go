@@ -77,7 +77,7 @@ func runOperation(ctx context.Context, dir, name string, args []string, events c
 		err := command.Run()
 		// A successful operation whose descendant still holds the output pipes
 		// ends in ErrWaitDelay. Reporting that as a failed Apply, Save, or
-		// Update tells the operator their machine did not converge when it did.
+		// Update reports a machine that did not converge when it did.
 		events <- operationEvent{err: config.CommandFailure(command, err), done: true}
 		return nil
 	}

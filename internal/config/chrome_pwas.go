@@ -538,7 +538,7 @@ func (e Applier) applyChromePWAs() error {
 		liveByID[app.ID] = app
 	}
 	// Nothing else removes what a killed restore staged here, and a stray
-	// half-built bundle sits among the operator's applications.
+	// half-built bundle sits among the installed applications.
 	sweepStaging(chromePWALiveDir(e.Paths), ".config-pwas.")
 	stage, err := os.MkdirTemp(chromePWALiveDir(e.Paths), ".config-pwas.*")
 	if errors.Is(err, os.ErrNotExist) {
@@ -581,9 +581,8 @@ func (e Applier) applyChromePWAs() error {
 	for _, app := range live {
 		_, replacing := staged[app.ID]
 		// A replacement that keeps its bundle name is trashed immediately
-		// before its rename below, so the window in which the operator has
-		// neither the old bundle nor the new one is one rename wide. Trashing
-		// every replacement up front made that window the whole install.
+		// before its rename below, so the window in which neither the old
+		// bundle nor the new one is installed is one rename wide.
 		renamedAway := replacing && !samePath(app.Path, destinations[app.ID])
 		if !desiredIDs[app.ID] || renamedAway {
 			if err := e.Live.Command("trash", app.Path); err != nil {

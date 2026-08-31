@@ -54,7 +54,7 @@ func OnInterrupt(out io.Writer) func() {
 			select {
 			case <-finished:
 			case <-time.After(interruptGrace):
-				fmt.Fprintln(out, "\ninterrupted while writing; leaving the operation incomplete")
+				fmt.Fprintln(out, "\ninterrupted while writing; run the command again to finish it")
 			}
 			signal.Stop(signals)
 			// Exit the way the signal would have, so a shell and a parent
