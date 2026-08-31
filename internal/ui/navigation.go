@@ -108,11 +108,11 @@ func (m Model) updateInventory(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		m.scroll = max(0, m.scroll-1)
 	case "down", "j":
-		m.scroll++
+		m.scroll = min(m.scroll+1, m.scrollBound())
 	case "pgup":
 		m.scroll = max(0, m.scroll-10)
 	case "pgdown":
-		m.scroll += 10
+		m.scroll = min(m.scroll+10, m.scrollBound())
 	}
 	return m, nil
 }
@@ -206,7 +206,7 @@ func (m Model) updateSnapshot(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll = max(0, m.scroll-10)
 		return m, nil
 	case "pgdown":
-		m.scroll += 10
+		m.scroll = min(m.scroll+10, m.scrollBound())
 		return m, nil
 	case "enter":
 		return m.startOperation("Save", m.executable, "--snapshot")
@@ -230,11 +230,11 @@ func (m Model) updatePrune(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		m.scroll = max(0, m.scroll-1)
 	case "down", "j":
-		m.scroll++
+		m.scroll = min(m.scroll+1, m.scrollBound())
 	case "pgup":
 		m.scroll = max(0, m.scroll-10)
 	case "pgdown":
-		m.scroll += 10
+		m.scroll = min(m.scroll+10, m.scrollBound())
 	case "enter":
 		if m.pruneHasWork {
 			return m.startOperation("Cleanup", m.executable, "prune", "--yes")

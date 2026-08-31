@@ -135,12 +135,14 @@ func TestSnapshotTakesNoMessage(t *testing.T) {
 	binary, home := buildConfig(t), fixtureHome(t)
 
 	withMessage, code := runConfig(t, binary, home, "--snapshot", "Manual subject")
-	if code != 1 || !strings.Contains(withMessage, "invalid snapshot request") {
+	if code != 1 || !strings.Contains(withMessage, "usage: config --snapshot") {
 		t.Fatalf("config --snapshot accepted a message (exit %d):\n%s", code, withMessage)
 	}
 
+	// The parameterless form is the real one; it fails here only because this
+	// home has no managed checkout, which is a different refusal.
 	withoutMessage, code := runConfig(t, binary, home, "--snapshot")
-	if code != 1 || strings.Contains(withoutMessage, "invalid snapshot request") {
+	if code != 1 || strings.Contains(withoutMessage, "usage:") {
 		t.Fatalf("config --snapshot rejected its parameterless form (exit %d):\n%s", code, withoutMessage)
 	}
 }
@@ -284,5 +286,61 @@ url = "` + source + `"
 	installed := filepath.Join(home, ".local", "bin", "config")
 	if info, err := os.Stat(installed); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("bootstrap did not leave a permanent command: %v, %v", info, err)
+	}
+}
+
+func TestArgumentErrorsDoNotWaitForTheMachineDocument(t *testing.T) {
+	// A Mac with no managed checkout reported a typo as a missing repository
+	// and prescribed bootstrap, which is not the problem.
+	binary, home := buildConfig(t), t.TempDir()
+	for _, invocation := range [][]string{
+		{"--stats"},
+		{"snapshot"},
+		{"--status", "extra"},
+		{"--apply"},
+		{"bootstrap"},
+		{"update", "everything"},
+	} {
+		output, code := runConfig(t, binary, home, invocation...)
+		if code != 1 {
+			t.Errorf("config %s exited %d:\n%s", strings.Join(invocation, " "), code, output)
+			continue
+		}
+		if strings.Contains(output, "bootstrap <repository>") && invocation[0] != "bootstrap" {
+			t.Errorf("config %s was reported as a missing repository:\n%s", strings.Join(invocation, " "), output)
+		}
+		if !strings.Contains(output, "usage:") && !strings.Contains(output, "unknown") {
+			t.Errorf("config %s did not name an argument problem:\n%s", strings.Join(invocation, " "), output)
+		}
+	}
+}
+
+func TestApplyRefusesAPlanTheCurrentStateDoesNotAllow(t *testing.T) {
+	// Selection validation against a fresh report is the only place a stale or
+	// forged plan is refused, and nothing drove it.
+	binary, home := buildConfig(t), fixtureHome(t)
+
+	// A resource the report does not carry at all.
+	unknown, code := runConfig(t, binary, home, "--apply", `[{"id":"not-a-resource","action":"apply"}]`)
+	if code != 1 || !strings.Contains(unknown, `unknown resource "not-a-resource"`) {
+		t.Fatalf("config --apply accepted an unknown resource (exit %d):\n%s", code, unknown)
+	}
+
+	// A real resource, and an action its current state does not allow.
+	stale, code := runConfig(t, binary, home, "--apply", `[{"id":"setup","action":"capture"}]`)
+	if code != 1 || !strings.Contains(stale, "no longer allows capture") {
+		t.Fatalf("config --apply accepted a stale plan (exit %d):\n%s", code, stale)
+	}
+
+	// The same resource twice, which a forged plan can carry and the terminal
+	// interface never produces.
+	repeated, code := runConfig(t, binary, home, "--apply", `[{"id":"setup","action":"apply"},{"id":"setup","action":"apply"}]`)
+	if code != 1 || !strings.Contains(repeated, "appears more than once") {
+		t.Fatalf("config --apply accepted a repeated selection (exit %d):\n%s", code, repeated)
+	}
+
+	garbage, code := runConfig(t, binary, home, "--apply", "not-a-plan")
+	if code != 1 {
+		t.Fatalf("config --apply accepted an undecodable plan (exit %d):\n%s", code, garbage)
 	}
 }
