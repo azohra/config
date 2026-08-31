@@ -20,6 +20,7 @@ const (
 	inventoryChrome  = 9
 	planChrome       = 14 // plus one line per plan row
 	snapshotChrome   = 11
+	pruneChrome      = 13
 	runningChrome    = 10
 )
 
@@ -32,6 +33,9 @@ func (m Model) View() tea.View {
 
 func (m Model) render() string {
 	if m.loading {
+		if m.screen == screenPrune {
+			return m.renderPrunePlanning()
+		}
 		return m.renderInspecting()
 	}
 	switch m.screen {
@@ -41,6 +45,8 @@ func (m Model) render() string {
 		return m.renderPlan()
 	case screenSnapshot:
 		return m.renderSnapshot()
+	case screenPrune:
+		return m.renderPrune()
 	case screenRunning:
 		return m.renderRunning()
 	default:
@@ -136,7 +142,7 @@ func (m Model) resultBanner() string {
 func dashboardHealth(report config.Report) (string, string) {
 	failures, decisions, advisories := report.Counts()
 	plan := buildPlan(report)
-	headline := good.Render("✓ This Mac matches Config")
+	headline := good.Render("✓ Configuration matches")
 	switch {
 	case failures > 0:
 		headline = bad.Render("✗ Config needs attention")
@@ -171,7 +177,7 @@ func dashboardHealth(report config.Report) (string, string) {
 		parts = append(parts, config.FormatCount(advisories, "advisory", "advisories"))
 	}
 	if len(parts) == 0 {
-		return headline, "Saved config, this Mac, and origin/main agree."
+		return headline, "Machine state and origin/main agree; cleanup runs on demand."
 	}
 	return headline, strings.Join(parts, " · ")
 }
@@ -196,10 +202,14 @@ func (m Model) dashboardActionText(action dashboardAction) (string, string) {
 			return "Save snapshot", "→ " + destination
 		}
 		return "Publish snapshot", "→ " + destination
-	case dashboardUpdate:
-		return "Update software", "mise, tools, and packages"
 	case dashboardInspect:
 		return "Inspect configuration", config.FormatCount(len(m.report.Resources), "resource", "resources")
+	case dashboardUpdateSoftware:
+		return "Update software", "Config, mise, tools, and packages"
+	case dashboardUpdateRepositories:
+		return "Update repositories", "fetch and fast-forward clean checkouts"
+	case dashboardCleanup:
+		return "Clean up", "preview unused tools and Config state"
 	default:
 		return "Quit", ""
 	}
@@ -344,6 +354,38 @@ func (m Model) renderSnapshot() string {
 	}
 	blocks = append(blocks, keyHints(hints...))
 	return frame(m.width, blocks...)
+}
+
+func (m Model) renderPrunePlanning() string {
+	return frame(
+		m.width,
+		title.Render("CLEAN UP"),
+		m.spinner.View()+" Checking unused tools and Config-owned state…",
+		keyHints("ctrl+c quit"),
+	)
+}
+
+func (m Model) renderPrune() string {
+	lines := strings.Split(strings.Trim(m.prunePreview, "\n"), "\n")
+	available := max(5, m.height-pruneChrome)
+	scrollable := len(lines) > available
+	lines = visibleLines(lines, m.scroll, available)
+	action := "Back to dashboard"
+	hints := []string{"enter back", "esc back"}
+	if m.pruneHasWork {
+		action = "Prune these items"
+		hints = []string{"enter prune", "esc back"}
+	}
+	if scrollable {
+		hints = append([]string{"↑/↓ scroll"}, hints...)
+	}
+	return frame(
+		m.width,
+		title.Render("CLEAN UP"),
+		strings.Join(lines, "\n"),
+		focusRow(true, accent.Render(action)),
+		keyHints(hints...),
+	)
 }
 
 func (m Model) renderRunning() string {

@@ -19,8 +19,10 @@ type dashboardAction int
 const (
 	dashboardReview dashboardAction = iota
 	dashboardSave
-	dashboardUpdate
 	dashboardInspect
+	dashboardUpdateSoftware
+	dashboardUpdateRepositories
+	dashboardCleanup
 	dashboardQuit
 )
 
@@ -39,7 +41,13 @@ func (m Model) dashboardActions() []dashboardAction {
 	if m.report.Snapshot.NeedsSave() {
 		actions = append(actions, dashboardSave)
 	}
-	actions = append(actions, dashboardInspect, dashboardUpdate, dashboardQuit)
+	actions = append(actions,
+		dashboardInspect,
+		dashboardUpdateSoftware,
+		dashboardUpdateRepositories,
+		dashboardCleanup,
+		dashboardQuit,
+	)
 	return actions
 }
 
@@ -77,11 +85,15 @@ func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.refreshInto(screenPlan)
 		case dashboardSave:
 			return m.beginSnapshot()
-		case dashboardUpdate:
-			return m.startOperation("Update", m.executable, "update")
 		case dashboardInspect:
 			m.scroll = 0
 			m.screen = screenInventory
+		case dashboardUpdateSoftware:
+			return m.startOperation("Software update", m.executable, "update", "software")
+		case dashboardUpdateRepositories:
+			return m.startOperation("Repository update", m.executable, "update", "repositories")
+		case dashboardCleanup:
+			return m.beginPrune()
 		case dashboardQuit:
 			return m, tea.Quit
 		}
@@ -198,6 +210,36 @@ func (m Model) updateSnapshot(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.startOperation("Save", m.executable, "--snapshot")
+	}
+	return m, nil
+}
+
+func (m Model) beginPrune() (tea.Model, tea.Cmd) {
+	m.screen = screenPrune
+	m.loading = true
+	m.scroll = 0
+	m.prunePreview = ""
+	m.pruneHasWork = false
+	return m, tea.Batch(m.pruneCmd(), m.spinner.Tick)
+}
+
+func (m Model) updatePrune(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc", "q":
+		m.screen = screenDashboard
+	case "up", "k":
+		m.scroll = max(0, m.scroll-1)
+	case "down", "j":
+		m.scroll++
+	case "pgup":
+		m.scroll = max(0, m.scroll-10)
+	case "pgdown":
+		m.scroll += 10
+	case "enter":
+		if m.pruneHasWork {
+			return m.startOperation("Cleanup", m.executable, "prune", "--yes")
+		}
+		m.screen = screenDashboard
 	}
 	return m, nil
 }

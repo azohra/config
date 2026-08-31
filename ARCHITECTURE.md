@@ -28,8 +28,11 @@ acquire the latest stable Config release with GitHub artifact attestation
 enabled. It atomically installs that executable and continues the same update
 from the installed command before loading the machine document. The current
 release validates that document, normalizes mise to the exact version it was
-tested against, and updates the declared resources. Unversioned development
-builds skip the Config release transition. Release acquisition alone disables
+tested against, and updates the selected resources. The software scope updates
+tools and packages; the repository scope performs the networked fast-forward of
+clean declared checkouts. The unqualified `config update` selects both scopes.
+Unversioned development builds skip the Config release transition. Release
+acquisition alone disables
 mise's general release-age delay because this explicit operation promises the
 latest release; an exact resolved version, provenance verification, and
 downgrade refusal still gate replacement.
@@ -46,8 +49,9 @@ The aggregate includes `repos`, where mise answers two questions at once:
 whether a checkout exists, which is a local stat, and whether it matches its
 remote, which is one network round trip per declared repository. Only presence
 is machine setup, so Config asks mise for the declared paths and checks those
-itself; freshness belongs to `config update`. Naming the phases means Config
-must keep pace with mise, so a test pins the list to the phases mise offers.
+itself; freshness belongs to the explicit repository update scope. Naming the
+phases means Config must keep pace with mise, so a test pins the list to the
+phases mise offers.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
@@ -201,20 +205,20 @@ completed restore record is eligible only when it validates and belongs to a
 managed-checkout identity other than the current one. Pending and current
 records remain.
 
-The CLI prints the complete plan before mutation. Interactive use requires a
-confirmation, redirected use is preview-only, and `--yes` is the explicit
-non-interactive apply form. Apply recomputes the plan and refuses it if the
-candidate set or any ownership digest changed after preview. Mise performs its
-own deletions; Config revalidates every file it removes immediately before the
-operation.
+The CLI and terminal interface print the complete plan before mutation. The
+terminal interface confirms on its own screen and then invokes the explicit
+non-interactive apply form; a redirected CLI remains preview-only without
+`--yes`. Apply recomputes the plan and refuses it if the candidate set or any
+ownership digest changed after preview. Mise performs its own deletions; Config
+revalidates every file it removes immediately before the operation.
 
 ## Packages
 
 `internal/config` owns the domain model, machine contract, subprocess boundary,
 inspection, apply, baselines, repository lifecycle, snapshot, and update flow.
-`internal/ui` renders the report, gathers explicit choices, and launches
-operations in child processes. `cmd/config` owns argument parsing and selects
-the CLI or terminal interface.
+`internal/ui` renders the report, gathers explicit choices, previews cleanup,
+and launches scoped operations in child processes. `cmd/config` owns argument
+parsing and selects the CLI or terminal interface.
 
 The release contains a single static binary for each supported macOS
 architecture. GitHub Releases is Config's distribution channel. Mise hands the

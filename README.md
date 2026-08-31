@@ -14,7 +14,7 @@ Config requires macOS, Git, and mise 2026.8.14 installed at
 `~/.local/bin/mise`. Mise can run the released binary for the initial handoff:
 
 ```bash
-mise x github:azohra/config@0.7.2 -- \
+mise x github:azohra/config@0.8.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -169,7 +169,9 @@ config
 
 The interface inspects first, presents uncaptured state, drift, and conflicts,
 applies only the selected actions, then offers to save the resulting repository
-snapshot.
+snapshot. Its maintenance actions update software, update repositories, and
+preview cleanup separately, so a software update never waits on repository
+remotes.
 Inspection is read-only. Apply delegates writes to mise, `defaults`, `hidutil`,
 native macOS APIs, and the relevant applications.
 
@@ -179,6 +181,8 @@ Useful non-interactive commands:
 config --status
 config path
 config update
+config update software
+config update repositories
 config prune --dry-run
 config --version
 ```
@@ -189,15 +193,16 @@ check or unresolved bidirectional choice needs attention. It reports a
 declared repository that is not checked out, and one whose checkout holds a
 different repository. Both answers are local. It says nothing about how far a
 checkout has drifted from its remote:
-that costs a network round trip each, and `update` already owns it. `update`
-is explicit and unscheduled. After repairing its standalone mise substrate if
-needed, a released Config acquires the latest stable, attested release,
-atomically installs it as the permanent command, and continues the same update
-from that executable. The current release validates the machine document, holds
-standalone mise at its tested version, updates declared tools and packages, and
-fast-forwards clean declared repositories. Dirty repositories are reported and
-left untouched. Unversioned development builds skip Config's release update.
-`config path` prints the managed checkout even before it exists.
+that costs a network round trip each, and `config update repositories` owns it.
+Updates are explicit and unscheduled. Every update first repairs the standalone
+mise substrate if needed, acquires the latest stable, attested Config release,
+atomically installs it as the permanent command, and continues from that
+executable. `config update software` then updates declared tools and packages;
+`config update repositories` fast-forwards clean declared repositories. The
+unqualified `config update` runs both scopes for compatibility. Dirty
+repositories are reported and left untouched. Unversioned development builds
+skip Config's release update. `config path` prints the managed checkout even
+before it exists.
 
 `config prune` previews stale state across that ownership boundary. Mise names
 unused tool versions, package-manager removals, and dead links in its shared
@@ -210,7 +215,9 @@ package manager, or other ambiguous item is reported and preserved.
 In a terminal, the command asks before applying the plan. With redirected
 input or output it only previews; `config prune --yes` is the explicit
 non-interactive apply form. Apply computes the plan again before the first
-write and stops if any candidate changed. `--dry-run` always previews only.
+write and stops if any candidate changed. `--dry-run` always previews only. The
+terminal interface uses the same plan and requires a separate confirmation
+before it invokes that non-interactive apply form.
 
 Saving stages the whole managed repository and creates a commit under its Git
 policy. Config writes `Update machine snapshot` as the subject; the user only

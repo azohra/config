@@ -21,7 +21,18 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 		width: 80, height: 24,
 	}
 	view := m.renderDashboard()
-	for _, present := range []string{"This Mac matches Config", "Update software", "mise, tools, and packages", "Inspect configuration", "Quit"} {
+	for _, present := range []string{
+		"Configuration matches",
+		"cleanup runs on demand",
+		"Update software",
+		"Config, mise, tools, and packages",
+		"Update repositories",
+		"fetch and fast-forward clean checkouts",
+		"Clean up",
+		"unused tools and Config state",
+		"Inspect configuration",
+		"Quit",
+	} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("clean dashboard missing %q:\n%s", present, view)
 		}
@@ -77,6 +88,21 @@ func TestDashboardBoundsLargeAttentionLists(t *testing.T) {
 	view := m.renderDashboard()
 	if lipgloss.Height(view) > m.height || !strings.Contains(view, "more resources") {
 		t.Fatalf("dashboard overflowed or omitted summary (%d lines):\n%s", lipgloss.Height(view), view)
+	}
+}
+
+func TestCleanupPreviewBoundsLongPlans(t *testing.T) {
+	var lines []string
+	for index := range 30 {
+		lines = append(lines, fmt.Sprintf("candidate %d", index))
+	}
+	m := Model{
+		screen: screenPrune, prunePreview: strings.Join(lines, "\n"), pruneHasWork: true,
+		width: 80, height: 24,
+	}
+	view := m.renderPrune()
+	if lipgloss.Height(view) > m.height || !strings.Contains(view, "↑/↓ scroll") || !strings.Contains(view, "Prune these items") {
+		t.Fatalf("cleanup preview overflowed or lost its controls (%d lines):\n%s", lipgloss.Height(view), view)
 	}
 }
 

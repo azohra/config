@@ -186,9 +186,18 @@ func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, code := runConfig(t, binary, home, "update")
-	if code != 1 || !strings.Contains(output, "mise unavailable") || strings.Contains(output, "config.toml") {
-		t.Fatalf("config update read the machine document before updating itself (exit %d):\n%s", code, output)
+	for _, args := range [][]string{{"update"}, {"update", "software"}, {"update", "repositories"}} {
+		output, code := runConfig(t, binary, home, args...)
+		if code != 1 || !strings.Contains(output, "mise unavailable") || strings.Contains(output, "config.toml") {
+			t.Fatalf("config %s read the machine document before updating itself (exit %d):\n%s", strings.Join(args, " "), code, output)
+		}
+	}
+}
+
+func TestUpdateRejectsAnUnknownScope(t *testing.T) {
+	output, code := runConfig(t, buildConfig(t), t.TempDir(), "update", "everything")
+	if code != 1 || !strings.Contains(output, "usage: config update [software | repositories]") {
+		t.Fatalf("unknown update scope exited %d:\n%s", code, output)
 	}
 }
 

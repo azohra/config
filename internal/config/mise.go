@@ -73,8 +73,8 @@ func supportsTestedMise(version string) bool {
 // misePhases are the bootstrap categories Config probes. mise offers no way
 // to ask for the aggregate without repos, and repos is the one phase that
 // reaches the network: it answers whether a checkout matches its remote,
-// which costs a round trip each and is config update's job. Config asks for
-// the rest by name and checks repository presence itself.
+// which costs a round trip each and belongs to the repository update scope.
+// Config asks for the rest by name and checks repository presence itself.
 //
 // TestMisePhasesCoverEveryBootstrapPhase pins this list to what mise offers,
 // so a phase added upstream fails the build instead of going unreported.

@@ -1,6 +1,10 @@
 package ui
 
 import (
+	"bytes"
+	"io"
+	"strings"
+
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
@@ -14,6 +18,7 @@ const (
 	screenInventory
 	screenPlan
 	screenSnapshot
+	screenPrune
 	screenRunning
 )
 
@@ -21,10 +26,17 @@ type reportMsg struct {
 	report config.Report
 }
 
+type prunePlanMsg struct {
+	preview string
+	hasWork bool
+	err     error
+}
+
 type Model struct {
 	paths           config.Paths
 	executable      string
 	inspector       config.Inspector
+	pruner          config.Pruner
 	report          config.Report
 	screen          screen
 	afterInspect    screen
@@ -33,6 +45,8 @@ type Model struct {
 	planCursor      int
 	scroll          int
 	choices         []planChoice
+	prunePreview    string
+	pruneHasWork    bool
 	spinner         spinner.Model
 	width           int
 	height          int
@@ -47,6 +61,7 @@ func New(paths config.Paths, machine config.Machine, executable string) Model {
 		paths:        paths,
 		executable:   executable,
 		inspector:    config.NewInspector(paths, machine, config.NewMachineRunner(paths)),
+		pruner:       config.NewPruner(paths, machine, io.Discard),
 		screen:       screenDashboard,
 		afterInspect: screenDashboard,
 		loading:      true,
@@ -64,6 +79,22 @@ func (m Model) inspectCmd() tea.Cmd {
 	inspector := m.inspector
 	return func() tea.Msg {
 		return reportMsg{report: inspector.Inspect()}
+	}
+}
+
+func (m Model) pruneCmd() tea.Cmd {
+	planner := m.pruner
+	return func() tea.Msg {
+		plan, err := planner.Plan()
+		if err != nil {
+			return prunePlanMsg{err: err}
+		}
+		var preview bytes.Buffer
+		config.WritePrunePlan(&preview, plan)
+		return prunePlanMsg{
+			preview: strings.TrimSpace(preview.String()),
+			hasWork: !plan.Empty(),
+		}
 	}
 }
 
@@ -101,6 +132,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.screen = screenDashboard
 		}
+	case prunePlanMsg:
+		m.loading = false
+		m.scroll = 0
+		if msg.err != nil {
+			m.last = operationResult{label: "Cleanup", err: msg.err}
+			m.screen = screenDashboard
+			break
+		}
+		m.prunePreview = msg.preview
+		m.pruneHasWork = msg.hasWork
+		m.screen = screenPrune
 	case operationEventMsg:
 		return m.updateOperation(msg)
 	case tea.KeyPressMsg:
@@ -123,6 +165,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePlan(msg)
 		case screenSnapshot:
 			return m.updateSnapshot(msg)
+		case screenPrune:
+			return m.updatePrune(msg)
 		}
 	}
 	return m, tea.Batch(commands...)

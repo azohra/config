@@ -131,7 +131,7 @@ func TestMiseChecksNameTheBootstrapPhaseThatNeedsAttention(t *testing.T) {
 }
 
 // The aggregate mise reports costs one network round trip per declared
-// repository, to answer a freshness question config update already owns.
+// repository to answer a freshness question the repository update scope owns.
 // Inspection must never reach for it.
 func TestMiseChecksNeverAskMiseForRepositoryFreshness(t *testing.T) {
 	runner := &miseStubRunner{}

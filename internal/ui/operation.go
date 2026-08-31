@@ -16,6 +16,8 @@ const maxOperationOutput = 128 << 10
 
 type operation struct {
 	label     string
+	name      string
+	args      []string
 	output    string
 	events    <-chan operationEvent
 	cancel    context.CancelFunc
@@ -55,7 +57,7 @@ func (w eventWriter) Write(data []byte) (int, error) {
 func (m Model) startOperation(label, name string, args ...string) (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan operationEvent)
-	m.operation = operation{label: label, events: events, cancel: cancel}
+	m.operation = operation{label: label, name: name, args: append([]string(nil), args...), events: events, cancel: cancel}
 	m.screen = screenRunning
 	return m, tea.Batch(
 		m.spinner.Tick,

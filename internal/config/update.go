@@ -16,6 +16,31 @@ const (
 	updateReexecEnv      = "AZOHRA_CONFIG_UPDATE_REEXEC_VERSION"
 )
 
+// UpdateScope selects the machine resources handled after any Config release
+// transition completes.
+type UpdateScope int
+
+const (
+	UpdateAll UpdateScope = iota
+	UpdateSoftware
+	UpdateRepositories
+)
+
+func (s UpdateScope) valid() bool {
+	return s >= UpdateAll && s <= UpdateRepositories
+}
+
+func (s UpdateScope) arguments() []string {
+	switch s {
+	case UpdateSoftware:
+		return []string{"software"}
+	case UpdateRepositories:
+		return []string{"repositories"}
+	default:
+		return nil
+	}
+}
+
 type Updater struct {
 	Version           string
 	Mise              string
@@ -68,7 +93,10 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 	}
 }
 
-func (u Updater) Update() error {
+func (u Updater) Update(scope UpdateScope) error {
+	if !scope.valid() {
+		return errors.New("invalid update scope")
+	}
 	if err := requireExecutableFile(u.Mise); err != nil {
 		return fmt.Errorf("mise unavailable at %s", u.Mise)
 	}
@@ -76,7 +104,7 @@ func (u Updater) Update() error {
 		if err := u.ValidateMachine(); err != nil {
 			return err
 		}
-		return u.updateMachine()
+		return u.updateMachine(scope)
 	}
 	if !stableConfigVersion(u.Version) {
 		return fmt.Errorf("Config build version %q cannot update itself", u.Version)
@@ -94,7 +122,7 @@ func (u Updater) Update() error {
 		if err := os.Unsetenv(updateReexecEnv); err != nil {
 			return fmt.Errorf("clear Config update state: %w", err)
 		}
-		return u.updateMachine()
+		return u.updateMachine(scope)
 	}
 
 	// The current release first restores the mise version it was tested with.
@@ -130,25 +158,35 @@ func (u Updater) Update() error {
 	u.Log.OK("Config " + installedVersion + " installed")
 
 	environment := ChildEnvironment([]string{updateReexecEnv + "=" + installedVersion})
-	if err := u.Reexec(u.Config, []string{u.Config, "update"}, environment); err != nil {
+	arguments := append([]string{u.Config, "update"}, scope.arguments()...)
+	if err := u.Reexec(u.Config, arguments, environment); err != nil {
 		return fmt.Errorf("re-exec Config %s: %w", installedVersion, err)
 	}
 	return nil
 }
 
-func (u Updater) updateMachine() error {
+func (u Updater) updateMachine(scope UpdateScope) error {
 	if err := u.updateMise(); err != nil {
 		return err
 	}
 
-	steps := []struct {
+	type updateStep struct {
 		name    string
 		success string
 		args    []string
-	}{
-		{"Tools", "declared tools updated", []string{"upgrade", "--yes"}},
-		{"Packages", "declared packages updated", []string{"bootstrap", "packages", "upgrade", "--yes"}},
-		{"Repositories", "clean repositories updated", []string{"bootstrap", "repos", "update", "--yes", "--skip-dirty"}},
+	}
+	var steps []updateStep
+	if scope == UpdateAll || scope == UpdateSoftware {
+		steps = append(steps,
+			updateStep{"Tools", "declared tools updated", []string{"upgrade", "--yes"}},
+			updateStep{"Packages", "declared packages updated", []string{"bootstrap", "packages", "upgrade", "--yes"}},
+		)
+	}
+	if scope == UpdateAll || scope == UpdateRepositories {
+		steps = append(steps, updateStep{
+			"Repositories", "clean repositories updated",
+			[]string{"bootstrap", "repos", "update", "--yes", "--skip-dirty"},
+		})
 	}
 
 	var failures []error

@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,11 +95,90 @@ func TestUpdateRunsOnlyWhenSelected(t *testing.T) {
 	}
 	next, cmd := m.updateDashboard(press(tea.KeyEnter))
 	running := next.(Model)
-	if running.screen != screenRunning || running.operation.label != "Update" {
-		t.Fatalf("screen=%v label=%q, want running Update", running.screen, running.operation.label)
+	if running.screen != screenRunning || running.operation.label != "Software update" {
+		t.Fatalf("screen=%v label=%q, want running software update", running.screen, running.operation.label)
 	}
 	if cmd == nil {
 		t.Fatal("Update did not start an operation")
+	}
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "software"}) {
+		t.Fatalf("software update command = %q %q", running.operation.name, running.operation.args)
+	}
+}
+
+func TestDashboardKeepsEveryLifecycleActionVisible(t *testing.T) {
+	m := Model{report: config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}}}
+	want := []dashboardAction{
+		dashboardInspect,
+		dashboardUpdateSoftware,
+		dashboardUpdateRepositories,
+		dashboardCleanup,
+		dashboardQuit,
+	}
+	if got := m.dashboardActions(); !slices.Equal(got, want) {
+		t.Fatalf("dashboard actions = %v, want %v", got, want)
+	}
+}
+
+func TestRepositoryUpdateIsSeparateFromSoftwareUpdate(t *testing.T) {
+	m := Model{
+		screen:          screenDashboard,
+		report:          config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}},
+		dashboardCursor: 2,
+		executable:      "/tmp/config",
+	}
+	next, cmd := m.updateDashboard(press(tea.KeyEnter))
+	running := next.(Model)
+	if cmd == nil || running.screen != screenRunning || running.operation.label != "Repository update" {
+		t.Fatalf("screen=%v label=%q command=%v", running.screen, running.operation.label, cmd)
+	}
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "repositories"}) {
+		t.Fatalf("repository update command = %q %q", running.operation.name, running.operation.args)
+	}
+}
+
+func TestCleanupPlansBeforeItCanRun(t *testing.T) {
+	m := Model{
+		screen:          screenDashboard,
+		report:          config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}},
+		dashboardCursor: 3,
+		executable:      "/tmp/config",
+	}
+	next, cmd := m.updateDashboard(press(tea.KeyEnter))
+	planning := next.(Model)
+	if cmd == nil || planning.screen != screenPrune || !planning.loading {
+		t.Fatalf("screen=%v loading=%v command=%v, want prune planning", planning.screen, planning.loading, cmd)
+	}
+
+	next, _ = planning.Update(prunePlanMsg{preview: "Prune plan\n\nMise tools\n  node@23", hasWork: true})
+	preview := next.(Model)
+	if preview.loading || preview.screen != screenPrune || !strings.Contains(preview.renderPrune(), "node@23") {
+		t.Fatalf("cleanup preview was not shown:\n%s", preview.render())
+	}
+	next, cmd = preview.updatePrune(press(tea.KeyEnter))
+	running := next.(Model)
+	if cmd == nil || running.screen != screenRunning || running.operation.label != "Cleanup" {
+		t.Fatalf("screen=%v label=%q command=%v", running.screen, running.operation.label, cmd)
+	}
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"prune", "--yes"}) {
+		t.Fatalf("cleanup command = %q %q", running.operation.name, running.operation.args)
+	}
+}
+
+func TestEmptyCleanupPlanReturnsWithoutRunningACommand(t *testing.T) {
+	m := Model{screen: screenPrune, prunePreview: "Prune plan\n\n  Nothing to prune."}
+	next, cmd := m.updatePrune(press(tea.KeyEnter))
+	if got := next.(Model); got.screen != screenDashboard || cmd != nil {
+		t.Fatalf("empty cleanup screen=%v command=%v", got.screen, cmd)
+	}
+}
+
+func TestCleanupPlanningFailureReturnsToTheDashboard(t *testing.T) {
+	m := Model{screen: screenPrune, loading: true}
+	next, _ := m.Update(prunePlanMsg{err: errors.New("inventory unavailable")})
+	got := next.(Model)
+	if got.loading || got.screen != screenDashboard || got.last.label != "Cleanup" || got.last.err == nil {
+		t.Fatalf("cleanup failure = loading %v screen %v result %+v", got.loading, got.screen, got.last)
 	}
 }
 

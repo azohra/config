@@ -158,8 +158,8 @@ func (i Inspector) toolCheck() Check {
 
 // repositoryChecks answer what [bootstrap.repos] declares: this repository
 // belongs at this path. Both halves read locally. How far a checkout has
-// drifted from its remote is a different question, one config update owns
-// and one that costs a network round trip for every repository.
+// drifted from its remote is a different question owned by the repository
+// update scope, and one that costs a network round trip for every repository.
 func (i Inspector) repositoryChecks() []Check {
 	declared, err := miseRepositories(i.Paths, i.Runner)
 	if err != nil {

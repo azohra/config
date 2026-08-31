@@ -35,7 +35,7 @@ fi
 	updater := newUpdateTestUpdater(paths, &output, "dev")
 	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
 	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "Tools") {
 		t.Fatalf("Update() error = %v, want Tools failure", err)
 	}
@@ -63,6 +63,89 @@ fi
 	}
 }
 
+func TestUpdaterRunsOnlyTheSelectedMachineUpdateScope(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		scope UpdateScope
+		want  []string
+	}{
+		{
+			name:  "software",
+			scope: UpdateSoftware,
+			want: []string{
+				"--no-config self-update " + testedMiseVersion + " --yes --no-plugins",
+				"--version",
+				"upgrade --yes",
+				"bootstrap packages upgrade --yes",
+			},
+		},
+		{
+			name:  "repositories",
+			scope: UpdateRepositories,
+			want: []string{
+				"--no-config self-update " + testedMiseVersion + " --yes --no-plugins",
+				"--version",
+				"bootstrap repos update --yes --skip-dirty",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := testPaths(t)
+			logPath := filepath.Join(t.TempDir(), "commands")
+			t.Setenv("UPDATE_TEST_LOG", logPath)
+			writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
+if [ "$1" = --version ]; then
+  printf '%s\n' '`+testedMiseVersion+`'
+fi
+`)
+
+			updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev")
+			if err := updater.Update(test.scope); err != nil {
+				t.Fatal(err)
+			}
+			commands, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Split(strings.TrimSpace(string(commands)), "\n")
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("commands =\n%s\nwant =\n%s", strings.Join(got, "\n"), strings.Join(test.want, "\n"))
+			}
+		})
+	}
+}
+
+func TestUpdateScopePreservesTheSelectionAcrossReexec(t *testing.T) {
+	for _, test := range []struct {
+		scope UpdateScope
+		want  []string
+	}{
+		{UpdateAll, nil},
+		{UpdateSoftware, []string{"software"}},
+		{UpdateRepositories, []string{"repositories"}},
+	} {
+		if got := test.scope.arguments(); !slices.Equal(got, test.want) {
+			t.Errorf("scope %d arguments = %v, want %v", test.scope, got, test.want)
+		}
+	}
+}
+
+func TestUpdaterRejectsAnUnknownScopeBeforeMutation(t *testing.T) {
+	paths := testPaths(t)
+	logPath := filepath.Join(t.TempDir(), "commands")
+	t.Setenv("UPDATE_TEST_LOG", logPath)
+	writeUpdateExecutable(t, misePath(paths), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$UPDATE_TEST_LOG\"\n")
+
+	err := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev").Update(UpdateScope(99))
+	if err == nil || !strings.Contains(err.Error(), "invalid update scope") {
+		t.Fatalf("Update() error = %v, want invalid scope", err)
+	}
+	if commands, readErr := os.ReadFile(logPath); !os.IsNotExist(readErr) || len(commands) != 0 {
+		t.Fatalf("invalid scope ran commands %q: %v", commands, readErr)
+	}
+}
+
 func TestUpdaterVerifiesMiseBeforeFurtherMutations(t *testing.T) {
 	paths := testPaths(t)
 	canonical := misePath(paths)
@@ -85,7 +168,7 @@ fi
 	updater := newUpdateTestUpdater(paths, &output, "dev")
 	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
 	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "2026.8.15 is unsupported") {
 		t.Fatalf("Update() error = %v, want unsupported mise version", err)
 	}
@@ -119,7 +202,7 @@ exit 23
 	updater := newUpdateTestUpdater(paths, &output, "dev")
 	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
 	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "mise") {
 		t.Fatalf("Update() error = %v, want mise failure", err)
 	}
@@ -135,7 +218,7 @@ exit 23
 
 func TestUpdaterRequiresCanonicalMise(t *testing.T) {
 	paths := testPaths(t)
-	err := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev").Update()
+	err := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev").Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), misePath(paths)) {
 		t.Fatalf("Update() error = %v, want the canonical path", err)
 	}
@@ -189,7 +272,7 @@ fi
 		reexecEnvironment = slices.Clone(environment)
 		return nil
 	}
-	if err := updater.Update(); err != nil {
+	if err := updater.Update(UpdateSoftware); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,7 +294,7 @@ fi
 	if string(commands) != want {
 		t.Fatalf("commands =\n%s\nwant =\n%s", commands, want)
 	}
-	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update"}) {
+	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "software"}) {
 		t.Fatalf("re-exec = %q %q", reexecPath, reexecArgs)
 	}
 	if environmentValue(reexecEnvironment, updateReexecEnv) != "v0.5.0" {
@@ -243,7 +326,7 @@ fi
 		t.Fatal("failed acquisition attempted to re-exec")
 		return nil
 	}
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "Config") {
 		t.Fatalf("Update() error = %v, want release acquisition failure", err)
 	}
@@ -282,7 +365,7 @@ fi
 		t.Fatal("unverified build attempted to re-exec")
 		return nil
 	}
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "installed Config version is unreadable") {
 		t.Fatalf("Update() error = %v, want installed version failure", err)
 	}
@@ -313,7 +396,7 @@ fi
 		t.Fatal("mismatched installed release attempted to re-exec")
 		return nil
 	}
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "installed Config is v0.4.0, want resolved release v0.5.0") {
 		t.Fatalf("Update() error = %v, want exact installed release failure", err)
 	}
@@ -350,7 +433,7 @@ fi
 		t.Fatal("mismatched release executable attempted to re-exec")
 		return nil
 	}
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "release executable is v0.4.0, want resolved release v0.5.0") {
 		t.Fatalf("Update() error = %v, want acquired executable version failure", err)
 	}
@@ -384,7 +467,7 @@ fi
 		t.Fatal("downgrade attempted to re-exec")
 		return nil
 	}
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "older release v0.3.0") {
 		t.Fatalf("Update() error = %v, want downgrade refusal", err)
 	}
@@ -421,7 +504,7 @@ fi
 		t.Fatal("resumed update attempted to re-exec")
 		return nil
 	}
-	if err := updater.Update(); err != nil {
+	if err := updater.Update(UpdateAll); err != nil {
 		t.Fatal(err)
 	}
 	commands, err := os.ReadFile(logPath)
@@ -454,7 +537,7 @@ func TestReexecutedUpdaterRequiresTheCanonicalCommand(t *testing.T) {
 
 	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "v0.5.0")
 	updater.CurrentExecutable = func() (string, error) { return other, nil }
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "outside the canonical command") {
 		t.Fatalf("Update() error = %v, want canonical command failure", err)
 	}
@@ -467,7 +550,7 @@ func TestReexecutedUpdaterRequiresItsVersionBoundMarker(t *testing.T) {
 	writeUpdateExecutable(t, ConfigCommandPath(paths), "#!/bin/sh\nexit 0\n")
 
 	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "v0.5.0")
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), `resumed with version "v0.4.0", but this is v0.5.0`) {
 		t.Fatalf("Update() error = %v, want marker version failure", err)
 	}
@@ -480,7 +563,7 @@ func TestDevelopmentUpdaterValidatesTheMachineBeforeMutation(t *testing.T) {
 	writeUpdateExecutable(t, misePath(paths), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$UPDATE_TEST_LOG\"\n")
 
 	updater := NewUpdater(paths, &bytes.Buffer{}, "dev")
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil {
 		t.Fatal("development update accepted a missing machine document")
 	}
@@ -500,7 +583,7 @@ func TestReexecutedUpdaterValidatesTheMachineBeforeMutation(t *testing.T) {
 
 	updater := NewUpdater(paths, &bytes.Buffer{}, "v0.5.0")
 	updater.CurrentExecutable = func() (string, error) { return canonicalConfig, nil }
-	err := updater.Update()
+	err := updater.Update(UpdateAll)
 	if err == nil {
 		t.Fatal("resumed update accepted a missing machine document")
 	}

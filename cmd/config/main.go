@@ -23,7 +23,7 @@ Usage:
   config --status
   config --version
   config path
-  config update
+  config update [software | repositories]
   config prune [--dry-run | --yes]
   config bootstrap <repository>
 
@@ -34,9 +34,10 @@ Bootstrap clones an authenticated Git repository into Config's managed storage,
 installs the permanent Config command, and resumes restore until every declared
 step has completed. Path prints the managed repository's canonical location.
 
-Update verifies its canonical mise substrate, installs the latest verified
-Config release, then continues from that release to update mise, declared tools,
-packages, and clean repositories. It runs only when explicitly invoked.
+Update verifies its canonical mise substrate and installs the latest verified
+Config release before updating the selected resources. With no selection it
+updates declared tools, packages, and clean repositories. Software omits the
+networked repository phase; repositories runs only that phase.
 
 Prune previews stale mise inventory and Config-owned local state. Without a
 terminal it is preview-only; --yes applies the exact plan after checking it
@@ -82,10 +83,20 @@ func run() error {
 		return config.InstallCurrent(paths)
 	}
 	if len(args) > 0 && args[0] == "update" {
-		if len(args) != 1 {
-			return errors.New("usage: config update")
+		scope := config.UpdateAll
+		if len(args) == 2 {
+			switch args[1] {
+			case "software":
+				scope = config.UpdateSoftware
+			case "repositories":
+				scope = config.UpdateRepositories
+			default:
+				return errors.New("usage: config update [software | repositories]")
+			}
+		} else if len(args) != 1 {
+			return errors.New("usage: config update [software | repositories]")
 		}
-		return config.NewUpdater(paths, os.Stdout, version).Update()
+		return config.NewUpdater(paths, os.Stdout, version).Update(scope)
 	}
 	var machine config.Machine
 	restorePending := false
