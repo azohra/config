@@ -203,3 +203,18 @@ func TestOperationTailColorsStepLines(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardAllClearNamesTheDeclaredBranch(t *testing.T) {
+	// A machine repository that declares any other branch was told its
+	// snapshot agrees with a branch it does not use.
+	report := config.Report{Snapshot: config.SnapshotStatus{
+		Upstream: "origin/machine", Destination: "origin/machine",
+	}}
+	_, detail := dashboardHealth(report)
+	if !strings.Contains(detail, "origin/machine") {
+		t.Fatalf("all-clear detail = %q", detail)
+	}
+	if strings.Contains(detail, "origin/main") {
+		t.Fatalf("all-clear detail names a branch the machine does not use: %q", detail)
+	}
+}
