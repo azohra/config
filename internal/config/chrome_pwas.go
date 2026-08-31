@@ -217,9 +217,7 @@ func (b Bidirectional) chromePWASaved() (json.RawMessage, []chromePWA, bool, err
 		return nil, nil, false, err
 	}
 	var snapshot chromePWASnapshot
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&snapshot); err != nil {
+	if err := decodeExactJSON(data, &snapshot); err != nil {
 		return nil, nil, true, err
 	}
 	if snapshot.Schema != chromePWAsSchema || snapshot.Apps == nil {
@@ -361,7 +359,7 @@ func (b Bidirectional) InspectChromePWAs() Resource {
 		resource.ActionLabels = map[Action]string{Apply: "Restore the saved PWAs"}
 		return resource
 	}
-	chromePWAWords.offer(&resource, Classify(saved, live, baseline, hasBaseline))
+	chromePWAWords.offer(&resource, classify(saved, live, baseline, hasBaseline))
 	return resource
 }
 

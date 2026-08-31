@@ -53,7 +53,7 @@ func snapshotFixture(t *testing.T) (Snapshotter, string, string) {
 	gitTest(t, root, "push", "--quiet", "--set-upstream", "origin", "main")
 
 	var output bytes.Buffer
-	live := NewLiveRunner(root)
+	live := newLiveRunner(root)
 	live.Stdout, live.Stderr = &output, &output
 	machine := testMachine()
 	machine.Repository.URL = remote
@@ -170,7 +170,7 @@ func TestSnapshotRejectedPushLeavesLocalCommit(t *testing.T) {
 func TestSnapshotSaveKeepsCommandsQuiet(t *testing.T) {
 	snapshotter, root, _ := snapshotFixture(t)
 	var chatter bytes.Buffer
-	live := NewLiveRunner(root)
+	live := newLiveRunner(root)
 	live.Stdout, live.Stderr = &chatter, &chatter
 	snapshotter.Live = live
 	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("quiet\n"), 0o644); err != nil {

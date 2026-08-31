@@ -227,7 +227,7 @@ func TestUpdaterRequiresCanonicalMise(t *testing.T) {
 func TestReleasedUpdaterInstallsAndReexecutesTheVerifiedPermanentRelease(t *testing.T) {
 	paths := testPaths(t)
 	canonicalMise := misePath(paths)
-	canonicalConfig := ConfigCommandPath(paths)
+	canonicalConfig := configCommandPath(paths)
 	releaseDirectory := t.TempDir()
 	releaseConfig := filepath.Join(releaseDirectory, "config")
 	releaseCache := filepath.Join(filepath.Dir(paths.StateDir), "release-mise")
@@ -356,7 +356,7 @@ if [ "$2" = where ]; then
 fi
 `)
 	writeUpdateExecutable(t, filepath.Join(releaseDirectory, "config"), "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf 'config v0.4.0\\n'\nfi\n")
-	writeUpdateExecutable(t, ConfigCommandPath(paths), "#!/bin/sh\nprintf 'config dev\\n'\n")
+	writeUpdateExecutable(t, configCommandPath(paths), "#!/bin/sh\nprintf 'config dev\\n'\n")
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
@@ -387,7 +387,7 @@ if [ "$2" = where ]; then
 fi
 `)
 	writeUpdateExecutable(t, filepath.Join(releaseDirectory, "config"), "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf 'config v0.5.0\\n'\nfi\n")
-	writeUpdateExecutable(t, ConfigCommandPath(paths), "#!/bin/sh\nprintf 'config v0.4.0\\n'\n")
+	writeUpdateExecutable(t, configCommandPath(paths), "#!/bin/sh\nprintf 'config v0.4.0\\n'\n")
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
@@ -483,7 +483,7 @@ fi
 
 func TestReexecutedUpdaterRunsMachineUpdatesWithoutRecursion(t *testing.T) {
 	paths := testPaths(t)
-	canonicalConfig := ConfigCommandPath(paths)
+	canonicalConfig := configCommandPath(paths)
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
 	t.Setenv(updateReexecEnv, "v0.5.0")
@@ -531,7 +531,7 @@ func TestReexecutedUpdaterRequiresTheCanonicalCommand(t *testing.T) {
 	paths := testPaths(t)
 	t.Setenv(updateReexecEnv, "v0.5.0")
 	writeUpdateExecutable(t, misePath(paths), "#!/bin/sh\nexit 0\n")
-	writeUpdateExecutable(t, ConfigCommandPath(paths), "#!/bin/sh\nexit 0\n")
+	writeUpdateExecutable(t, configCommandPath(paths), "#!/bin/sh\nexit 0\n")
 	other := filepath.Join(t.TempDir(), "config")
 	writeUpdateExecutable(t, other, "#!/bin/sh\nexit 0\n")
 
@@ -547,7 +547,7 @@ func TestReexecutedUpdaterRequiresItsVersionBoundMarker(t *testing.T) {
 	paths := testPaths(t)
 	t.Setenv(updateReexecEnv, "v0.4.0")
 	writeUpdateExecutable(t, misePath(paths), "#!/bin/sh\nexit 0\n")
-	writeUpdateExecutable(t, ConfigCommandPath(paths), "#!/bin/sh\nexit 0\n")
+	writeUpdateExecutable(t, configCommandPath(paths), "#!/bin/sh\nexit 0\n")
 
 	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "v0.5.0")
 	err := updater.Update(UpdateAll)
@@ -574,7 +574,7 @@ func TestDevelopmentUpdaterValidatesTheMachineBeforeMutation(t *testing.T) {
 
 func TestReexecutedUpdaterValidatesTheMachineBeforeMutation(t *testing.T) {
 	paths := testPaths(t)
-	canonicalConfig := ConfigCommandPath(paths)
+	canonicalConfig := configCommandPath(paths)
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
 	t.Setenv(updateReexecEnv, "v0.5.0")

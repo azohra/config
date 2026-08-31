@@ -172,7 +172,7 @@ func TestMiseEnvironmentNamesTheSelectedRootWithoutMutatingTheProcess(t *testing
 	t.Setenv("MISE_GLOBAL_CONFIG_ROOT", "before")
 	t.Setenv("MISE_CEILING_PATHS", "before")
 	t.Setenv("MISE_AUTO_UPDATE", "before")
-	environment := MiseEnvironment(paths)
+	environment := miseEnvironment(paths)
 	if got := environment[0]; got != "MISE_AUTO_UPDATE=0" {
 		t.Fatalf("machine environment = %v", environment)
 	}

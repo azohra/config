@@ -103,7 +103,7 @@ func testApplier(t *testing.T, paths Paths, machine Machine, runner Runner) (App
 		Live:    live,
 		Log:     Logger{Out: &chatter},
 		Bidir: Bidirectional{
-			Paths: paths, Runner: runner, Dock: defaultsDockStore{Runner: runner, Live: live},
+			Paths: paths, Dock: defaultsDockStore{Runner: runner, Live: live},
 			Baselines: Baselines{Dir: paths.StateDir},
 		},
 	}, &chatter
@@ -111,7 +111,7 @@ func testApplier(t *testing.T, paths Paths, machine Machine, runner Runner) (App
 
 func testBidirectional(paths Paths, runner Runner) Bidirectional {
 	return Bidirectional{
-		Paths: paths, Runner: runner, Dock: defaultsDockStore{Runner: runner},
+		Paths: paths, Dock: defaultsDockStore{Runner: runner},
 		Baselines: Baselines{Dir: paths.StateDir},
 	}
 }

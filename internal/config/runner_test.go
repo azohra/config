@@ -27,7 +27,7 @@ func TestMiseChildIgnoresAnAmbientConfigurationSelection(t *testing.T) {
 	for _, name := range hostileMiseSelectors {
 		t.Setenv(name, "/tmp/somebody-elses.toml")
 	}
-	environment := ChildEnvironment(MiseEnvironment(paths))
+	environment := childEnvironment(miseEnvironment(paths), nil)
 	for _, name := range hostileMiseSelectors {
 		var selections []string
 		for _, entry := range environment {
@@ -60,8 +60,8 @@ func TestReleaseRunnerPinsEveryProvenanceKnob(t *testing.T) {
 	for name := range pinned {
 		t.Setenv(name, "false")
 	}
-	updater := Updater{Substrate: NewLiveRunner(t.TempDir())}
-	environment := ChildEnvironment(updater.releaseRunner().Environment)
+	updater := Updater{Substrate: newLiveRunner(t.TempDir())}
+	environment := childEnvironment(updater.releaseRunner().Environment, nil)
 	for name, want := range pinned {
 		var values []string
 		for _, entry := range environment {
@@ -97,7 +97,7 @@ func TestMachineRunnersUseOnlyTheCanonicalMise(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	live := NewMachineLiveRunner(paths)
+	live := newMachineLiveRunner(paths)
 	live.Stdout, live.Stderr = &output, &output
 	if err := live.Command("mise"); err != nil {
 		t.Fatal(err)
@@ -176,9 +176,9 @@ func TestGitProbesAnswerAboutTheRepositoryConfigNamed(t *testing.T) {
 		t.Setenv(name, elsewhere)
 	}
 	for _, environment := range [][]string{
-		childEnvironment(NewGitRunner(t.TempDir()).Environment, NewGitRunner(t.TempDir()).Unset),
+		childEnvironment(newGitRunner(t.TempDir()).Environment, newGitRunner(t.TempDir()).Unset),
 		childEnvironment(NewMachineRunner(testPaths(t)).Environment, NewMachineRunner(testPaths(t)).Unset),
-		childEnvironment(NewLiveRunner(t.TempDir()).Environment, NewLiveRunner(t.TempDir()).Unset),
+		childEnvironment(newLiveRunner(t.TempDir()).Environment, newLiveRunner(t.TempDir()).Unset),
 	} {
 		for _, entry := range environment {
 			name, _, _ := strings.Cut(entry, "=")

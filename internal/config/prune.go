@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,7 +96,7 @@ func NewPruner(paths Paths, machine Machine, out io.Writer) Pruner {
 		Paths:   paths,
 		Machine: machine,
 		Runner:  NewMachineRunner(paths),
-		Live:    NewMachineLiveRunner(paths),
+		Live:    newMachineLiveRunner(paths),
 		Log:     Logger{Out: out},
 	}
 }
@@ -347,7 +346,7 @@ func (p Pruner) planHooks(warnings []string) ([]pruneHookTarget, []string, error
 			names = append(names, name)
 		}
 		slices.Sort(names)
-		candidate := pruneHookTarget{Name: target.Name, Dir: target.Dir, ManifestDigest: repositoryHookDigest(manifestBytes)}
+		candidate := pruneHookTarget{Name: target.Name, Dir: target.Dir, ManifestDigest: contentDigest(manifestBytes)}
 		for _, name := range names {
 			if declared[name] {
 				continue
@@ -367,7 +366,7 @@ func (p Pruner) planHooks(warnings []string) ([]pruneHookTarget, []string, error
 				if readErr != nil {
 					return nil, warnings, fmt.Errorf("read %s hook %s: %w", target.Name, name, readErr)
 				}
-				if repositoryHookDigest(body) != digest {
+				if contentDigest(body) != digest {
 					warnings = append(warnings, target.Name+": "+name+" changed since Config installed it; left untouched")
 					continue
 				}
@@ -438,7 +437,7 @@ func baselinePruneFile(path, resource, label string) (pruneFile, bool, string, e
 		baseline.Resource != resource || !json.Valid(baseline.Content) {
 		return pruneFile{}, false, label + " is unrecognised; left untouched", nil
 	}
-	return pruneFile{Label: label, Path: path, Digest: repositoryHookDigest(data)}, true, "", nil
+	return pruneFile{Label: label, Path: path, Digest: contentDigest(data)}, true, "", nil
 }
 
 func (p Pruner) planRestoreFiles() ([]pruneFile, []string, error) {
@@ -487,23 +486,11 @@ func (p Pruner) planRestoreFiles() ([]pruneFile, []string, error) {
 		if record.Status == restoreCompleteState && record.Checkout != current {
 			planned = append(planned, pruneFile{
 				Label: "completed restore record " + record.Checkout,
-				Path:  path, Digest: repositoryHookDigest(data),
+				Path:  path, Digest: contentDigest(data),
 			})
 		}
 	}
 	return planned, warnings, nil
-}
-
-func decodeExactJSON(data []byte, destination any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("JSON contains trailing data")
-	}
-	return nil
 }
 
 // WritePrunePlan renders the complete preview, including anything Config has
@@ -625,7 +612,7 @@ func applyPruneHooks(target pruneHookTarget) error {
 	if err != nil {
 		return err
 	}
-	if repositoryHookDigest(data) != target.ManifestDigest {
+	if contentDigest(data) != target.ManifestDigest {
 		return errors.New("ownership manifest changed after preview")
 	}
 	manifest, err := readRepositoryHookManifest(target.Dir)
@@ -649,7 +636,7 @@ func applyPruneHooks(target pruneHookTarget) error {
 			if err != nil {
 				return err
 			}
-			if repositoryHookDigest(body) != hook.Digest {
+			if contentDigest(body) != hook.Digest {
 				return fmt.Errorf("%s changed after preview", hook.Name)
 			}
 			if err := os.Remove(path); err != nil {
@@ -680,7 +667,7 @@ func applyPruneFile(file pruneFile) error {
 	if err != nil {
 		return err
 	}
-	if repositoryHookDigest(data) != file.Digest {
+	if contentDigest(data) != file.Digest {
 		return errors.New("file changed after preview")
 	}
 	return os.Remove(file.Path)

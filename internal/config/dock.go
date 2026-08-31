@@ -279,15 +279,8 @@ func reconcileDockTiles(original dockState, desired []string) (dockState, error)
 	return dockState{Present: true, Tiles: tiles}, nil
 }
 
-func (b Bidirectional) dockStore() dockStore {
-	if b.Dock != nil {
-		return b.Dock
-	}
-	return defaultsDockStore{Runner: b.Runner, Live: NewMachineLiveRunner(b.Paths)}
-}
-
 func (b Bidirectional) dockLive() (json.RawMessage, []string, error) {
-	state, err := b.dockStore().Read()
+	state, err := b.Dock.Read()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -350,7 +343,7 @@ func (b Bidirectional) InspectDock() Resource {
 	}
 	missing := len(all) - len(present)
 	baseline, hasBaseline, _ := b.Baselines.Load(resource.ID)
-	dockWords.offer(&resource, Classify(saved, live, baseline, hasBaseline))
+	dockWords.offer(&resource, classify(saved, live, baseline, hasBaseline))
 	resource.Details = dockDiff(present, liveApps)
 	if missing > 0 {
 		resource.Checks = append(resource.Checks, Check{

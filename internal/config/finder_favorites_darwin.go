@@ -245,10 +245,11 @@ func finderConstant(handle uintptr, name string) (uintptr, error) {
 	if err := registerFinderFunction(purego.RTLD_DEFAULT, "memcpy", &copyPointer); err != nil {
 		return 0, err
 	}
+	// memcpy returns its destination, which here is a live Go pointer, so its
+	// result carries no information. Whether the symbol held anything is the
+	// question, and the value itself answers it.
 	var value uintptr
-	if copyPointer(&value, symbol, unsafe.Sizeof(value)) == 0 {
-		return 0, fmt.Errorf("load %s: copy value", name)
-	}
+	copyPointer(&value, symbol, unsafe.Sizeof(value))
 	if value == 0 {
 		return 0, fmt.Errorf("load %s: value is nil", name)
 	}

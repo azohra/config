@@ -120,7 +120,7 @@ func TestChromePWAInspectionSupportsCaptureAndFreshMachineRestore(t *testing.T) 
 	icon := []byte("icon")
 	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
 	writeTestLivePWA(t, paths, app, icon)
-	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
 
 	resource := bidir.InspectChromePWAs()
 	if resource.State != Uncaptured || !slices.Equal(resource.Actions, []Action{Capture}) {
@@ -144,7 +144,7 @@ func TestChromePWAInspectionSupportsCaptureAndFreshMachineRestore(t *testing.T) 
 
 func TestChromePWAInitialCaptureTracksAnEmptyCollection(t *testing.T) {
 	paths := testPaths(t)
-	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
 
 	resource := bidir.InspectChromePWAs()
 	if resource.State != Uncaptured || resource.Failed() != 0 || !slices.Equal(resource.Actions, []Action{Capture}) {
@@ -168,7 +168,7 @@ func TestChromePWAInitialCaptureTracksAnEmptyCollection(t *testing.T) {
 func TestChromePWAEmptySnapshotCanRestoreAnEmptyCollection(t *testing.T) {
 	paths := testPaths(t)
 	runner := OSRunner{Dir: paths.Root}
-	bidir := NewBidirectional(paths, runner)
+	bidir := newBidirectional(paths, runner)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestChromePWAEmptySnapshotCanRestoreAnEmptyCollection(t *testing.T) {
 	applier := Applier{
 		Paths:  paths,
 		Runner: runner,
-		Live:   NewLiveRunner(paths.Root),
+		Live:   newLiveRunner(paths.Root),
 		Log:    Logger{Out: io.Discard},
 		Bidir:  bidir,
 	}
@@ -203,7 +203,7 @@ func TestChromePWASavedBackupVerifiesIconContent(t *testing.T) {
 	icon := []byte("icon")
 	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
 	writeTestLivePWA(t, paths, app, icon)
-	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestChromePWARestoreInstallsTheSavedBundle(t *testing.T) {
 	// Capture a live PWA, then remove it so the saved backup is the only copy.
 	bundle := writeTestLivePWA(t, paths, app, icon)
 	runner := OSRunner{Dir: paths.Root}
-	bidir := NewBidirectional(paths, runner)
+	bidir := newBidirectional(paths, runner)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestChromePWARestoreInstallsTheSavedBundle(t *testing.T) {
 	applier := Applier{
 		Paths:  paths,
 		Runner: runner,
-		Live:   NewLiveRunner(paths.Root),
+		Live:   newLiveRunner(paths.Root),
 		Log:    Logger{Out: io.Discard},
 		Bidir:  bidir,
 	}
@@ -338,7 +338,7 @@ func TestChromePWAsSurviveAForeignBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
 	_, live, damaged, err := bidir.chromePWALive()
 	if err != nil {
 		t.Fatalf("a foreign bundle broke the collection: %v", err)
@@ -370,7 +370,7 @@ func TestChromePWAsNameADamagedBundleWithoutLosingTheRest(t *testing.T) {
 		"CrAppModeShortcutURL":  "not a url",
 	}, icon)
 
-	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
 	_, live, damaged, err := bidir.chromePWALive()
 	if err != nil {
 		t.Fatalf("a damaged PWA broke the collection: %v", err)
@@ -411,7 +411,7 @@ func TestChromePWAsIgnoreContentChromeOwns(t *testing.T) {
 	paths := testPaths(t)
 	app := testChromePWA("YouTube", "agimnkijcaahngcdmfeangaknmldooml", "https://www.youtube.com/", []byte("old icon"))
 	writeTestLivePWA(t, paths, app, []byte("old icon"))
-	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestChromePWAsUseThreeWayReconciliationOnceTheSidesHaveAgreed(t *testing.T)
 	icon := []byte("icon")
 	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
 	writeTestLivePWA(t, paths, app, icon)
-	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}

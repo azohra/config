@@ -47,7 +47,7 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 	defer os.RemoveAll(staging)
 
 	checkout := filepath.Join(staging, "repository")
-	runner := NewLiveRunner(parent)
+	runner := newLiveRunner(parent)
 	runner.Stdout = stdout
 	runner.Stderr = stderr
 	if err := runner.Command("git", "clone", "--origin", managedRemote, "--", source, checkout); err != nil {
@@ -74,7 +74,7 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 }
 
 func validateMaterializedRepository(paths Paths, source string) (Machine, error) {
-	runner := NewGitRunner(paths.Root)
+	runner := newGitRunner(paths.Root)
 	top := run(runner, "git", "rev-parse", "--show-toplevel")
 	if top.Err != nil || !samePath(top.Output(), paths.Root) {
 		return Machine{}, fmt.Errorf("%s is not a Git repository rooted at Config's managed checkout", paths.Root)

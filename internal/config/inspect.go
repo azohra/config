@@ -293,7 +293,7 @@ func (i Inspector) Inspect() Report { return i.inspect(true) }
 func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(machineSetup bool) Report {
-	bidir := NewBidirectional(i.Paths, i.Runner)
+	bidir := newBidirectional(i.Paths, i.Runner)
 	var setup, chromePWAs, dock, finderFavorites, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
@@ -304,7 +304,7 @@ func (i Inspector) inspect(machineSetup bool) Report {
 		tasks = append(tasks, func() { setup = i.setup() })
 		if len(i.Machine.RepositoryHooks) > 0 {
 			tasks = append(tasks, func() {
-				repositoryHooks = InspectRepositoryHooks(i.Paths, i.Machine, i.Runner)
+				repositoryHooks = inspectRepositoryHooks(i.Paths, i.Machine, i.Runner)
 			})
 		}
 	}

@@ -131,7 +131,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	manifestPath := filepath.Join(hooks, repositoryHookManifestName)
 	manifest := repositoryHookManifest{
 		Schema: repositoryHookManifestSchema,
-		Hooks:  map[string]string{"post-checkout": repositoryHookDigest(hookBody)},
+		Hooks:  map[string]string{"post-checkout": contentDigest(hookBody)},
 	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
@@ -388,7 +388,7 @@ func TestPruneRefusesEveryFileThatChangedAfterPreview(t *testing.T) {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file := pruneFile{Label: "a baseline", Path: path, Digest: repositoryHookDigest(body)}
+	file := pruneFile{Label: "a baseline", Path: path, Digest: contentDigest(body)}
 
 	if err := os.WriteFile(path, []byte("{\"schema\":2}\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -430,7 +430,7 @@ func TestPruneRefusesEveryFileThatChangedAfterPreview(t *testing.T) {
 func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 	dir := t.TempDir()
 	body := []byte("#!/bin/sh\nexit 0\n")
-	digest := repositoryHookDigest(body)
+	digest := contentDigest(body)
 	hookPath := filepath.Join(dir, "post-checkout")
 	manifestPath := filepath.Join(dir, repositoryHookManifestName)
 	writeManifest := func(hookDigest string) []byte {
@@ -450,12 +450,12 @@ func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := pruneHookTarget{
-		Name: "a repository", Dir: dir, ManifestDigest: repositoryHookDigest(manifestBytes),
+		Name: "a repository", Dir: dir, ManifestDigest: contentDigest(manifestBytes),
 		Hooks: []pruneHook{{Name: "post-checkout", Digest: digest, RemoveFile: true}},
 	}
 
 	// The manifest moved: something re-claimed the hook after the preview.
-	writeManifest(repositoryHookDigest([]byte("#!/bin/sh\nexit 1\n")))
+	writeManifest(contentDigest([]byte("#!/bin/sh\nexit 1\n")))
 	if err := applyPruneHooks(target); err == nil {
 		t.Fatal("a hook whose ownership moved after preview was deleted")
 	}
@@ -465,7 +465,7 @@ func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 
 	// The manifest is back, but the hook body itself changed.
 	manifestBytes = writeManifest(digest)
-	target.ManifestDigest = repositoryHookDigest(manifestBytes)
+	target.ManifestDigest = contentDigest(manifestBytes)
 	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\necho mine\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

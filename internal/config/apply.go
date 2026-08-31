@@ -85,10 +85,10 @@ func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 		Paths:           paths,
 		Machine:         machine,
 		Runner:          runner,
-		Live:            NewMachineLiveRunner(paths),
+		Live:            newMachineLiveRunner(paths),
 		FinderFavorites: newFinderFavoritesStore(),
 		Log:             Logger{Out: out},
-		Bidir:           NewBidirectional(paths, runner),
+		Bidir:           newBidirectional(paths, runner),
 	}
 }
 
@@ -329,7 +329,7 @@ func (e Applier) applyDock() error {
 			return advisoryError{fmt.Sprintf("%s is unavailable; Dock left untouched", filepath.Base(app))}
 		}
 	}
-	store := e.Bidir.dockStore()
+	store := e.Bidir.Dock
 	original, err := store.Read()
 	if err != nil {
 		return fmt.Errorf("read Dock layout: %w", err)

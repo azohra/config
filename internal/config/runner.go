@@ -140,7 +140,7 @@ type LiveRunner struct {
 	Stderr      io.Writer
 }
 
-func NewLiveRunner(dir string) LiveRunner {
+func newLiveRunner(dir string) LiveRunner {
 	return LiveRunner{
 		Dir: dir, Unset: gitLocalEnvironment,
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
@@ -150,15 +150,15 @@ func NewLiveRunner(dir string) LiveRunner {
 func NewMachineRunner(paths Paths) OSRunner {
 	return OSRunner{
 		Dir:         paths.Root,
-		Environment: MiseEnvironment(paths),
+		Environment: miseEnvironment(paths),
 		Unset:       gitLocalEnvironment,
 		Executables: map[string]string{"mise": misePath(paths)},
 	}
 }
 
-func NewMachineLiveRunner(paths Paths) LiveRunner {
-	runner := NewLiveRunner(paths.Root)
-	runner.Environment = MiseEnvironment(paths)
+func newMachineLiveRunner(paths Paths) LiveRunner {
+	runner := newLiveRunner(paths.Root)
+	runner.Environment = miseEnvironment(paths)
 	runner.Unset = gitLocalEnvironment
 	runner.Executables = map[string]string{"mise": misePath(paths)}
 	return runner
@@ -180,15 +180,10 @@ func (r LiveRunner) Command(name string, args ...string) error {
 	return nil
 }
 
-// ChildEnvironment overlays explicit values without leaving duplicate names
-// whose winner would depend on the child process's environment parser.
-func ChildEnvironment(overrides []string) []string {
-	return childEnvironment(overrides, nil)
-}
-
-// childEnvironment also drops the names in unset. An explicit override wins:
-// a value Config supplies is a decision, while unset only removes what the
-// caller happened to export.
+// childEnvironment overlays explicit values without leaving duplicate names
+// whose winner would depend on the child process's environment parser, and
+// drops the names in unset. An explicit override wins: a value Config supplies
+// is a decision, while unset only removes what the caller happened to export.
 func childEnvironment(overrides, unset []string) []string {
 	if len(overrides) == 0 && len(unset) == 0 {
 		return nil // os/exec inherits the current process for a nil Env.
@@ -227,7 +222,7 @@ var gitLocalEnvironment = []string{
 	"GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
 }
 
-// NewGitRunner reads a Git repository at dir and nothing else.
-func NewGitRunner(dir string) OSRunner {
+// newGitRunner reads a Git repository at dir and nothing else.
+func newGitRunner(dir string) OSRunner {
 	return OSRunner{Dir: dir, Unset: gitLocalEnvironment}
 }

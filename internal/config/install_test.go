@@ -15,7 +15,7 @@ func TestInstallExecutableCreatesAnExactPermanentCommand(t *testing.T) {
 	if err := os.WriteFile(source, content, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := InstallExecutable(destination, source); err != nil {
+	if err := installExecutable(destination, source); err != nil {
 		t.Fatal(err)
 	}
 	installed, err := os.ReadFile(destination)
@@ -52,7 +52,7 @@ func TestInstallExecutableReplacesASymlinkWithoutChangingItsTarget(t *testing.T)
 	if err := os.Symlink(oldTarget, destination); err != nil {
 		t.Fatal(err)
 	}
-	if err := InstallExecutable(destination, source); err != nil {
+	if err := installExecutable(destination, source); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Lstat(destination); err != nil || !info.Mode().IsRegular() {
@@ -73,7 +73,7 @@ func TestInstallExecutableRefusesADirectoryDestination(t *testing.T) {
 	if err := os.Mkdir(destination, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := InstallExecutable(destination, source); err == nil || !strings.Contains(err.Error(), "not a regular file or symlink") {
+	if err := installExecutable(destination, source); err == nil || !strings.Contains(err.Error(), "not a regular file or symlink") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -83,7 +83,7 @@ func TestInstallExecutableIsANoopForTheInstalledFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("same"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := InstallExecutable(path, path); err != nil {
+	if err := installExecutable(path, path); err != nil {
 		t.Fatal(err)
 	}
 }

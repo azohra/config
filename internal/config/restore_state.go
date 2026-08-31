@@ -55,7 +55,7 @@ func beginRestore(paths, checkout Paths, machine Machine) (restoreProgress, erro
 	if err != nil {
 		return restoreProgress{}, fmt.Errorf("create restore identity: %w", err)
 	}
-	configured := run(NewGitRunner(checkout.Root), "git", "config", "--local", restoreCheckoutKey, identifier)
+	configured := run(newGitRunner(checkout.Root), "git", "config", "--local", restoreCheckoutKey, identifier)
 	if configured.Err != nil {
 		return restoreProgress{}, fmt.Errorf("record checkout identity: %w", configured.Failure())
 	}
@@ -134,7 +134,7 @@ func (p restoreProgress) validatePending(machine Machine) error {
 }
 
 func cleanCheckoutCommit(paths Paths) (string, error) {
-	runner := NewGitRunner(paths.Root)
+	runner := newGitRunner(paths.Root)
 	status := run(runner, "git", "status", "--porcelain=v1", "--untracked-files=all")
 	if status.Err != nil {
 		return "", fmt.Errorf("inspect bootstrap restore checkout: %w", status.Failure())
@@ -195,7 +195,7 @@ func shortCommit(commit string) string {
 }
 
 func checkoutRestoreID(paths Paths) (string, bool, error) {
-	return checkoutRestoreIDWithRunner(NewGitRunner(paths.Root))
+	return checkoutRestoreIDWithRunner(newGitRunner(paths.Root))
 }
 
 func checkoutRestoreIDWithRunner(runner Runner) (string, bool, error) {
