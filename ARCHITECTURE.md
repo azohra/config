@@ -174,9 +174,12 @@ plist input before replacing saved state.
 Preference plists use a different contract. Their declaration identifies the
 application and defaults domain; Config derives
 `snapshots/preferences/<id>.plist`. On an established Mac, Config can capture
-current settings. A pending bootstrap may restore existing backups after mise
-installs their applications. The restore validates the plist, checks the
-bundle, quits a running application before import, and relaunches it afterward.
+current settings: the whole domain, unfiltered, into a repository Config
+commits and pushes. A domain that holds nothing is refused, because `defaults`
+answers for a domain that does not exist. A pending bootstrap may restore
+existing backups after mise installs their applications. The restore validates
+the plist, checks the bundle, quits a running application before import, and
+relaunches it afterward.
 
 ## Snapshot safety
 
