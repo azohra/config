@@ -6,22 +6,71 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestCommandEnvironmentReplacesAmbientSelectionForChildOnly(t *testing.T) {
-	t.Setenv("MISE_GLOBAL_CONFIG_FILE", "ambient")
+// hostileMiseSelectors each change which document mise loads, verified
+// against the real binary: a global config file replaces the machine
+// document, a system config file is loaded alongside it, and an ignored path
+// erases it. Naming the configuration directory does not settle any of them.
+var hostileMiseSelectors = []string{
+	"MISE_GLOBAL_CONFIG_FILE",
+	"MISE_SYSTEM_CONFIG_FILE",
+	"MISE_IGNORED_CONFIG_PATHS",
+}
 
-	environment := ChildEnvironment([]string{"MISE_GLOBAL_CONFIG_FILE=child"})
-	var selections []string
-	for _, entry := range environment {
-		if strings.HasPrefix(entry, "MISE_GLOBAL_CONFIG_FILE=") {
-			selections = append(selections, entry)
+func TestMiseChildIgnoresAnAmbientConfigurationSelection(t *testing.T) {
+	paths := testPaths(t)
+	for _, name := range hostileMiseSelectors {
+		t.Setenv(name, "/tmp/somebody-elses.toml")
+	}
+	environment := ChildEnvironment(MiseEnvironment(paths))
+	for _, name := range hostileMiseSelectors {
+		var selections []string
+		for _, entry := range environment {
+			if value, ok := strings.CutPrefix(entry, name+"="); ok {
+				selections = append(selections, value)
+			}
+		}
+		if len(selections) != 1 {
+			t.Errorf("%s appears %d times in the child environment: %v", name, len(selections), selections)
+			continue
+		}
+		if selections[0] != "" {
+			t.Errorf("%s reached the mise child as %q", name, selections[0])
 		}
 	}
-	if len(selections) != 1 || selections[0] != "MISE_GLOBAL_CONFIG_FILE=child" {
-		t.Fatalf("child selections = %v", selections)
+	// The scoping Config does set still has to survive the overlay.
+	if !slices.Contains(environment, "MISE_CONFIG_DIR="+paths.InRoot("mise")) {
+		t.Error("the child lost Config's own configuration directory")
+	}
+}
+
+func TestReleaseRunnerPinsEveryProvenanceKnob(t *testing.T) {
+	// An ambient value turns each of these off, and this runner exists to
+	// acquire a verified release.
+	pinned := map[string]string{
+		"MISE_GITHUB_GITHUB_ATTESTATIONS":    "true",
+		"MISE_GITHUB_SLSA":                   "true",
+		"MISE_PROVENANCE_API_FAILURES_FATAL": "true",
+	}
+	for name := range pinned {
+		t.Setenv(name, "false")
+	}
+	updater := Updater{Substrate: NewLiveRunner(t.TempDir())}
+	environment := ChildEnvironment(updater.releaseRunner().Environment)
+	for name, want := range pinned {
+		var values []string
+		for _, entry := range environment {
+			if value, ok := strings.CutPrefix(entry, name+"="); ok {
+				values = append(values, value)
+			}
+		}
+		if len(values) != 1 || values[0] != want {
+			t.Errorf("%s reached the release child as %v, want [%s]", name, values, want)
+		}
 	}
 }
 

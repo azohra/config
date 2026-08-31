@@ -147,5 +147,13 @@ func MiseEnvironment(paths Paths) []string {
 		"MISE_CONFIG_DIR=" + paths.InRoot("mise"),
 		"MISE_GLOBAL_CONFIG_ROOT=" + paths.Root,
 		"MISE_CEILING_PATHS=" + paths.Root,
+		// Naming the configuration directory is not enough. An ambient
+		// MISE_GLOBAL_CONFIG_FILE replaces the machine document, a system
+		// config file is loaded alongside it, and an ignored path erases it —
+		// each one changing what Config converges the Mac against. Empty
+		// values leave the selection to the four names above.
+		"MISE_GLOBAL_CONFIG_FILE=",
+		"MISE_SYSTEM_CONFIG_FILE=",
+		"MISE_IGNORED_CONFIG_PATHS=",
 	}
 }
