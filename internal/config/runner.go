@@ -31,6 +31,7 @@ type Runner interface {
 type OSRunner struct {
 	Dir         string
 	Environment []string
+	Unset       []string
 	Executables map[string]string
 }
 
@@ -41,7 +42,7 @@ const commandWaitDelay = 2 * time.Second
 func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	cmd := exec.CommandContext(ctx, r.executable(name), args...)
 	cmd.Dir = r.Dir
-	cmd.Env = ChildEnvironment(r.Environment)
+	cmd.Env = childEnvironment(r.Environment, r.Unset)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -132,6 +133,7 @@ func (r Result) ExitCode() int {
 type LiveRunner struct {
 	Dir         string
 	Environment []string
+	Unset       []string
 	Executables map[string]string
 	Stdin       io.Reader
 	Stdout      io.Writer
@@ -139,13 +141,17 @@ type LiveRunner struct {
 }
 
 func NewLiveRunner(dir string) LiveRunner {
-	return LiveRunner{Dir: dir, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+	return LiveRunner{
+		Dir: dir, Unset: gitLocalEnvironment,
+		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+	}
 }
 
 func NewMachineRunner(paths Paths) OSRunner {
 	return OSRunner{
 		Dir:         paths.Root,
 		Environment: MiseEnvironment(paths),
+		Unset:       gitLocalEnvironment,
 		Executables: map[string]string{"mise": misePath(paths)},
 	}
 }
@@ -153,6 +159,7 @@ func NewMachineRunner(paths Paths) OSRunner {
 func NewMachineLiveRunner(paths Paths) LiveRunner {
 	runner := NewLiveRunner(paths.Root)
 	runner.Environment = MiseEnvironment(paths)
+	runner.Unset = gitLocalEnvironment
 	runner.Executables = map[string]string{"mise": misePath(paths)}
 	return runner
 }
@@ -163,7 +170,7 @@ func (r LiveRunner) Command(name string, args ...string) error {
 	}
 	cmd := exec.Command(name, args...)
 	cmd.Dir = r.Dir
-	cmd.Env = ChildEnvironment(r.Environment)
+	cmd.Env = childEnvironment(r.Environment, r.Unset)
 	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
@@ -176,7 +183,14 @@ func (r LiveRunner) Command(name string, args ...string) error {
 // ChildEnvironment overlays explicit values without leaving duplicate names
 // whose winner would depend on the child process's environment parser.
 func ChildEnvironment(overrides []string) []string {
-	if len(overrides) == 0 {
+	return childEnvironment(overrides, nil)
+}
+
+// childEnvironment also drops the names in unset. An explicit override wins:
+// a value Config supplies is a decision, while unset only removes what the
+// caller happened to export.
+func childEnvironment(overrides, unset []string) []string {
+	if len(overrides) == 0 && len(unset) == 0 {
 		return nil // os/exec inherits the current process for a nil Env.
 	}
 	replaced := make(map[string]bool, len(overrides))
@@ -186,12 +200,34 @@ func ChildEnvironment(overrides []string) []string {
 			replaced[name] = true
 		}
 	}
+	removed := make(map[string]bool, len(unset))
+	for _, name := range unset {
+		if !replaced[name] {
+			removed[name] = true
+		}
+	}
 	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if !replaced[name] {
+		if !replaced[name] && !removed[name] {
 			environment = append(environment, entry)
 		}
 	}
 	return append(environment, overrides...)
+}
+
+// gitLocalEnvironment are the variables Git resolves against one specific
+// repository. Config runs Git to ask which repository it is looking at, so a
+// value the caller exported would answer about a different one.
+var gitLocalEnvironment = []string{
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS",
+	"GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
+	"GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+	"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
+	"GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+}
+
+// NewGitRunner reads a Git repository at dir and nothing else.
+func NewGitRunner(dir string) OSRunner {
+	return OSRunner{Dir: dir, Unset: gitLocalEnvironment}
 }

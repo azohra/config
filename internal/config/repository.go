@@ -74,7 +74,7 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 }
 
 func validateMaterializedRepository(paths Paths, source string) (Machine, error) {
-	runner := OSRunner{Dir: paths.Root}
+	runner := NewGitRunner(paths.Root)
 	top := run(runner, "git", "rev-parse", "--show-toplevel")
 	if top.Err != nil || !samePath(top.Output(), paths.Root) {
 		return Machine{}, fmt.Errorf("%s is not a Git repository rooted at Config's managed checkout", paths.Root)
