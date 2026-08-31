@@ -572,10 +572,19 @@ func (e Applier) applyChromePWAs() error {
 	for _, app := range saved {
 		desiredIDs[app.ID] = true
 	}
+	destinations := make(map[string]string, len(saved))
+	for _, app := range saved {
+		destinations[app.ID] = filepath.Join(chromePWALiveDir(e.Paths), app.Name+".app")
+	}
 	extra := 0
 	for _, app := range live {
 		_, replacing := staged[app.ID]
-		if !desiredIDs[app.ID] || replacing {
+		// A replacement that keeps its bundle name is trashed immediately
+		// before its rename below, so the window in which the operator has
+		// neither the old bundle nor the new one is one rename wide. Trashing
+		// every replacement up front made that window the whole install.
+		renamedAway := replacing && !samePath(app.Path, destinations[app.ID])
+		if !desiredIDs[app.ID] || renamedAway {
 			if err := e.Live.Command("trash", app.Path); err != nil {
 				return err
 			}
@@ -590,7 +599,7 @@ func (e Applier) applyChromePWAs() error {
 		if !exists {
 			continue
 		}
-		target := filepath.Join(chromePWALiveDir(e.Paths), app.Name+".app")
+		target := destinations[app.ID]
 		if _, statErr := os.Stat(target); statErr == nil {
 			if err := e.Live.Command("trash", target); err != nil {
 				return err

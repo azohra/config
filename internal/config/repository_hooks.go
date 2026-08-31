@@ -433,6 +433,7 @@ func (e Applier) applyRepositoryHookTargets(includeRepositories bool) (int, erro
 			return changed, err
 		}
 		manifestChanged := false
+		var pending []repositoryHookPayload
 		for _, hook := range payloads {
 			var placement repositoryHookPlacement
 			for _, candidate := range placements {
@@ -442,16 +443,18 @@ func (e Applier) applyRepositoryHookTargets(includeRepositories bool) (int, erro
 				}
 			}
 			if !placement.Current {
-				if err := atomicWrite(filepath.Join(target.Dir, hook.Name), hook.Body, hook.Mode); err != nil {
-					return changed, fmt.Errorf("write %s hook %s: %w", target.Name, hook.Name, err)
-				}
-				changed++
+				pending = append(pending, hook)
 			}
 			if manifest.Hooks[hook.Name] != hook.Digest {
 				manifest.Hooks[hook.Name] = hook.Digest
 				manifestChanged = true
 			}
 		}
+		// Claim ownership before installing. An interrupted apply that has
+		// written the manifest leaves a claim on a hook that is not there,
+		// which the next apply completes and prune ignores. The other order
+		// leaves an executable hook no record accounts for, which prune, and
+		// every later refresh, cannot see.
 		if manifestChanged {
 			data, err := json.MarshalIndent(manifest, "", "  ")
 			if err != nil {
@@ -460,6 +463,12 @@ func (e Applier) applyRepositoryHookTargets(includeRepositories bool) (int, erro
 			if err := atomicWrite(filepath.Join(target.Dir, repositoryHookManifestName), append(data, '\n'), 0o644); err != nil {
 				return changed, fmt.Errorf("write hook ownership for %s: %w", target.Name, err)
 			}
+		}
+		for _, hook := range pending {
+			if err := atomicWrite(filepath.Join(target.Dir, hook.Name), hook.Body, hook.Mode); err != nil {
+				return changed, fmt.Errorf("write %s hook %s: %w", target.Name, hook.Name, err)
+			}
+			changed++
 		}
 	}
 	return changed, nil
