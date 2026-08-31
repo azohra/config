@@ -145,18 +145,31 @@ func TestReleasedUpdaterInstallsAndReexecutesTheVerifiedPermanentRelease(t *test
 	paths := testPaths(t)
 	canonicalMise := misePath(paths)
 	canonicalConfig := ConfigCommandPath(paths)
+	releaseDirectory := t.TempDir()
+	releaseConfig := filepath.Join(releaseDirectory, "config")
+	logPath := filepath.Join(t.TempDir(), "commands")
+	t.Setenv("UPDATE_TEST_LOG", logPath)
+	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
+	t.Setenv("PATH", filepath.Dir(canonicalConfig)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	writeUpdateExecutable(t, canonicalMise, `#!/bin/sh
 printf '%s|%s|%s|%s|%s|%s\n' "$*" "$MISE_CONFIG_DIR" "$MISE_AUTO_UPDATE" "$MISE_NO_CONFIG" "$MISE_GITHUB_GITHUB_ATTESTATIONS" "$MISE_MINIMUM_RELEASE_AGE" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
-if [ "$6" = --version ]; then
+if [ "$2" = latest ]; then
+  printf '0.5.0\n'
+fi
+if [ "$2" = where ]; then
+  printf '%s\n' "$UPDATE_TEST_RELEASE_DIR"
+fi
+`)
+	writeUpdateExecutable(t, releaseConfig, `#!/bin/sh
+printf 'candidate %s|%s|%s|%s|%s|%s\n' "$*" "$MISE_CONFIG_DIR" "$MISE_AUTO_UPDATE" "$MISE_NO_CONFIG" "$MISE_GITHUB_GITHUB_ATTESTATIONS" "$MISE_MINIMUM_RELEASE_AGE" >> "$UPDATE_TEST_LOG"
+if [ "$1" = --version ]; then
   printf 'config v0.5.0\n'
 fi
 `)
 	writeUpdateExecutable(t, canonicalConfig, "#!/bin/sh\nprintf 'config v0.5.0\\n'\n")
-	logPath := filepath.Join(t.TempDir(), "commands")
-	t.Setenv("UPDATE_TEST_LOG", logPath)
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
@@ -185,8 +198,11 @@ fi
 	want := strings.Join([]string{
 		"--no-config self-update " + testedMiseVersion + " --yes --no-plugins||0|1||",
 		"--version||0|1||",
-		"--no-config x " + configReleaseTool + " -- config --version||0|1|true|0s",
-		"--no-config x github:azohra/config@0.5.0 -- config install||0|1|true|0s",
+		"--no-config latest " + configReleaseBackend + "||0|1|true|0s",
+		"--no-config install github:azohra/config@0.5.0||0|1|true|0s",
+		"--no-config where github:azohra/config@0.5.0||0|1|true|0s",
+		"candidate --version||0|1|true|0s",
+		"candidate install||0|1|true|0s",
 		"",
 	}, "\n")
 	if string(commands) != want {
@@ -212,7 +228,7 @@ printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
-if [ "$2" = x ]; then
+if [ "$2" = latest ]; then
   exit 23
 fi
 `)
@@ -232,7 +248,7 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config x " + configReleaseTool + " -- config --version\n"
+	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config latest " + configReleaseBackend + "\n"
 	if string(commands) != want {
 		t.Fatalf("commands = %q, want %q", commands, want)
 	}
@@ -240,14 +256,20 @@ fi
 
 func TestReleasedUpdaterRefusesAnUnverifiedInstalledBuild(t *testing.T) {
 	paths := testPaths(t)
+	releaseDirectory := t.TempDir()
+	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
 	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
-if [ "$6" = --version ]; then
-  printf 'config v0.4.0\n'
+if [ "$2" = latest ]; then
+  printf '0.4.0\n'
+fi
+if [ "$2" = where ]; then
+  printf '%s\n' "$UPDATE_TEST_RELEASE_DIR"
 fi
 `)
+	writeUpdateExecutable(t, filepath.Join(releaseDirectory, "config"), "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf 'config v0.4.0\\n'\nfi\n")
 	writeUpdateExecutable(t, ConfigCommandPath(paths), "#!/bin/sh\nprintf 'config dev\\n'\n")
 
 	var output bytes.Buffer
@@ -265,14 +287,20 @@ fi
 
 func TestReleasedUpdaterVerifiesTheExactInstalledRelease(t *testing.T) {
 	paths := testPaths(t)
+	releaseDirectory := t.TempDir()
+	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
 	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
-if [ "$6" = --version ]; then
-  printf 'config v0.5.0\n'
+if [ "$2" = latest ]; then
+  printf '0.5.0\n'
+fi
+if [ "$2" = where ]; then
+  printf '%s\n' "$UPDATE_TEST_RELEASE_DIR"
 fi
 `)
+	writeUpdateExecutable(t, filepath.Join(releaseDirectory, "config"), "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf 'config v0.5.0\\n'\nfi\n")
 	writeUpdateExecutable(t, ConfigCommandPath(paths), "#!/bin/sh\nprintf 'config v0.4.0\\n'\n")
 
 	var output bytes.Buffer
@@ -288,6 +316,50 @@ fi
 	}
 }
 
+func TestReleasedUpdaterVerifiesTheAcquiredExecutableBeforeInstall(t *testing.T) {
+	paths := testPaths(t)
+	releaseDirectory := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "commands")
+	t.Setenv("UPDATE_TEST_LOG", logPath)
+	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
+	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+if [ "$1" = --version ]; then
+  printf '%s\n' '`+testedMiseVersion+`'
+fi
+if [ "$2" = latest ]; then
+  printf '0.5.0\n'
+fi
+if [ "$2" = where ]; then
+  printf '%s\n' "$UPDATE_TEST_RELEASE_DIR"
+fi
+`)
+	writeUpdateExecutable(t, filepath.Join(releaseDirectory, "config"), `#!/bin/sh
+printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
+if [ "$1" = --version ]; then
+  printf 'config v0.4.0\n'
+fi
+`)
+
+	var output bytes.Buffer
+	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
+	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
+	updater.Reexec = func(string, []string, []string) error {
+		t.Fatal("mismatched release executable attempted to re-exec")
+		return nil
+	}
+	err := updater.Update()
+	if err == nil || !strings.Contains(err.Error(), "release executable is v0.4.0, want resolved release v0.5.0") {
+		t.Fatalf("Update() error = %v, want acquired executable version failure", err)
+	}
+	commands, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(commands) != "--version\n" {
+		t.Fatalf("release executable commands = %q, want version check without install", commands)
+	}
+}
+
 func TestReleasedUpdaterRefusesADowngradeBeforeInstall(t *testing.T) {
 	paths := testPaths(t)
 	logPath := filepath.Join(t.TempDir(), "commands")
@@ -297,8 +369,8 @@ printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
-if [ "$6" = --version ]; then
-  printf 'config v0.3.0\n'
+if [ "$2" = latest ]; then
+  printf '0.3.0\n'
 fi
 `)
 
@@ -317,7 +389,7 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config x " + configReleaseTool + " -- config --version\n"
+	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config latest " + configReleaseBackend + "\n"
 	if string(commands) != want || strings.Contains(string(commands), "config install") {
 		t.Fatalf("downgrade commands = %q, want no install after resolution", commands)
 	}

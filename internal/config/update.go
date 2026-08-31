@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 )
 
 const (
-	configReleaseTool = "github:azohra/config@latest"
-	updateReexecEnv   = "AZOHRA_CONFIG_UPDATE_REEXEC_VERSION"
+	configReleaseBackend = "github:azohra/config"
+	updateReexecEnv      = "AZOHRA_CONFIG_UPDATE_REEXEC_VERSION"
 )
 
 type Updater struct {
@@ -104,9 +105,7 @@ func (u Updater) Update() error {
 		u.Log.Error(err.Error())
 		return fmt.Errorf("Config: %w", err)
 	}
-	releaseRunner := u.releaseRunner()
-	exactTool := "github:azohra/config@" + strings.TrimPrefix(resolvedVersion, "v")
-	if err := releaseRunner.Command("mise", "--no-config", "x", exactTool, "--", "config", "install"); err != nil {
+	if err := u.installRelease(resolvedVersion); err != nil {
 		u.Log.Error(err.Error())
 		return fmt.Errorf("Config: %w", err)
 	}
@@ -187,17 +186,68 @@ func (u Updater) installedVersion() (string, error) {
 }
 
 func (u Updater) resolveRelease() (string, error) {
-	var output strings.Builder
-	releaseRunner := u.releaseRunner()
-	releaseRunner.Stdout = &output
-	if err := releaseRunner.Command("mise", "--no-config", "x", configReleaseTool, "--", "config", "--version"); err != nil {
+	output, err := u.releaseOutput("mise", "--no-config", "latest", configReleaseBackend)
+	if err != nil {
 		return "", fmt.Errorf("resolve latest Config release: %w", err)
 	}
-	version, ok := configVersionOutput(output.String())
-	if !ok {
+	fields := strings.Fields(output)
+	if len(fields) != 1 {
+		return "", errors.New("latest Config release version is unreadable")
+	}
+	version := "v" + fields[0]
+	if !stableConfigVersion(version) {
 		return "", errors.New("latest Config release version is unreadable")
 	}
 	return version, nil
+}
+
+func (u Updater) installRelease(version string) error {
+	exactTool := configReleaseBackend + "@" + strings.TrimPrefix(version, "v")
+	releaseRunner := u.releaseRunner()
+	if err := releaseRunner.Command("mise", "--no-config", "install", exactTool); err != nil {
+		return fmt.Errorf("install Config release %s: %w", version, err)
+	}
+
+	installation, err := u.releaseOutput("mise", "--no-config", "where", exactTool)
+	if err != nil {
+		return fmt.Errorf("locate Config release %s: %w", version, err)
+	}
+	installation = strings.TrimSpace(installation)
+	if installation == "" || strings.ContainsAny(installation, "\r\n") || !filepath.IsAbs(installation) {
+		return fmt.Errorf("Config release %s installation path is unreadable", version)
+	}
+	executable := filepath.Join(filepath.Clean(installation), "config")
+	if err := requireExecutableFile(executable); err != nil {
+		return fmt.Errorf("Config release %s executable is unavailable at %s", version, executable)
+	}
+
+	output, err := u.releaseOutput(executable, "--version")
+	if err != nil {
+		return fmt.Errorf("read Config release %s executable version: %w", version, err)
+	}
+	executableVersion, ok := configVersionOutput(output)
+	if !ok {
+		return fmt.Errorf("Config release %s executable version is unreadable", version)
+	}
+	if executableVersion != version {
+		return fmt.Errorf("Config release executable is %s, want resolved release %s", executableVersion, version)
+	}
+
+	releaseRunner = u.releaseRunner()
+	if err := releaseRunner.Command(executable, "install"); err != nil {
+		return fmt.Errorf("install Config release %s command: %w", version, err)
+	}
+	return nil
+}
+
+func (u Updater) releaseOutput(name string, args ...string) (string, error) {
+	var output strings.Builder
+	releaseRunner := u.releaseRunner()
+	releaseRunner.Stdout = &output
+	if err := releaseRunner.Command(name, args...); err != nil {
+		return "", err
+	}
+	return output.String(), nil
 }
 
 func (u Updater) releaseRunner() LiveRunner {
