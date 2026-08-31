@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,7 +77,7 @@ func beginRestore(paths, checkout Paths, machine Machine) (restoreProgress, erro
 	return progress, nil
 }
 
-func pendingRestore(paths Paths, machine Machine) (restoreProgress, bool, error) {
+func pendingRestore(paths Paths, machine Machine, out io.Writer) (restoreProgress, bool, error) {
 	identifier, found, err := checkoutRestoreID(paths)
 	if err != nil || !found {
 		return restoreProgress{}, false, err
@@ -107,10 +108,35 @@ func pendingRestore(paths Paths, machine Machine) (restoreProgress, bool, error)
 		return progress, false, nil
 	}
 	if err := progress.validatePending(machine); err != nil {
-		return restoreProgress{}, false, err
+		var advanced checkoutAdvancedError
+		if !errors.As(err, &advanced) {
+			return restoreProgress{}, false, err
+		}
+		// A capture and save between two bootstrap runs moves HEAD, and this
+		// record is bound to the commit it was cloned at. Keeping it refused
+		// every later bootstrap forever, for a restore nothing can finish.
+		if removeErr := progress.abandon(); removeErr != nil {
+			return restoreProgress{}, false, removeErr
+		}
+		fmt.Fprintln(out, "abandoned the pending bootstrap restore: "+advanced.Error())
+		return restoreProgress{}, false, nil
 	}
 	return progress, true, nil
 }
+
+// abandon removes a record whose restore can no longer resume. The checkout
+// keeps whatever the restore already applied; what it loses is a claim that
+// more is still coming.
+func (p restoreProgress) abandon() error {
+	return os.Remove(restoreStatePath(p.paths, p.record.Checkout))
+}
+
+// checkoutAdvancedError marks the one validatePending failure a later run can
+// resolve by itself: the checkout moved on, which is exactly what a snapshot
+// save does. Every other failure names a state the operator has to look at.
+type checkoutAdvancedError struct{ message string }
+
+func (e checkoutAdvancedError) Error() string { return e.message }
 
 func (p restoreProgress) validatePending(machine Machine) error {
 	if p.record.Status != restorePendingState {
@@ -121,7 +147,9 @@ func (p restoreProgress) validatePending(machine Machine) error {
 		return err
 	}
 	if commit != p.record.Commit {
-		return fmt.Errorf("managed checkout changed from %s to %s while bootstrap restore is pending", shortCommit(p.record.Commit), shortCommit(commit))
+		return checkoutAdvancedError{fmt.Sprintf(
+			"managed checkout changed from %s to %s while bootstrap restore is pending",
+			shortCommit(p.record.Commit), shortCommit(commit))}
 	}
 	plan, err := restorePlanIdentity(p.paths, machine)
 	if err != nil {
@@ -140,6 +168,8 @@ func cleanCheckoutCommit(paths Paths) (string, error) {
 		return "", fmt.Errorf("inspect bootstrap restore checkout: %w", status.Failure())
 	}
 	if status.Output() != "" {
+		// Recoverable by hand, so it stays a refusal: the operator can commit
+		// or discard and resume the restore that is still pending.
 		return "", errors.New("managed checkout has local changes while bootstrap restore is pending")
 	}
 	head := run(runner, "git", "rev-parse", "--verify", "HEAD")

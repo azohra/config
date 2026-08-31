@@ -57,7 +57,7 @@ func TestMaterializeRepositoryOwnsTheCanonicalCheckout(t *testing.T) {
 	if !pending {
 		t.Fatal("an interrupted restore did not remain pending")
 	}
-	progress, pending, err := pendingRestore(paths, machine)
+	progress, pending, err := pendingRestore(paths, machine, io.Discard)
 	if err != nil || !pending {
 		t.Fatalf("load pending restore = %t, %v", pending, err)
 	}

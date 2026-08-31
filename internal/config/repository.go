@@ -27,7 +27,7 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 		if err != nil {
 			return Machine{}, false, err
 		}
-		_, pending, err := pendingRestore(paths, machine)
+		_, pending, err := pendingRestore(paths, machine, stdout)
 		return machine, pending, err
 	} else if !os.IsNotExist(err) {
 		return Machine{}, false, err

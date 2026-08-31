@@ -44,7 +44,10 @@ mise document can remain an additional authority for that repository. Config
 therefore delegates tool and package liveness to mise's combined inventory
 instead of treating the machine document as an exclusive manifest.
 
-Config probes the phases separately rather than taking mise's aggregate.
+Config asks once whether mise can read the machine document at all, because a
+phase probe answers the same exit code for real drift and for a document mise
+rejects. Beyond that, Config probes the phases separately rather than taking
+mise's aggregate.
 The aggregate includes `repos`, where mise answers two questions at once:
 whether a checkout exists, which is a local stat, and whether it matches its
 remote, which is one network round trip per declared repository. Only presence
@@ -91,8 +94,12 @@ contract leaves no managed checkout behind. Before installation, Config gives
 the clone a local restore identity and atomically records pending progress under
 `~/Library/Application Support/Config/restore`. A later bootstrap resumes only
 when the repository, checkout, cloned commit, and versioned declaration plan
-all match and the checkout remains clean. Successful steps are recorded
-individually; completion closes the restore permanently for that checkout.
+all match and the checkout remains clean. A checkout whose commit has moved
+on, which is what saving a snapshot does, can no longer resume that restore,
+so bootstrap abandons the record and says so instead of refusing forever.
+Local changes stay a refusal, because the operator can clear them and
+continue. Successful steps are recorded individually; completion closes the
+restore permanently for that checkout.
 
 Bootstrap atomically installs the running released executable at
 `~/.local/bin/config` after checkout validation and before restoration. Config
@@ -129,11 +136,14 @@ their clone template before mise runs and supplies that template to mise's
 child Git processes. It sweeps the declared repositories after bootstrap so
 existing and newly created checkouts converge to the same hook bodies. The
 selected mise configuration owns any custom ordering through mise lifecycle
-hooks. Converging mise also converges the declared native macOS facts. Config
-then executes the selected Finder Favorites, preference, Chrome PWA, and Dock
-actions. Independent failures are collected so one resource does not hide the
-rest of the plan, and a fact Config cannot read is reported rather than
-written over.
+hooks. The declared native macOS facts converge alongside mise rather than
+behind it: none of them touches anything mise installs, so a mise Config
+cannot use neither hides them in status nor stops them from converging. A fact
+Config cannot read is reported rather than written over, and a fact that fails
+is an advisory, so the facts beside it and the steps after it still run.
+Config then executes the selected Finder Favorites, preference, Chrome PWA,
+and Dock actions. Independent failures are collected so one resource does not
+hide the rest of the plan.
 
 Repository hooks are authoritative one-way state. A declaration names a hook
 and an executable source inside the managed repository. Config installs real

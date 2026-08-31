@@ -37,7 +37,7 @@ func probed(result Result) (string, error) {
 	return result.Output(), nil
 }
 
-func miseFacts(machine Machine) []setupFact {
+func macOSFacts(machine Machine) []setupFact {
 	var facts []setupFact
 	if desired := machine.MacOS.CurrentHostTapToClick; desired != nil {
 		value := "0"
