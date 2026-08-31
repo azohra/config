@@ -378,3 +378,32 @@ func TestRepositoryHookMarkerDoesNotGrantOwnership(t *testing.T) {
 		t.Fatalf("the repository's own hook was rewritten: %q %v", got, err)
 	}
 }
+
+func TestApplyRoutesTheRepositoryHooksSelection(t *testing.T) {
+	// The step table is what connects a selected capability to the code that
+	// converges it, and nothing drove this entry.
+	fixture := newRepositoryHooksFixture(t)
+	applier, chatter := testApplier(t, fixture.paths, fixture.machine, fixture.runner)
+	if err := applier.Apply([]Selection{{ID: repositoryHooksID, Action: Apply}}); err != nil {
+		t.Fatalf("apply repository hooks: %v\n%s", err, chatter.String())
+	}
+	hook := fixture.paths.InRoot(".git", "hooks", "post-checkout")
+	body, err := os.ReadFile(hook)
+	if err != nil {
+		t.Fatalf("the selection reached no hook: %v\n%s", err, chatter.String())
+	}
+	source, err := os.ReadFile(fixture.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != string(source) {
+		t.Fatalf("installed hook = %q, want the declared source", body)
+	}
+	manifest, err := readRepositoryHookManifest(filepath.Dir(hook))
+	if err != nil || manifest.Hooks["post-checkout"] != repositoryHookDigest(source) {
+		t.Fatalf("ownership was not recorded: %+v %v", manifest, err)
+	}
+	if resource := InspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); resource.State != Current {
+		t.Fatalf("hooks after apply = %+v", resource)
+	}
+}

@@ -48,6 +48,22 @@ grep -qx 'TestFinderFavoritesNativeCanary' <<<"$tests" || {
 }
 go test -tags=config_native_canary ./internal/config \
   -run '^TestFinderFavoritesNativeCanary$' -count=1
+
+# The Chrome PWA rebuild tests skip themselves when Chrome is absent, and a
+# skip is invisible in an ordinary run. This is the proof that they ran.
+chrome='^TestChromePWABundleBuiltFromInstalledChromeCanBeSigned$|^TestChromePWARestoreInstallsTheSavedBundle$'
+output=$(go test ./internal/config -run "$chrome" -count=1 -v)
+printf '%s\n' "$output"
+if grep -q -- '--- SKIP' <<<"$output"; then
+  echo "check:darwin-native: the Chrome PWA proofs skipped themselves" >&2
+  exit 1
+fi
+for name in TestChromePWABundleBuiltFromInstalledChromeCanBeSigned TestChromePWARestoreInstallsTheSavedBundle; do
+  grep -q -- "--- PASS: $name" <<<"$output" || {
+    echo "check:darwin-native: $name did not run" >&2
+    exit 1
+  }
+done
 """
 
 [tasks."build:release"]
