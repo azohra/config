@@ -490,3 +490,62 @@ func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 		t.Fatal("an emptied ownership manifest survived the prune")
 	}
 }
+
+func TestPruneReclaimsOnlyTheMarkersNothingWillActOn(t *testing.T) {
+	// A marker records a step a killed run still owes. One the document no
+	// longer declares is a step nothing will ever take, and nothing else
+	// removes it.
+	fixture := newPruneFixture(t)
+	pruner := fixture.pruner
+	pruner.Machine.Dock = true
+	pruner.Machine.Preferences = []PreferenceBackup{{
+		ID: "example-app", Name: "Example App",
+		Bundle: "com.example.ExampleApp", Domain: "com.example.ExampleApp",
+	}}
+	for _, name := range []string{
+		dockRestartMarker,
+		relaunchMarker("com.example.ExampleApp"),
+		relaunchMarker("com.example.Retired"),
+	} {
+		if err := setMarker(pruner.Paths, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	planned, warnings, err := pruner.planPendingMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if len(planned) != 1 || filepath.Base(planned[0].Path) != relaunchMarker("com.example.Retired") {
+		t.Fatalf("planned = %+v, want only the undeclared relaunch", planned)
+	}
+	if err := applyPruneFile(planned[0]); err != nil {
+		t.Fatal(err)
+	}
+	if markerSet(pruner.Paths, relaunchMarker("com.example.Retired")) {
+		t.Fatal("the undeclared marker survived the prune")
+	}
+	for _, kept := range []string{dockRestartMarker, relaunchMarker("com.example.ExampleApp")} {
+		if !markerSet(pruner.Paths, kept) {
+			t.Fatalf("prune removed %s, which the machine still declares", kept)
+		}
+	}
+
+	// A file Config did not write is left alone.
+	stray := filepath.Join(pruner.Paths.StateDir, "pending", "relaunch-com.example.Stray")
+	if err := os.WriteFile(stray, []byte("not a marker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planned, warnings, err = pruner.planPendingMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(planned) != 0 {
+		t.Fatalf("an unrecognised file was planned for deletion: %+v", planned)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "unrecognised") {
+		t.Fatalf("warnings = %v", warnings)
+	}
+}

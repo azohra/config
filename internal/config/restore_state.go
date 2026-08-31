@@ -89,7 +89,7 @@ func pendingRestore(paths Paths, machine Machine, out io.Writer) (restoreProgres
 		return restoreProgress{}, false, fmt.Errorf("read bootstrap restore state: %w", err)
 	}
 	var record restoreRecord
-	if err := json.Unmarshal(data, &record); err != nil {
+	if err := decodeExactJSON(data, &record); err != nil {
 		return restoreProgress{}, false, fmt.Errorf("read bootstrap restore state: %w", err)
 	}
 	if err := record.validate(); err != nil {

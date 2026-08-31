@@ -16,15 +16,24 @@ import (
 // hold taken inside another hold is harmless — Go's read lock is not
 // re-entrant once a writer waits, and a nested hold under one would deadlock
 // the very write the interrupt is waiting for.
+//
+// closing is the other half. Draining the count is not enough on its own:
+// writes arrive one after another, so a signal landing between two files
+// would find nothing in flight and exit while the next write was starting.
 var (
 	inFlightMu   sync.Mutex
 	inFlightIdle = sync.NewCond(&inFlightMu)
 	inFlight     int
+	closing      bool
 )
 
-// holdInterrupt marks a write an interrupt must not cut in half.
+// holdInterrupt marks a write an interrupt must not cut in half. Once the
+// process is stopping, a write that has not begun does not begin.
 func holdInterrupt() func() {
 	inFlightMu.Lock()
+	for closing {
+		inFlightIdle.Wait()
+	}
 	inFlight++
 	inFlightMu.Unlock()
 	return func() {
@@ -37,7 +46,14 @@ func holdInterrupt() func() {
 	}
 }
 
-// awaitWrites returns once no write is in flight.
+// stopNewWrites refuses every write that has not started yet.
+func stopNewWrites() {
+	inFlightMu.Lock()
+	closing = true
+	inFlightMu.Unlock()
+}
+
+// awaitWrites returns once the writes already in flight have finished.
 func awaitWrites() {
 	inFlightMu.Lock()
 	defer inFlightMu.Unlock()
@@ -64,6 +80,7 @@ func OnInterrupt(out io.Writer) func() {
 	go func() {
 		select {
 		case received := <-signals:
+			stopNewWrites()
 			finished := make(chan struct{})
 			go func() {
 				awaitWrites()

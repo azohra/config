@@ -47,6 +47,19 @@ func TestEveryTrackedArtifactDecoderIsTheStrictOne(t *testing.T) {
 		t.Error("a saved Finder Favorites snapshot with trailing data was accepted")
 	}
 
+	if err := atomicWrite(restoreStatePath(paths, "0123456789abcdef"),
+		trailing(`{"schema":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var record restoreRecord
+	data, err := os.ReadFile(restoreStatePath(paths, "0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodeExactJSON(data, &record) == nil {
+		t.Error("a restore record with trailing data was accepted")
+	}
+
 	hooks := t.TempDir()
 	manifest := `{"schema":1,"hooks":{}}`
 	if err := os.WriteFile(filepath.Join(hooks, repositoryHookManifestName), trailing(manifest), 0o644); err != nil {

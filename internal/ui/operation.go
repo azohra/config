@@ -69,11 +69,12 @@ func runOperation(ctx context.Context, dir, name string, args []string, events c
 		defer close(events)
 		command := exec.CommandContext(ctx, name, args...)
 		command.Dir = dir
-		config.InterruptGroup(command, config.CommandWaitDelay)
+		settle := config.InterruptGroup(command, config.CommandWaitDelay)
 		writer := eventWriter{ctx: ctx, events: events}
 		command.Stdout = writer
 		command.Stderr = writer
 		err := command.Run()
+		settle(err)
 		// A successful operation whose descendant still holds the output pipes
 		// ends in ErrWaitDelay. Reporting that as a failed Apply, Save, or
 		// Update reports a machine that did not converge when it did.

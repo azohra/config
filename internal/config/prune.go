@@ -413,6 +413,12 @@ func (p Pruner) planConfigFiles(warnings []string) ([]pruneFile, []string, error
 	}
 	planned = append(planned, restoreFiles...)
 	warnings = append(warnings, restoreWarnings...)
+	markers, markerWarnings, err := p.planPendingMarkers()
+	if err != nil {
+		return nil, warnings, err
+	}
+	planned = append(planned, markers...)
+	warnings = append(warnings, markerWarnings...)
 	slices.SortFunc(planned, func(left, right pruneFile) int { return strings.Compare(left.Path, right.Path) })
 	return planned, warnings, nil
 }
@@ -438,6 +444,53 @@ func baselinePruneFile(path, resource, label string) (pruneFile, bool, string, e
 		return pruneFile{}, false, label + " is unrecognised; left untouched", nil
 	}
 	return pruneFile{Label: label, Path: path, Digest: contentDigest(data)}, true, "", nil
+}
+
+// planPendingMarkers reclaims the markers left by a run that was killed
+// between the two halves of an operation. A marker the machine still declares
+// is a step the next apply owes and stays; one for a capability the document
+// no longer declares is a step nothing will ever take.
+func (p Pruner) planPendingMarkers() ([]pruneFile, []string, error) {
+	dir := filepath.Join(p.Paths.StateDir, "pending")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	declared := map[string]bool{dockRestartMarker: p.Machine.Dock}
+	for _, preference := range p.Machine.Preferences {
+		declared[relaunchMarker(preference.Bundle)] = true
+	}
+	var planned []pruneFile
+	var warnings []string
+	for _, entry := range entries {
+		name := entry.Name()
+		label := "pending " + name
+		if declared[name] {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return nil, warnings, statErr
+		}
+		if !info.Mode().IsRegular() {
+			warnings = append(warnings, label+" is not a regular Config state file; left untouched")
+			continue
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil, warnings, readErr
+		}
+		if strings.TrimSpace(string(data)) != name {
+			warnings = append(warnings, label+" is unrecognised; left untouched")
+			continue
+		}
+		planned = append(planned, pruneFile{Label: label, Path: path, Digest: contentDigest(data)})
+	}
+	return planned, warnings, nil
 }
 
 func (p Pruner) planRestoreFiles() ([]pruneFile, []string, error) {

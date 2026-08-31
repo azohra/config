@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -47,8 +48,9 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	InterruptGroup(cmd, CommandWaitDelay)
+	settle := InterruptGroup(cmd, CommandWaitDelay)
 	err := cmd.Run()
+	settle(err)
 	return Result{Stdout: stdout.String(), Stderr: stderr.String(), Err: CommandFailure(cmd, err)}
 }
 
@@ -56,7 +58,15 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 // wait on its output pipes. Without both, a deadline is unenforceable: the
 // default cancellation kills the process Config started, while Wait goes on
 // waiting for every descendant that inherited its pipes.
-func InterruptGroup(cmd *exec.Cmd, delay time.Duration) {
+//
+// It returns a function to call with the command's own error once Wait has
+// returned. That cancels the pending group kill, so a signal cannot arrive
+// after the group is gone and land on a process that reused its identifier.
+func InterruptGroup(cmd *exec.Cmd, delay time.Duration) func(error) {
+	var (
+		mu         sync.Mutex
+		escalation *time.Timer
+	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = delay
 	cmd.Cancel = func() error {
@@ -68,11 +78,26 @@ func InterruptGroup(cmd *exec.Cmd, delay time.Duration) {
 		// A shell starts a background command with SIGINT ignored, and the
 		// escalation os/exec performs when WaitDelay elapses reaches only the
 		// process Config started. Without this the group survives a cancel.
-		time.AfterFunc(delay, func() { _ = syscall.Kill(group, syscall.SIGKILL) })
+		mu.Lock()
+		escalation = time.AfterFunc(delay, func() { _ = syscall.Kill(group, syscall.SIGKILL) })
+		mu.Unlock()
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		}
 		return err
+	}
+	return func(err error) {
+		// ErrWaitDelay means the pipes outlived the command, which is the one
+		// case the group kill is for. Every other ending has already reaped
+		// the group, so the pending signal has nothing left to reach.
+		if errors.Is(err, exec.ErrWaitDelay) {
+			return
+		}
+		mu.Lock()
+		if escalation != nil {
+			escalation.Stop()
+		}
+		mu.Unlock()
 	}
 }
 

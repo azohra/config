@@ -241,7 +241,9 @@ record are preserved. A baseline is eligible only after its schema and resource
 identity validate and the machine no longer declares that capability. A
 completed restore record is eligible only when it validates and belongs to a
 managed-checkout identity other than the current one. Pending and current
-records remain.
+records remain. A marker recording a step an interrupted run still owes is
+eligible only when the document no longer declares the capability that would
+act on it.
 
 The CLI and terminal interface print the complete plan before mutation. The
 terminal interface confirms on its own screen and then invokes the explicit

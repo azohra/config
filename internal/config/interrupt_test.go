@@ -160,3 +160,64 @@ func TestOnlyOneSectionHoldsTheInterrupt(t *testing.T) {
 		t.Fatalf("holdInterrupt is taken in %v, want only files.go once", callers)
 	}
 }
+
+// resumeWrites undoes stopNewWrites so one test's interrupt does not stop
+// every write in the rest of the package.
+func resumeWrites(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		inFlightMu.Lock()
+		closing = false
+		inFlightIdle.Broadcast()
+		inFlightMu.Unlock()
+	})
+}
+
+func TestNoWriteBeginsOnceTheProcessIsStopping(t *testing.T) {
+	// Writes arrive one after another, so a signal landing between two files
+	// finds nothing in flight. Draining alone would exit while the next write
+	// was starting, which is the tear the whole guard exists to prevent.
+	resumeWrites(t)
+	stopNewWrites()
+	awaitWrites() // nothing in flight; the drain returns at once
+
+	started := make(chan struct{})
+	go func() {
+		release := holdInterrupt()
+		close(started)
+		release()
+	}()
+	select {
+	case <-started:
+		t.Fatal("a write began after the process started stopping")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// The process exits from here; releasing the gate only so the goroutine
+	// above can finish and the race detector stays quiet.
+	inFlightMu.Lock()
+	closing = false
+	inFlightIdle.Broadcast()
+	inFlightMu.Unlock()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the blocked write never resumed")
+	}
+}
+
+func TestAtomicWriteIsRefusedOnceStopping(t *testing.T) {
+	resumeWrites(t)
+	path := filepath.Join(t.TempDir(), "artifact")
+	stopNewWrites()
+	done := make(chan error, 1)
+	go func() { done <- atomicWrite(path, []byte("state\n"), 0o600) }()
+	select {
+	case <-done:
+		t.Fatal("atomicWrite started a file after the process began stopping")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a refused write left something behind: %v", err)
+	}
+}
