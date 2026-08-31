@@ -301,3 +301,40 @@ func TestSnapshotRefusesToCommitWhenThePreflightGateFails(t *testing.T) {
 		t.Fatal("a missing gate still produced a commit")
 	}
 }
+
+// failingGitRunner answers every command through the real runner except the
+// one it is told to break.
+type failingGitRunner struct {
+	inner  Runner
+	broken string
+}
+
+func (r failingGitRunner) Run(ctx context.Context, name string, args ...string) Result {
+	if len(args) > 0 && args[0] == r.broken {
+		return Result{Stderr: "fatal: unable to read the index", Err: errors.New("exit status 128")}
+	}
+	return r.inner.Run(ctx, name, args...)
+}
+
+func (r failingGitRunner) Exists(name string) bool { return r.inner.Exists(name) }
+
+func TestSnapshotRefusesWhenTheRepositoryCannotBeRead(t *testing.T) {
+	// Every field snapshotStatus derives has a zero value that reads as a
+	// clean tree in agreement with its upstream, and Save calls that success.
+	for _, broken := range []string{"status", "rev-list"} {
+		t.Run(broken, func(t *testing.T) {
+			snapshotter, root, _ := snapshotFixture(t)
+			if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			snapshotter.Runner = failingGitRunner{inner: snapshotter.Runner, broken: broken}
+			err := snapshotter.Save()
+			if err == nil {
+				t.Fatal("Save reported success over a repository it could not read")
+			}
+			if !strings.Contains(err.Error(), "unreadable") {
+				t.Fatalf("Save error = %v", err)
+			}
+		})
+	}
+}

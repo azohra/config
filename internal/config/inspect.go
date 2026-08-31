@@ -225,7 +225,14 @@ func snapshotStatus(paths Paths, machine Machine, runner Runner) SnapshotStatus 
 	if commit := run(runner, "git", "rev-parse", "--short", "HEAD"); commit.Err == nil {
 		status.Commit = commit.Output()
 	}
+	// A probe that failed leaves this function's fields at their zero values,
+	// which read as a clean tree in agreement with its upstream. Save treats
+	// that as success, so an unreadable answer has to become a policy error.
+	unreadable := ""
 	porcelain := run(runner, "git", "status", "--porcelain=v1", "--untracked-files=all")
+	if porcelain.Err != nil {
+		unreadable = "working tree state is unreadable"
+	}
 	for _, line := range strings.Split(strings.TrimSpace(porcelain.Stdout), "\n") {
 		if line != "" {
 			status.Changes = append(status.Changes, line)
@@ -235,14 +242,21 @@ func snapshotStatus(paths Paths, machine Machine, runner Runner) SnapshotStatus 
 	upstream := run(runner, "git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
 	if upstream.Err == nil {
 		status.Upstream = upstream.Output()
-		if ahead := run(runner, "git", "rev-list", "--count", status.Upstream+"..HEAD"); ahead.Err == nil {
+		ahead := run(runner, "git", "rev-list", "--count", status.Upstream+"..HEAD")
+		behind := run(runner, "git", "rev-list", "--count", "HEAD.."+status.Upstream)
+		if ahead.Err != nil || behind.Err != nil {
+			if unreadable == "" {
+				unreadable = "the distance to " + status.Upstream + " is unreadable"
+			}
+		} else {
 			status.Ahead, _ = strconv.Atoi(ahead.Output())
-		}
-		if behind := run(runner, "git", "rev-list", "--count", "HEAD.."+status.Upstream); behind.Err == nil {
 			status.Behind, _ = strconv.Atoi(behind.Output())
 		}
 	}
 	status.PolicyError = snapshotPolicyError(paths, machine, runner, status)
+	if status.PolicyError == "" {
+		status.PolicyError = unreadable
+	}
 	return status
 }
 
