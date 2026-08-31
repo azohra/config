@@ -154,9 +154,16 @@ func TestPathAndInstallDoNotRequireAMachineRepository(t *testing.T) {
 		t.Fatalf("config path = %q (exit %d), want %q", output, code, wantPath)
 	}
 
+	// The test binary carries no release version, and installing one as the
+	// canonical command has to say so: config update skips the release
+	// transition for a development build, so it would otherwise look current
+	// forever.
 	output, code = runConfig(t, binary, home, "install")
-	if code != 0 || output != "" {
+	if code != 0 {
 		t.Fatalf("config install = %q (exit %d)", output, code)
+	}
+	if !strings.Contains(output, "development build") {
+		t.Fatalf("config install said nothing about the build it installed: %q", output)
 	}
 	installed := filepath.Join(home, ".local", "bin", "config")
 	installedBytes, err := os.ReadFile(installed)
