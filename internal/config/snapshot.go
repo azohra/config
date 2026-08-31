@@ -47,13 +47,16 @@ func (s Snapshotter) Save() error {
 		s.Log.OK("already backed up to " + destination)
 		return nil
 	}
-	if s.Validate != nil {
-		s.Log.Info("checking machine state")
-		if err := s.Validate(); err != nil {
-			return err
-		}
-		s.Log.OK("machine state valid")
+	// The gate on an irreversible commit and push is not optional. A
+	// Snapshotter without one cannot prove what it is about to record.
+	if s.Validate == nil {
+		return fmt.Errorf("cannot save: no machine state gate")
 	}
+	s.Log.Info("checking machine state")
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	s.Log.OK("machine state valid")
 	if dirty {
 		if err := s.Live.Command("git", "add", "-A"); err != nil {
 			return err
