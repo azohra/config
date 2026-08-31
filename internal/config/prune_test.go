@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -176,23 +177,68 @@ func pruneExitError(t *testing.T) error {
 	return exec.Command("sh", "-c", "exit 1").Run()
 }
 
-func TestNewPrunerPinsPlanningAndApplyToTheSameMiseState(t *testing.T) {
+func TestNewPrunerLeavesMiseStateToMise(t *testing.T) {
+	// Config once derived this path from the ambient environment and forced it
+	// onto the subprocesses that delete tools and packages, so an exported
+	// MISE_STATE_DIR — a relative one especially — decided what got deleted.
 	paths := testPaths(t)
 	t.Setenv("MISE_STATE_DIR", "relative-mise-state")
 	pruner := NewPruner(paths, testMachine(), &bytes.Buffer{})
-	want := filepath.Join(paths.Root, "relative-mise-state")
-	if pruner.MiseStateDir != want {
-		t.Fatalf("mise state directory = %q, want %q", pruner.MiseStateDir, want)
+	if pruner.MiseStateDir != "" {
+		t.Fatalf("pruner derived a mise state directory: %q", pruner.MiseStateDir)
 	}
 	runner, ok := pruner.Runner.(OSRunner)
-	if !ok || !slices.Contains(runner.Environment, "MISE_STATE_DIR="+want) {
-		t.Fatalf("planning environment = %#v", pruner.Runner)
+	if !ok {
+		t.Fatalf("planning runner = %#v", pruner.Runner)
 	}
 	live, ok := pruner.Live.(LiveRunner)
-	if !ok || !slices.Contains(live.Environment, "MISE_STATE_DIR="+want) {
-		t.Fatalf("apply environment = %#v", pruner.Live)
+	if !ok {
+		t.Fatalf("apply runner = %#v", pruner.Live)
+	}
+	for _, environment := range [][]string{runner.Environment, live.Environment} {
+		for _, entry := range environment {
+			if strings.HasPrefix(entry, "MISE_STATE_DIR=") {
+				t.Fatalf("Config forced mise state onto its own subprocess: %q", entry)
+			}
+		}
 	}
 }
+
+func TestPrunerAsksMiseWhereItsStateLives(t *testing.T) {
+	answers := map[string]Result{
+		"doctor": {Stdout: `{"dirs":{"state":"/var/db/mise-state"}}`},
+	}
+	state, err := miseStateDir(stubRunner{answers: answers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != "/var/db/mise-state" {
+		t.Fatalf("mise state directory = %q", state)
+	}
+	for name, answer := range map[string]Result{
+		"relative": {Stdout: `{"dirs":{"state":"mise-state"}}`},
+		"absent":   {Stdout: `{"dirs":{}}`},
+		"garbage":  {Stdout: "not a document"},
+	} {
+		if _, err := miseStateDir(stubRunner{answers: map[string]Result{"doctor": answer}}); err == nil {
+			t.Errorf("%s answer accepted as a mise state directory", name)
+		}
+	}
+}
+
+// stubRunner answers one command by the first argument that matches a key.
+type stubRunner struct{ answers map[string]Result }
+
+func (r stubRunner) Run(_ context.Context, _ string, args ...string) Result {
+	for _, arg := range args {
+		if answer, ok := r.answers[arg]; ok {
+			return answer
+		}
+	}
+	return Result{Err: errors.New("unexpected command")}
+}
+
+func (stubRunner) Exists(string) bool { return true }
 
 func TestPrunePlanUsesMiseInventoryAndProvesConfigOwnership(t *testing.T) {
 	fixture := newPruneFixture(t)

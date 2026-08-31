@@ -179,7 +179,10 @@ func directoryFinderFavorites(items []finderFavoriteItem) ([]finderFavorite, []f
 	var favorites []finderFavorite
 	var opaque []finderFavoriteItem
 	for _, item := range items {
-		favorite, managed := directoryFinderFavorite(item)
+		favorite, managed, err := directoryFinderFavorite(item)
+		if err != nil {
+			return nil, nil, err
+		}
 		if !managed {
 			opaque = append(opaque, item)
 			continue
@@ -192,19 +195,29 @@ func directoryFinderFavorites(items []finderFavoriteItem) ([]finderFavorite, []f
 	return favorites, opaque, nil
 }
 
-func directoryFinderFavorite(item finderFavoriteItem) (finderFavorite, bool) {
+// directoryFinderFavorite decides whether a sidebar entry is one Config
+// tracks. A path that is absent or is not a directory is a settled answer; a
+// path Config could not read is not, and folding the two together drops a real
+// Favorite out of the snapshot on a permission error or an unmounted volume.
+func directoryFinderFavorite(item finderFavoriteItem) (finderFavorite, bool, error) {
 	if item.Path == "" {
-		return finderFavorite{}, false
+		return finderFavorite{}, false, nil
 	}
 	path := filepath.Clean(item.Path)
 	if !filepath.IsAbs(path) {
-		return finderFavorite{}, false
+		return finderFavorite{}, false, nil
 	}
 	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		return finderFavorite{}, false
+	if errors.Is(err, os.ErrNotExist) {
+		return finderFavorite{}, false, nil
 	}
-	return finderFavorite{Name: item.Name, Path: path}, true
+	if err != nil {
+		return finderFavorite{}, false, fmt.Errorf("read Finder Favorite %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return finderFavorite{}, false, nil
+	}
+	return finderFavorite{Name: item.Name, Path: path}, true, nil
 }
 
 func finderFavoritesLive(store finderFavoritesStore) (json.RawMessage, []finderFavorite, []finderFavoriteItem, error) {
@@ -224,7 +237,10 @@ func finderFavoritesLayout(items []finderFavoriteItem) ([]finderFavoriteLayoutIt
 	layout := make([]finderFavoriteLayoutItem, 0, len(items))
 	var managed []finderFavorite
 	for _, item := range items {
-		favorite, ok := directoryFinderFavorite(item)
+		favorite, ok, err := directoryFinderFavorite(item)
+		if err != nil {
+			return nil, err
+		}
 		if ok {
 			managed = append(managed, favorite)
 			layout = append(layout, finderFavoriteLayoutItem{Favorite: favorite, Managed: true})
@@ -381,7 +397,10 @@ func replaceFinderFavorites(store finderFavoritesStore, target []finderFavoriteL
 		return err
 	}
 	for _, item := range items {
-		favorite, managed := directoryFinderFavorite(item)
+		favorite, managed, err := directoryFinderFavorite(item)
+		if err != nil {
+			return err
+		}
 		if !managed || wanted[favorite.Path] {
 			continue
 		}

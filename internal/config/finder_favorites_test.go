@@ -380,3 +380,38 @@ func TestFinderFavoritesRejectInvalidSnapshotsAndLiveDuplicates(t *testing.T) {
 		t.Fatalf("duplicate live resource = %+v", resource)
 	}
 }
+
+func TestFinderFavoriteReadFailureIsNotAVerdict(t *testing.T) {
+	// A path Config cannot read was indistinguishable from one that is not a
+	// directory, so a permission error or an unmounted volume quietly dropped
+	// a real Favorite out of the captured snapshot.
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.MkdirAll(filepath.Join(blocked, "Projects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(blocked, 0o755) })
+
+	unreadable := finderFavoriteItem{Name: "Projects", Path: filepath.Join(blocked, "Projects")}
+	if _, _, err := directoryFinderFavorite(unreadable); err == nil {
+		t.Fatal("an unreadable Favorite was classified as one Config does not own")
+	}
+	if _, _, err := directoryFinderFavorites([]finderFavoriteItem{unreadable}); err == nil {
+		t.Fatal("an unreadable Favorite reached the snapshot as opaque")
+	}
+
+	// A path that is simply absent, or is a file, remains a settled answer.
+	missing := finderFavoriteItem{Name: "Gone", Path: filepath.Join(t.TempDir(), "Gone")}
+	if _, managed, err := directoryFinderFavorite(missing); managed || err != nil {
+		t.Fatalf("absent Favorite = %v, %v", managed, err)
+	}
+	file := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, managed, err := directoryFinderFavorite(finderFavoriteItem{Name: "Notes", Path: file}); managed || err != nil {
+		t.Fatalf("file Favorite = %v, %v", managed, err)
+	}
+}
