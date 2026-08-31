@@ -147,12 +147,14 @@ func TestReleasedUpdaterInstallsAndReexecutesTheVerifiedPermanentRelease(t *test
 	canonicalConfig := ConfigCommandPath(paths)
 	releaseDirectory := t.TempDir()
 	releaseConfig := filepath.Join(releaseDirectory, "config")
+	releaseCache := filepath.Join(filepath.Dir(paths.StateDir), "release-mise")
+	releaseState := filepath.Join(filepath.Dir(paths.StateDir), "release-mise-state")
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
 	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
 	t.Setenv("PATH", filepath.Dir(canonicalConfig)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	writeUpdateExecutable(t, canonicalMise, `#!/bin/sh
-printf '%s|%s|%s|%s|%s|%s\n' "$*" "$MISE_CONFIG_DIR" "$MISE_AUTO_UPDATE" "$MISE_NO_CONFIG" "$MISE_GITHUB_GITHUB_ATTESTATIONS" "$MISE_MINIMUM_RELEASE_AGE" >> "$UPDATE_TEST_LOG"
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$*" "$MISE_CONFIG_DIR" "$MISE_AUTO_UPDATE" "$MISE_NO_CONFIG" "$MISE_GITHUB_GITHUB_ATTESTATIONS" "$MISE_MINIMUM_RELEASE_AGE" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_USE_VERSIONS_HOST" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
@@ -164,7 +166,7 @@ if [ "$2" = where ]; then
 fi
 `)
 	writeUpdateExecutable(t, releaseConfig, `#!/bin/sh
-printf 'candidate %s|%s|%s|%s|%s|%s\n' "$*" "$MISE_CONFIG_DIR" "$MISE_AUTO_UPDATE" "$MISE_NO_CONFIG" "$MISE_GITHUB_GITHUB_ATTESTATIONS" "$MISE_MINIMUM_RELEASE_AGE" >> "$UPDATE_TEST_LOG"
+printf 'candidate %s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$*" "$MISE_CONFIG_DIR" "$MISE_AUTO_UPDATE" "$MISE_NO_CONFIG" "$MISE_GITHUB_GITHUB_ATTESTATIONS" "$MISE_MINIMUM_RELEASE_AGE" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_USE_VERSIONS_HOST" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf 'config v0.5.0\n'
 fi
@@ -196,13 +198,14 @@ fi
 		t.Fatal(err)
 	}
 	want := strings.Join([]string{
-		"--no-config self-update " + testedMiseVersion + " --yes --no-plugins||0|1||",
-		"--version||0|1||",
-		"--no-config latest " + configReleaseBackend + "||0|1|true|0s",
-		"--no-config install github:azohra/config@0.5.0||0|1|true|0s",
-		"--no-config where github:azohra/config@0.5.0||0|1|true|0s",
-		"candidate --version||0|1|true|0s",
-		"candidate install||0|1|true|0s",
+		"--no-config self-update " + testedMiseVersion + " --yes --no-plugins||0|1|||||",
+		"--version||0|1|||||",
+		"--no-config cache clear||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
+		"--no-config latest " + configReleaseBackend + "||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
+		"--no-config install github:azohra/config@0.5.0||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
+		"--no-config where github:azohra/config@0.5.0||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
+		"candidate --version||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
+		"candidate install||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
 		"",
 	}, "\n")
 	if string(commands) != want {
@@ -248,7 +251,7 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config latest " + configReleaseBackend + "\n"
+	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config cache clear\n--no-config latest " + configReleaseBackend + "\n"
 	if string(commands) != want {
 		t.Fatalf("commands = %q, want %q", commands, want)
 	}
@@ -389,7 +392,7 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config latest " + configReleaseBackend + "\n"
+	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config cache clear\n--no-config latest " + configReleaseBackend + "\n"
 	if string(commands) != want || strings.Contains(string(commands), "config install") {
 		t.Fatalf("downgrade commands = %q, want no install after resolution", commands)
 	}

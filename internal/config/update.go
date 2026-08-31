@@ -20,6 +20,8 @@ type Updater struct {
 	Version           string
 	Mise              string
 	Config            string
+	ReleaseCache      string
+	ReleaseState      string
 	MiseProbe         Runner
 	Installed         Runner
 	Substrate         LiveRunner
@@ -40,6 +42,12 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 		Version: version,
 		Mise:    misePath(paths),
 		Config:  command,
+		ReleaseCache: filepath.Join(
+			filepath.Dir(paths.StateDir), "release-mise",
+		),
+		ReleaseState: filepath.Join(
+			filepath.Dir(paths.StateDir), "release-mise-state",
+		),
 		MiseProbe: OSRunner{
 			Dir:         paths.Home,
 			Environment: substrateEnvironment,
@@ -186,6 +194,13 @@ func (u Updater) installedVersion() (string, error) {
 }
 
 func (u Updater) resolveRelease() (string, error) {
+	if u.ReleaseCache == "" || !filepath.IsAbs(u.ReleaseCache) ||
+		u.ReleaseState == "" || !filepath.IsAbs(u.ReleaseState) {
+		return "", errors.New("Config release cache paths are invalid")
+	}
+	if _, err := u.releaseOutput("mise", "--no-config", "cache", "clear"); err != nil {
+		return "", fmt.Errorf("refresh Config release metadata: %w", err)
+	}
 	output, err := u.releaseOutput("mise", "--no-config", "latest", configReleaseBackend)
 	if err != nil {
 		return "", fmt.Errorf("resolve latest Config release: %w", err)
@@ -255,6 +270,9 @@ func (u Updater) releaseRunner() LiveRunner {
 	runner.Environment = append(runner.Environment,
 		"MISE_GITHUB_GITHUB_ATTESTATIONS=true",
 		"MISE_MINIMUM_RELEASE_AGE=0s",
+		"MISE_CACHE_DIR="+u.ReleaseCache,
+		"MISE_STATE_DIR="+u.ReleaseState,
+		"MISE_USE_VERSIONS_HOST=0",
 	)
 	return runner
 }
