@@ -93,44 +93,55 @@ type Pruner struct {
 }
 
 func NewPruner(paths Paths, machine Machine, out io.Writer) Pruner {
-	stateDir := defaultMiseStateDir(paths)
-	runner := NewMachineRunner(paths)
-	runner.Environment = append(runner.Environment, "MISE_STATE_DIR="+stateDir)
-	live := NewMachineLiveRunner(paths)
-	live.Environment = append(live.Environment, "MISE_STATE_DIR="+stateDir)
 	return Pruner{
-		Paths:        paths,
-		Machine:      machine,
-		Runner:       runner,
-		Live:         live,
-		MiseStateDir: stateDir,
-		Log:          Logger{Out: out},
+		Paths:   paths,
+		Machine: machine,
+		Runner:  NewMachineRunner(paths),
+		Live:    NewMachineLiveRunner(paths),
+		Log:     Logger{Out: out},
 	}
 }
 
-func defaultMiseStateDir(paths Paths) string {
-	if state := os.Getenv("MISE_STATE_DIR"); state != "" {
-		if filepath.IsAbs(state) {
-			return filepath.Clean(state)
-		}
-		return filepath.Join(paths.Root, state)
+// miseStateDir asks mise where its own state lives. Config once derived this
+// path from the environment and then forced it onto the subprocesses that
+// delete tools and packages, which made the safety of every deletion depend on
+// Config reproducing a path mise owns.
+func miseStateDir(runner Runner) (string, error) {
+	result := run(runner, "mise", "doctor", "--json")
+	var report struct {
+		Dirs struct {
+			State string `json:"state"`
+		} `json:"dirs"`
 	}
-	if stateRoot := os.Getenv("XDG_STATE_HOME"); stateRoot != "" {
-		if !filepath.IsAbs(stateRoot) {
-			stateRoot = filepath.Join(paths.Root, stateRoot)
+	// doctor exits non-zero when it has findings to report, and the document
+	// it prints is still the answer.
+	if err := json.Unmarshal([]byte(result.Stdout), &report); err != nil {
+		if result.Err != nil {
+			return "", fmt.Errorf("locate mise state: %w", result.Failure())
 		}
-		return filepath.Join(stateRoot, "mise")
+		return "", fmt.Errorf("locate mise state: %w", err)
 	}
-	return paths.InHome(".local", "state", "mise")
+	if !filepath.IsAbs(report.Dirs.State) {
+		return "", fmt.Errorf("locate mise state: mise reported %q", report.Dirs.State)
+	}
+	return filepath.Clean(report.Dirs.State), nil
 }
 
 func (p Pruner) Plan() (PrunePlan, error) {
 	if err := requireTestedMise(p.Runner); err != nil {
 		return PrunePlan{}, err
 	}
+	stateDir := p.MiseStateDir
+	if stateDir == "" {
+		resolved, err := miseStateDir(p.Runner)
+		if err != nil {
+			return PrunePlan{}, err
+		}
+		stateDir = resolved
+	}
 	var plan PrunePlan
 	var err error
-	plan.registry, err = p.planRegistry()
+	plan.registry, err = p.planRegistry(stateDir)
 	if err != nil {
 		return PrunePlan{}, err
 	}
@@ -157,12 +168,12 @@ func (p Pruner) Plan() (PrunePlan, error) {
 	return plan, nil
 }
 
-func (p Pruner) planRegistry() (pruneRegistry, error) {
-	tracked, err := deadConfigLinks(filepath.Join(p.MiseStateDir, "tracked-configs"))
+func (p Pruner) planRegistry(stateDir string) (pruneRegistry, error) {
+	tracked, err := deadConfigLinks(filepath.Join(stateDir, "tracked-configs"))
 	if err != nil {
 		return pruneRegistry{}, fmt.Errorf("inspect mise tracked configurations: %w", err)
 	}
-	trusted, err := deadConfigLinks(filepath.Join(p.MiseStateDir, "trusted-configs"))
+	trusted, err := deadConfigLinks(filepath.Join(stateDir, "trusted-configs"))
 	if err != nil {
 		return pruneRegistry{}, fmt.Errorf("inspect mise trusted configurations: %w", err)
 	}
