@@ -69,6 +69,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer config.OnInterrupt(os.Stderr)()
+	// Every command that writes takes the checkout lock. The terminal
+	// interface does not: it launches these same commands as children, and
+	// each one takes the lock for the work it does.
+	if len(args) > 0 && slices.Contains(
+		[]string{"install", "update", "bootstrap", "prune", "--apply", "--snapshot"}, args[0]) {
+		release, lockErr := config.LockCheckout(paths)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer release()
+	}
 	if len(args) > 0 && args[0] == "path" {
 		if len(args) != 1 {
 			return errors.New("usage: config path")

@@ -37,6 +37,9 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return Machine{}, false, err
 	}
+	// A terminal interrupt during bootstrap skips the cleanup below and leaves
+	// a whole clone of the machine repository beside the managed checkout.
+	sweepStaging(parent, ".config-clone-")
 	staging, err := os.MkdirTemp(parent, ".config-clone-")
 	if err != nil {
 		return Machine{}, false, err

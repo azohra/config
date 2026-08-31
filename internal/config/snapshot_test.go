@@ -338,3 +338,29 @@ func TestSnapshotRefusesWhenTheRepositoryCannotBeRead(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotDoesNotCommitWhatAKilledCaptureStranded(t *testing.T) {
+	// atomicWrite stages beside its target inside the managed checkout, and
+	// git add -A stages everything, so a capture killed mid-rename would put
+	// its temporary file in the operator's permanent history.
+	snapshotter, root, _ := snapshotFixture(t)
+	stranded := filepath.Join(root, "snapshots", "dock.apps.tmp.4127")
+	if err := os.MkdirAll(filepath.Dir(stranded), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stranded, []byte("half a layout\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotter.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stranded); !os.IsNotExist(err) {
+		t.Fatal("the stranded write survived the save")
+	}
+	if tracked := gitTest(t, root, "ls-files", "snapshots"); strings.Contains(tracked, ".tmp.") {
+		t.Fatalf("a staging file reached the snapshot: %s", tracked)
+	}
+}

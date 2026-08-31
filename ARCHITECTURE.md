@@ -53,6 +53,17 @@ itself; freshness belongs to the explicit repository update scope. Naming the
 phases means Config must keep pace with mise, so a test pins the list to the
 phases mise offers.
 
+Config is one writer at a time. Every command that writes takes an advisory
+lock on the managed checkout before it starts, and refuses rather than
+interleaving with another Config. The terminal interface holds no lock of its
+own, because the commands it launches take it for the work they do.
+
+An interrupt lands between writes, not inside one. SIGINT and SIGTERM end the
+process once no critical section is running: an atomic rename, a hook beside
+the manifest that claims it, a bundle swap. A section that has not finished
+within ten seconds is reported and abandoned. What an interrupted run staged
+is named by Config and swept by the next run rather than left for the operator.
+
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
 capabilities. A capability is absent unless schema 2 declares it. The document
