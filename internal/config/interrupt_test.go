@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -39,27 +38,77 @@ func TestCheckoutLockAdmitsOneWriter(t *testing.T) {
 	elsewhere()
 }
 
-func TestHoldInterruptBlocksTheHandlerUntilTheWriteFinishes(t *testing.T) {
-	// The handler takes the write side, so it cannot proceed while any
-	// critical section holds the read side.
+func TestAnInterruptWaitsForTheWritesInFlight(t *testing.T) {
 	release := holdInterrupt()
-	acquired := make(chan struct{})
-	var once sync.Once
+	idle := make(chan struct{})
 	go func() {
-		interruptGuard.Lock()
-		once.Do(func() { close(acquired) })
-		interruptGuard.Unlock()
+		awaitWrites()
+		close(idle)
 	}()
 	select {
-	case <-acquired:
-		t.Fatal("an interrupt cut into a critical section")
+	case <-idle:
+		t.Fatal("an interrupt cut into a write")
 	case <-time.After(50 * time.Millisecond):
 	}
 	release()
 	select {
-	case <-acquired:
+	case <-idle:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the interrupt never ran after the section finished")
+		t.Fatal("the interrupt never ran after the write finished")
+	}
+}
+
+func TestANestedHoldDoesNotDeadlockTheWriteUnderIt(t *testing.T) {
+	// A write inside a write is what a loop that holds and then calls
+	// atomicWrite produces. Under a read lock this deadlocked: the waiting
+	// interrupt blocks the inner hold, which the outer hold is waiting for.
+	outer := holdInterrupt()
+	nested := make(chan func(), 1)
+	go func() {
+		awaitWrites()
+	}()
+	time.Sleep(20 * time.Millisecond) // let the interrupt start waiting
+	done := make(chan struct{})
+	go func() {
+		nested <- holdInterrupt()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a hold taken inside another hold blocked")
+	}
+	(<-nested)()
+	outer()
+
+	idle := make(chan struct{})
+	go func() {
+		awaitWrites()
+		close(idle)
+	}()
+	select {
+	case <-idle:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the count did not return to zero")
+	}
+}
+
+func TestAtomicWriteIsTheWriteAnInterruptWaitsFor(t *testing.T) {
+	// The behaviour, not the call sites: a write in progress holds the
+	// interrupt, and the count is balanced when it returns.
+	path := filepath.Join(t.TempDir(), "artifact")
+	if err := atomicWrite(path, []byte("state\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	idle := make(chan struct{})
+	go func() {
+		awaitWrites()
+		close(idle)
+	}()
+	select {
+	case <-idle:
+	case <-time.After(2 * time.Second):
+		t.Fatal("atomicWrite left a write in flight")
 	}
 }
 

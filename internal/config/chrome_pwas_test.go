@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/exec"
@@ -466,5 +467,56 @@ func TestChromePWAsUseThreeWayReconciliationOnceTheSidesHaveAgreed(t *testing.T)
 	}
 	if !resource.Allows(Capture) {
 		t.Fatalf("no way to keep this Mac's answer: %#v", resource.Actions)
+	}
+}
+
+func TestChromePWARestoreTrashesABundleTheReplacementWillNotOverwrite(t *testing.T) {
+	// A replacement that keeps its bundle name is trashed immediately before
+	// its rename. One whose path the replacement will not take has to be
+	// trashed up front, or the Mac keeps both copies.
+	if _, err := os.Stat(chromePWATemplatePath()); err != nil {
+		t.Skip("Google Chrome is not installed")
+	}
+	paths := testPaths(t)
+	icon := []byte("icon")
+	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
+
+	bundle := writeTestLivePWA(t, paths, app, icon)
+	runner := OSRunner{Dir: paths.Root}
+	bidir := newBidirectional(paths, runner)
+	if err := bidir.CaptureChromePWAs(); err != nil {
+		t.Fatal(err)
+	}
+	// The saved snapshot names the same PWA differently, so the replacement
+	// lands beside the installed bundle rather than on top of it.
+	snapshot, err := os.ReadFile(chromePWASnapshotPath(paths))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(snapshot, []byte(`"name": "Gmail"`)) {
+		t.Fatalf("saved snapshot does not name the PWA as expected: %s", snapshot)
+	}
+	renamedSnapshot := bytes.ReplaceAll(snapshot, []byte(`"name": "Gmail"`), []byte(`"name": "Mail"`))
+	if err := atomicWrite(chromePWASnapshotPath(paths), renamedSnapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeBin, "trash"), []byte("#!/bin/sh\nrm -rf -- \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	applier := Applier{
+		Paths: paths, Runner: runner, Live: newLiveRunner(paths.Root),
+		Log: Logger{Out: io.Discard}, Bidir: bidir,
+	}
+	if err := applier.applyChromePWAs(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(bundle); !os.IsNotExist(err) {
+		t.Fatalf("the bundle the replacement did not overwrite survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(chromePWALiveDir(paths), "Mail.app")); err != nil {
+		t.Fatalf("the saved bundle was not installed under its own name: %v", err)
 	}
 }

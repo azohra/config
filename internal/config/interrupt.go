@@ -11,21 +11,39 @@ import (
 	"time"
 )
 
-// interruptGuard is held for reading by every section that has to reach its
-// own end, and for writing by the interrupt handler. A signal received inside
-// a critical section waits for it rather than landing in the middle of it.
-//
-// Exactly one section takes it: a single file's write. Go's read lock is not
-// re-entrant once a writer is waiting, so a hold wrapped around a loop of
-// writes would deadlock the write inside it. A cut between two files is what
-// the ownership ordering, the pending markers, and the sweeps are for.
-var interruptGuard sync.RWMutex
+// inFlight counts the writes that have to reach their own end: the staging,
+// rename, and sync of one file. It is a counter rather than a lock so that a
+// hold taken inside another hold is harmless — Go's read lock is not
+// re-entrant once a writer waits, and a nested hold under one would deadlock
+// the very write the interrupt is waiting for.
+var (
+	inFlightMu   sync.Mutex
+	inFlightIdle = sync.NewCond(&inFlightMu)
+	inFlight     int
+)
 
-// holdInterrupt marks the section an interrupt must not cut in half: the
-// staging, rename, and sync of one file.
+// holdInterrupt marks a write an interrupt must not cut in half.
 func holdInterrupt() func() {
-	interruptGuard.RLock()
-	return interruptGuard.RUnlock
+	inFlightMu.Lock()
+	inFlight++
+	inFlightMu.Unlock()
+	return func() {
+		inFlightMu.Lock()
+		inFlight--
+		if inFlight == 0 {
+			inFlightIdle.Broadcast()
+		}
+		inFlightMu.Unlock()
+	}
+}
+
+// awaitWrites returns once no write is in flight.
+func awaitWrites() {
+	inFlightMu.Lock()
+	defer inFlightMu.Unlock()
+	for inFlight > 0 {
+		inFlightIdle.Wait()
+	}
 }
 
 // interruptGrace bounds how long an interrupt waits for a critical section.
@@ -48,7 +66,7 @@ func OnInterrupt(out io.Writer) func() {
 		case received := <-signals:
 			finished := make(chan struct{})
 			go func() {
-				interruptGuard.Lock()
+				awaitWrites()
 				close(finished)
 			}()
 			select {

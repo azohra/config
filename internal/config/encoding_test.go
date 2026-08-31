@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,30 @@ func TestTrackedArtifactsAreDecodedStrictly(t *testing.T) {
 	}
 	if _, _, _, err := testBidirectional(paths, dockRunner{}).chromePWASaved(); err != nil {
 		t.Fatalf("a well-formed snapshot was refused: %v", err)
+	}
+}
+
+func TestEveryTrackedArtifactDecoderIsTheStrictOne(t *testing.T) {
+	// One decoder is only one authority if every artifact reads through it.
+	// Trailing data is the check the weakest of the three used to omit.
+	paths := testPaths(t)
+	trailing := func(document string) []byte { return []byte(document + "\n" + document + "\n") }
+
+	if err := atomicWrite(finderFavoritesSnapshotPath(paths),
+		trailing(`{"schema":1,"favorites":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, err := testBidirectional(paths, dockRunner{}).finderFavoritesSaved(); err == nil {
+		t.Error("a saved Finder Favorites snapshot with trailing data was accepted")
+	}
+
+	hooks := t.TempDir()
+	manifest := `{"schema":1,"hooks":{}}`
+	if err := os.WriteFile(filepath.Join(hooks, repositoryHookManifestName), trailing(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readRepositoryHookManifest(hooks); err == nil {
+		t.Error("a hook ownership manifest with trailing data was accepted")
 	}
 }
 
