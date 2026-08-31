@@ -2,16 +2,19 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMiseVersionParsing(t *testing.T) {
@@ -92,8 +95,24 @@ func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Res
 
 func (*miseStubRunner) Exists(string) bool { return true }
 
+// unsupportedMiseVersions are versions Config does not accept, derived from
+// the one it does. A literal here becomes a fixture asserting refusal of the
+// version Config now requires the moment the tested version moves.
+func unsupportedMiseVersions() []string {
+	fields := strings.Split(testedMiseVersion, ".")
+	last, err := strconv.Atoi(fields[len(fields)-1])
+	if err != nil || last == 0 {
+		panic("tested mise version does not end in a number: " + testedMiseVersion)
+	}
+	older := slices.Clone(fields)
+	older[len(older)-1] = strconv.Itoa(last - 1)
+	newer := slices.Clone(fields)
+	newer[len(newer)-1] = strconv.Itoa(last + 1)
+	return []string{strings.Join(older, "."), strings.Join(newer, ".")}
+}
+
 func TestMiseChecksRequireTheTestedVersion(t *testing.T) {
-	for _, version := range []string{"2026.8.13", "2026.8.15"} {
+	for _, version := range unsupportedMiseVersions() {
 		checks := (Inspector{Runner: &miseStubRunner{version: version}}).miseChecks()
 		if len(checks) != 1 || checks[0].OK ||
 			checks[0].Label != "mise "+version+" is unsupported" ||
@@ -414,5 +433,71 @@ func TestAnUnreadableMachineDocumentIsNamedOnceNotAsPhaseDrift(t *testing.T) {
 	}
 	if unreadable != 1 {
 		t.Fatalf("the document was named %d times in %+v", unreadable, checks)
+	}
+}
+
+// countingRepoRunner reports the most git calls that were ever in flight at
+// once, and answers the two probes repositoryChecks makes.
+type countingRepoRunner struct {
+	mu      sync.Mutex
+	running int
+	peak    int
+	files   []string
+	repos   string
+}
+
+func (r *countingRepoRunner) Run(_ context.Context, name string, args ...string) Result {
+	if name == "mise" && slices.Equal(args, []string{"config", "ls", "-J"}) {
+		entries := make([]string, len(r.files))
+		for index, file := range r.files {
+			entries[index] = fmt.Sprintf(`{"path":%q}`, file)
+		}
+		return Result{Stdout: "[" + strings.Join(entries, ",") + "]"}
+	}
+	if name == "mise" && len(args) == 5 && args[0] == "config" && args[1] == "get" {
+		return Result{Stdout: r.repos}
+	}
+	if name != "git" {
+		return Result{Err: errors.New("unexpected command")}
+	}
+	r.mu.Lock()
+	r.running++
+	if r.running > r.peak {
+		r.peak = r.running
+	}
+	r.mu.Unlock()
+	time.Sleep(2 * time.Millisecond) // hold the slot long enough to overlap
+	r.mu.Lock()
+	r.running--
+	r.mu.Unlock()
+	return Result{Stdout: "git@github.com:owner/repository.git"}
+}
+
+func (*countingRepoRunner) Exists(string) bool { return true }
+
+func TestRepositoryChecksBoundTheirFanOut(t *testing.T) {
+	// The machine document decides how many repositories are declared, and
+	// each one costs a process. Twenty-eight is an ordinary number here.
+	const declared = 64
+	root := t.TempDir()
+	var repos strings.Builder
+	for index := range declared {
+		checkout := filepath.Join(root, fmt.Sprintf("checkout-%d", index))
+		if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&repos, "[%q]\nurl = \"git@github.com:owner/repository.git\"\n", checkout)
+	}
+	runner := &countingRepoRunner{files: []string{"/machine/mise/config.toml"}, repos: repos.String()}
+	paths := testPaths(t)
+	Inspector{Paths: paths, Machine: testMachine(), Runner: runner}.repositoryChecks()
+	runner.mu.Lock()
+	peak := runner.peak
+	runner.mu.Unlock()
+	if peak == 0 {
+		t.Fatal("no git call was made")
+	}
+	if limit := max(1, min(declared, runtime.NumCPU())); peak > limit {
+		t.Fatalf("%d git calls ran at once, want at most %d", peak, limit)
 	}
 }

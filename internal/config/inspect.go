@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -174,9 +175,12 @@ func (i Inspector) repositoryChecks() []Check {
 	if err != nil {
 		return []Check{no("declared repositories unreadable", err.Error())}
 	}
-	// One git call per declared checkout, so they go out together.
+	// One git call per declared checkout, so they go out together — but the
+	// document decides how many there are, and each one is a process. Bound
+	// the fan-out to the machine rather than to the declaration.
 	type verdict struct{ absent, foreign bool }
 	verdicts := make([]verdict, len(declared))
+	tokens := make(chan struct{}, max(1, min(len(declared), runtime.NumCPU())))
 	var wg sync.WaitGroup
 	for index, repository := range declared {
 		wg.Add(1)
@@ -189,6 +193,8 @@ func (i Inspector) repositoryChecks() []Check {
 			if repository.URL == "" {
 				return
 			}
+			tokens <- struct{}{}
+			defer func() { <-tokens }()
 			origin := run(i.Runner, "git", "-C", repository.Path, "remote", "get-url", managedRemote)
 			verdicts[index] = verdict{foreign: origin.Err != nil || !sameRepositoryLocator(origin.Output(), repository.URL)}
 		}()
