@@ -34,6 +34,13 @@ mise's general release-age delay because this explicit operation promises the
 latest release; an exact resolved version, provenance verification, and
 downgrade refusal still gate replacement.
 
+The scoped child configuration is not a separate mise installation. Mise's
+tool store and tracked-configuration ledger remain user-wide. The machine
+repository is the Mac's baseline authority, while a loadable repository-local
+mise document can remain an additional authority for that repository. Config
+therefore delegates tool and package liveness to mise's combined inventory
+instead of treating the machine document as an exclusive manifest.
+
 Config probes the phases separately rather than taking mise's aggregate.
 The aggregate includes `repos`, where mise answers two questions at once:
 whether a checkout exists, which is a local stat, and whether it matches its
@@ -176,6 +183,30 @@ intact.
 The repository locator is public configuration. Authentication stays in the
 caller's Git environment or credential helper, outside the document, logs, and
 Config state.
+
+## Pruning
+
+Pruning crosses two ownership domains without merging them. Mise computes
+prunable tool versions and provider-owned packages from its shared inventory,
+and removes dead links from its own tracked and trusted configuration ledgers.
+Config discovers package managers from mise rather than maintaining its own
+provider list. A provider with no prune operation is reported and left alone.
+
+Config directly removes only artifacts with verifiable Config provenance. An
+undeclared repository hook is eligible when its bytes still match the digest
+in Config's adjacent ownership manifest; a changed or non-regular hook and its
+record are preserved. A baseline is eligible only after its schema and resource
+identity validate and the machine no longer declares that capability. A
+completed restore record is eligible only when it validates and belongs to a
+managed-checkout identity other than the current one. Pending and current
+records remain.
+
+The CLI prints the complete plan before mutation. Interactive use requires a
+confirmation, redirected use is preview-only, and `--yes` is the explicit
+non-interactive apply form. Apply recomputes the plan and refuses it if the
+candidate set or any ownership digest changed after preview. Mise performs its
+own deletions; Config revalidates every file it removes immediately before the
+operation.
 
 ## Packages
 

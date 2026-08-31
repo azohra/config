@@ -218,6 +218,9 @@ url = "git@github.com:example/absent.git"
 func TestMisePhasesCoverEveryBootstrapPhase(t *testing.T) {
 	// Skipping here would retire the guard silently. The check task runs the
 	// suite through mise, so mise is on PATH whenever these tests run at all.
+	// Keep mise's shared configuration ledger out of this test: the probe is
+	// about command vocabulary, not configuration discovery.
+	t.Setenv("MISE_STATE_DIR", t.TempDir())
 	mise, err := exec.LookPath("mise")
 	if err != nil {
 		t.Fatal("mise is not on PATH, so this guard cannot run")

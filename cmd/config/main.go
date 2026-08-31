@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -22,6 +24,7 @@ Usage:
   config --version
   config path
   config update
+  config prune [--dry-run | --yes]
   config bootstrap <repository>
 
 Config inspects first, proposes a plan, requires explicit choices for app state,
@@ -33,7 +36,11 @@ step has completed. Path prints the managed repository's canonical location.
 
 Update verifies its canonical mise substrate, installs the latest verified
 Config release, then continues from that release to update mise, declared tools,
-packages, and clean repositories. It runs only when explicitly invoked.`
+packages, and clean repositories. It runs only when explicitly invoked.
+
+Prune previews stale mise inventory and Config-owned local state. Without a
+terminal it is preview-only; --yes applies the exact plan after checking it
+again.`
 
 var version = "dev"
 
@@ -103,6 +110,8 @@ func run() error {
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "prune":
+			return prune(paths, machine, args[1:])
 		case "--status":
 			if len(args) != 1 {
 				return fmt.Errorf("unknown option: %s", args[1])
@@ -142,6 +151,80 @@ func run() error {
 	}
 	_, err = tea.NewProgram(ui.New(paths, machine, executable)).Run()
 	return err
+}
+
+type pruneOptions struct {
+	dryRun bool
+	yes    bool
+}
+
+func parsePruneOptions(args []string) (pruneOptions, error) {
+	var options pruneOptions
+	for _, argument := range args {
+		switch argument {
+		case "--dry-run":
+			if options.dryRun {
+				return pruneOptions{}, errors.New("usage: config prune [--dry-run | --yes]")
+			}
+			options.dryRun = true
+		case "--yes":
+			if options.yes {
+				return pruneOptions{}, errors.New("usage: config prune [--dry-run | --yes]")
+			}
+			options.yes = true
+		default:
+			return pruneOptions{}, errors.New("usage: config prune [--dry-run | --yes]")
+		}
+	}
+	if options.dryRun && options.yes {
+		return pruneOptions{}, errors.New("usage: config prune [--dry-run | --yes]")
+	}
+	return options, nil
+}
+
+func prune(paths config.Paths, machine config.Machine, args []string) error {
+	options, err := parsePruneOptions(args)
+	if err != nil {
+		return err
+	}
+	pruner := config.NewPruner(paths, machine, os.Stdout)
+	plan, err := pruner.Plan()
+	if err != nil {
+		return err
+	}
+	config.WritePrunePlan(os.Stdout, plan)
+	if plan.Empty() || options.dryRun {
+		return nil
+	}
+	if !options.yes {
+		if !terminal(os.Stdin) || !terminal(os.Stdout) {
+			fmt.Fprintln(os.Stdout, "\nNo changes made; run config prune --yes to apply this plan.")
+			return nil
+		}
+		confirmed, err := confirmPrune(os.Stdin, os.Stdout)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stdout, "No changes made.")
+			return nil
+		}
+	}
+	return pruner.Apply(plan)
+}
+
+func confirmPrune(in io.Reader, out io.Writer) (bool, error) {
+	fmt.Fprint(out, "\nPrune these items? [y/N] ")
+	answer, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 // status is the one status surface. Without a terminal Config prints the same

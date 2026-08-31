@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,6 +199,39 @@ func TestHelpKeepsInstallAsDistributionPlumbing(t *testing.T) {
 	}
 	if strings.Contains(output, "\n  config install\n") {
 		t.Fatalf("config help exposes the release handoff command:\n%s", output)
+	}
+}
+
+func TestPruneRequiresAnExplicitApplyChoice(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want pruneOptions
+		ok   bool
+	}{
+		{nil, pruneOptions{}, true},
+		{[]string{"--dry-run"}, pruneOptions{dryRun: true}, true},
+		{[]string{"--yes"}, pruneOptions{yes: true}, true},
+		{[]string{"--yes", "--dry-run"}, pruneOptions{}, false},
+		{[]string{"--force"}, pruneOptions{}, false},
+	} {
+		got, err := parsePruneOptions(test.args)
+		if (err == nil) != test.ok || got != test.want {
+			t.Errorf("parsePruneOptions(%v) = %+v, %v; want %+v, ok %v", test.args, got, err, test.want, test.ok)
+		}
+	}
+
+	for _, answer := range []string{"y\n", "YES\n"} {
+		var output bytes.Buffer
+		confirmed, err := confirmPrune(strings.NewReader(answer), &output)
+		if err != nil || !confirmed || !strings.Contains(output.String(), "[y/N]") {
+			t.Fatalf("confirmPrune(%q) = %v, %v, %q", answer, confirmed, err, output.String())
+		}
+	}
+	for _, answer := range []string{"\n", "no\n", "anything else\n"} {
+		confirmed, err := confirmPrune(strings.NewReader(answer), &bytes.Buffer{})
+		if err != nil || confirmed {
+			t.Fatalf("confirmPrune(%q) = %v, %v", answer, confirmed, err)
+		}
 	}
 }
 

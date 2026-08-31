@@ -195,7 +195,11 @@ func shortCommit(commit string) string {
 }
 
 func checkoutRestoreID(paths Paths) (string, bool, error) {
-	result := run(OSRunner{Dir: paths.Root}, "git", "config", "--local", "--get", restoreCheckoutKey)
+	return checkoutRestoreIDWithRunner(OSRunner{Dir: paths.Root})
+}
+
+func checkoutRestoreIDWithRunner(runner Runner) (string, bool, error) {
+	result := run(runner, "git", "config", "--local", "--get", restoreCheckoutKey)
 	if result.Err == nil {
 		identifier := result.Output()
 		if identifier == "" {

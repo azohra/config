@@ -14,7 +14,7 @@ Config requires macOS, Git, and mise 2026.8.14 installed at
 `~/.local/bin/mise`. Mise can run the released binary for the initial handoff:
 
 ```bash
-mise x github:azohra/config@0.6.0 -- \
+mise x github:azohra/config@0.7.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -153,6 +153,14 @@ tasks keep their native meaning. Config runs `mise bootstrap` to apply, and
 reports the status of each bootstrap phase separately so a failure names the
 phase it came from.
 
+Config isolates which machine document a child mise process loads, but it does
+not give mise a private install store or configuration ledger. The machine
+repository is this Mac's baseline; a repository-local mise document remains an
+additional, narrower authority while its tracked document remains loadable.
+Mise combines those tracked documents when it decides whether an installed
+tool or managed package is still in use. Config does not reinterpret that
+shared inventory or assume the machine document is its only authority.
+
 ## Use
 
 ```bash
@@ -171,6 +179,7 @@ Useful non-interactive commands:
 config --status
 config path
 config update
+config prune --dry-run
 config --version
 ```
 
@@ -189,6 +198,19 @@ standalone mise at its tested version, updates declared tools and packages, and
 fast-forwards clean declared repositories. Dirty repositories are reported and
 left untouched. Unversioned development builds skip Config's release update.
 `config path` prints the managed checkout even before it exists.
+
+`config prune` previews stale state across that ownership boundary. Mise names
+unused tool versions, package-manager removals, and dead links in its shared
+configuration ledger. Config separately names only local artifacts it can
+prove it owns: hook copies that still match their ownership manifests,
+baselines for disabled capabilities, and completed restore records belonging to
+older managed checkouts. A changed hook, unrecognised record, unsupported
+package manager, or other ambiguous item is reported and preserved.
+
+In a terminal, the command asks before applying the plan. With redirected
+input or output it only previews; `config prune --yes` is the explicit
+non-interactive apply form. Apply computes the plan again before the first
+write and stops if any candidate changed. `--dry-run` always previews only.
 
 Saving stages the whole managed repository and creates a commit under its Git
 policy. Config writes `Update machine snapshot` as the subject; the user only
