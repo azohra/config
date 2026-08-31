@@ -39,8 +39,29 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		temp.Close()
 		return err
 	}
+	// Rename alone is atomic against a concurrent reader but not durable across
+	// a crash: without these syncs the directory entry can survive the bytes.
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
+}
+
+func syncDirectory(dir string) error {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = handle.Sync()
+	if closeErr := handle.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
