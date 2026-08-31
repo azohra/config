@@ -189,3 +189,20 @@ func TestMiseEnvironmentNamesTheSelectedRootWithoutMutatingTheProcess(t *testing
 		t.Fatal("building a child environment mutated the Config process")
 	}
 }
+
+func TestMachineRefusesAPreferenceIdConfigAlreadyAnswersTo(t *testing.T) {
+	// Reports, selections, and baselines are all keyed by resource id, so a
+	// preference borrowing a capability's id collides with that capability.
+	for _, id := range []string{"setup", "dock", "chrome-pwas", "finder-favorites", "repository-hooks"} {
+		machine := testMachine()
+		machine.Preferences[0].ID = id
+		if err := machine.Validate(); err == nil {
+			t.Errorf("preference id %q was accepted", id)
+		}
+	}
+	machine := testMachine()
+	machine.Preferences[0].ID = "example-app"
+	if err := machine.Validate(); err != nil {
+		t.Fatalf("an ordinary preference id was refused: %v", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -49,6 +50,13 @@ type SpotlightShortcut struct {
 	Enabled    bool   `toml:"enabled"`
 	Parameters []int  `toml:"parameters"`
 	Type       string `toml:"type"`
+}
+
+// reservedResourceIDs are the identifiers Config's own capabilities answer to.
+// A preference that borrowed one would collide with that capability wherever a
+// report, a selection, or a baseline is keyed by resource id.
+var reservedResourceIDs = []string{
+	setupID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
 }
 
 var (
@@ -122,6 +130,9 @@ func (m Machine) Validate() error {
 	for _, preference := range m.Preferences {
 		if !contractIDPattern.MatchString(preference.ID) || preference.Name == "" {
 			return fmt.Errorf("preference %q has an invalid id or empty name", preference.ID)
+		}
+		if slices.Contains(reservedResourceIDs, preference.ID) {
+			return fmt.Errorf("preference id %q is one of Config's own capabilities", preference.ID)
 		}
 		if seenPreferences[preference.ID] {
 			return fmt.Errorf("preferences repeats id %q", preference.ID)
