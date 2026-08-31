@@ -3,8 +3,13 @@ package ui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -34,17 +39,36 @@ func TestRunOperationStreamsOutput(t *testing.T) {
 }
 
 func TestRunOperationCancelsProcessGroup(t *testing.T) {
+	// Cancelling has to take the whole group, not just the process Config
+	// started. Asserting only that the run returned an error cannot tell the
+	// two apart: any cancellation produces one.
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan operationEvent)
 	done := make(chan tea.Msg, 1)
 	dir := t.TempDir()
+	pidfile := filepath.Join(dir, "descendant.pid")
+	script := "/bin/sh -c 'echo $$ > " + pidfile + "; sleep 30' & printf ready; wait"
 	go func() {
-		done <- runOperation(ctx, dir, "/bin/sh", []string{"-c", "printf ready; sleep 10"}, events)()
+		done <- runOperation(ctx, dir, "/bin/sh", []string{"-c", script}, events)()
 	}()
 	first := <-events
 	if first.output != "ready" {
 		t.Fatalf("first event = %#v", first)
 	}
+	descendant := 0
+	for range 200 {
+		if data, err := os.ReadFile(pidfile); err == nil {
+			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); convErr == nil {
+				descendant = pid
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if descendant == 0 {
+		t.Fatal("the descendant never recorded its process id")
+	}
+
 	cancel()
 	var final operationEvent
 	for event := range events {
@@ -56,6 +80,14 @@ func TestRunOperationCancelsProcessGroup(t *testing.T) {
 	if final.err == nil {
 		t.Fatal("cancelled operation succeeded")
 	}
+	for range 200 {
+		if errors.Is(syscall.Kill(descendant, 0), syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	syscall.Kill(descendant, syscall.SIGKILL)
+	t.Fatalf("descendant %d outlived the cancelled operation", descendant)
 }
 
 func TestRefreshPreservesOperationFailure(t *testing.T) {

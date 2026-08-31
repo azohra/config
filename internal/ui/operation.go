@@ -2,14 +2,13 @@ package ui
 
 import (
 	"context"
-	"errors"
-	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/azohra/config/internal/config"
 )
 
 const maxOperationOutput = 128 << 10
@@ -71,23 +70,15 @@ func runOperation(ctx context.Context, dir, name string, args []string, events c
 		defer close(events)
 		command := exec.CommandContext(ctx, name, args...)
 		command.Dir = dir
-		command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		command.WaitDelay = 2 * time.Second
-		command.Cancel = func() error {
-			if command.Process == nil {
-				return os.ErrProcessDone
-			}
-			err := syscall.Kill(-command.Process.Pid, syscall.SIGINT)
-			if errors.Is(err, syscall.ESRCH) {
-				return os.ErrProcessDone
-			}
-			return err
-		}
+		config.InterruptGroup(command, 2*time.Second)
 		writer := eventWriter{ctx: ctx, events: events}
 		command.Stdout = writer
 		command.Stderr = writer
 		err := command.Run()
-		events <- operationEvent{err: err, done: true}
+		// A successful operation whose descendant still holds the output pipes
+		// ends in ErrWaitDelay. Reporting that as a failed Apply, Save, or
+		// Update tells the operator their machine did not converge when it did.
+		events <- operationEvent{err: config.CommandFailure(command, err), done: true}
 		return nil
 	}
 }

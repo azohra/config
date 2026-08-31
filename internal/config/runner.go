@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -33,6 +34,10 @@ type OSRunner struct {
 	Executables map[string]string
 }
 
+// commandWaitDelay bounds the wait on a command's output pipes after the
+// command itself is done with them.
+const commandWaitDelay = 2 * time.Second
+
 func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	cmd := exec.CommandContext(ctx, r.executable(name), args...)
 	cmd.Dir = r.Dir
@@ -40,8 +45,44 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	InterruptGroup(cmd, commandWaitDelay)
 	err := cmd.Run()
-	return Result{Stdout: stdout.String(), Stderr: stderr.String(), Err: err}
+	return Result{Stdout: stdout.String(), Stderr: stderr.String(), Err: CommandFailure(cmd, err)}
+}
+
+// InterruptGroup makes a command killable as a process group and bounds the
+// wait on its output pipes. Without both, a deadline is unenforceable: the
+// default cancellation kills the process Config started, while Wait goes on
+// waiting for every descendant that inherited its pipes.
+func InterruptGroup(cmd *exec.Cmd, delay time.Duration) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = delay
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		group := -cmd.Process.Pid
+		err := syscall.Kill(group, syscall.SIGINT)
+		// A shell starts a background command with SIGINT ignored, and the
+		// escalation os/exec performs when WaitDelay elapses reaches only the
+		// process Config started. Without this the group survives a cancel.
+		time.AfterFunc(delay, func() { _ = syscall.Kill(group, syscall.SIGKILL) })
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+}
+
+// CommandFailure reports why a command failed, or nil when it did not. A
+// command that exits successfully but leaves a descendant holding its output
+// pipes makes Wait return ErrWaitDelay once the delay elapses: the command did
+// what it was asked, and only the plumbing outlived it.
+func CommandFailure(cmd *exec.Cmd, err error) error {
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		return nil
+	}
+	return err
 }
 
 func (r OSRunner) Exists(name string) bool {

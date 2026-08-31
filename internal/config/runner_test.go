@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // hostileMiseSelectors each change which document mise loads, verified
@@ -128,5 +129,40 @@ func TestFailureReportsTheCommandsOwnWords(t *testing.T) {
 	}
 	if err := (Result{Stdout: "fine"}).Failure(); err != nil {
 		t.Fatalf("a successful command reported %v", err)
+	}
+}
+
+func TestOSRunnerDoesNotWaitOnADescendantThatOutlivesTheCommand(t *testing.T) {
+	// exec waits for every descendant that inherited the output pipes, so a
+	// probe whose child leaves a background process behind held the 20-second
+	// deadline open for as long as that process lived. The command itself
+	// succeeded, so the delay is not a failure to report.
+	runner := OSRunner{Dir: t.TempDir()}
+	start := time.Now()
+	result := runner.Run(context.Background(), "/bin/sh", "-c", "sleep 6 & printf started")
+	elapsed := time.Since(start)
+	if result.Err != nil {
+		t.Fatalf("a successful command reported %v", result.Err)
+	}
+	if result.Stdout != "started" {
+		t.Fatalf("stdout = %q", result.Stdout)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("Run waited %v on a descendant the command left behind", elapsed)
+	}
+}
+
+func TestOSRunnerDeadlineOutlastsNoDescendant(t *testing.T) {
+	// A cancelled command takes its whole process group with it.
+	runner := OSRunner{Dir: t.TempDir()}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	result := runner.Run(ctx, "/bin/sh", "-c", "sleep 30 & sleep 30")
+	if result.Err == nil {
+		t.Fatal("a cancelled command reported success")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("cancellation took %v", elapsed)
 	}
 }
