@@ -76,11 +76,15 @@ func run() error {
 	if err := checkArguments(args); err != nil {
 		return err
 	}
-	// Every command that writes takes the checkout lock. The terminal
-	// interface does not: it launches these same commands as children, and
-	// each one takes the lock for the work it does.
+	// Every command that writes the managed checkout takes its lock. The
+	// terminal interface does not: it launches these same commands as
+	// children, and each one takes the lock for the work it does. Neither
+	// does install, which writes Config's own command and nothing in the
+	// checkout — update holds this lock and runs the acquired release's
+	// install as a child, so contending here would deadlock the update
+	// against itself.
 	if len(args) > 0 && slices.Contains(
-		[]string{"install", "update", "bootstrap", "prune", "--apply", "--snapshot"}, args[0]) {
+		[]string{"update", "bootstrap", "prune", "--apply", "--snapshot"}, args[0]) {
 		release, lockErr := config.LockCheckout(paths)
 		if lockErr != nil {
 			return lockErr

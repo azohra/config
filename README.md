@@ -12,7 +12,7 @@ You choose the machine repository and keep control of its authentication.
 Config requires macOS, Git, and mise 2026.8.16 at `~/.local/bin/mise`.
 
 ```bash
-mise x github:azohra/config@0.10.0 -- \
+mise x github:azohra/config@0.10.1 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
