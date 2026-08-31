@@ -418,16 +418,11 @@ func (e Applier) applyRepositoryHookTargets(includeRepositories bool) (int, erro
 				manifestChanged = true
 			}
 		}
-		// Claim ownership before installing, and hold the pair together. An
-		// interrupted apply that has written the manifest leaves a claim on a
-		// hook that is not there,
+		// Claim ownership before installing. An interrupted apply that has
+		// written the manifest leaves a claim on a hook that is not there,
 		// which the next apply completes and prune ignores. The other order
 		// leaves an executable hook no record accounts for, which prune, and
 		// every later refresh, cannot see.
-		if manifestChanged || len(pending) > 0 {
-			release := holdInterrupt()
-			defer release()
-		}
 		if manifestChanged {
 			data, err := json.MarshalIndent(manifest, "", "  ")
 			if err != nil {

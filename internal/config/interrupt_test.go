@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -78,5 +79,35 @@ func TestSweepStagingRemovesOnlyItsOwnPrefix(t *testing.T) {
 	}
 	if _, err := os.Stat(keep); err != nil {
 		t.Fatalf("the sweep removed an unrelated entry: %v", err)
+	}
+}
+
+func TestOnlyOneSectionHoldsTheInterrupt(t *testing.T) {
+	// Go's read lock is not re-entrant once a writer waits, so a hold wrapped
+	// around a loop whose body writes would deadlock on the inner hold: the
+	// interrupt would wait out its whole grace and report a write that was
+	// never in flight. One caller, in the one place that writes a file.
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	callers := map[string]int{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count := strings.Count(string(body), "holdInterrupt()"); count > 0 {
+			callers[name] = count
+		}
+	}
+	// interrupt.go declares it; files.go is the one caller.
+	delete(callers, "interrupt.go")
+	if len(callers) != 1 || callers["files.go"] != 1 {
+		t.Fatalf("holdInterrupt is taken in %v, want only files.go once", callers)
 	}
 }

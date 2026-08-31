@@ -14,10 +14,15 @@ import (
 // interruptGuard is held for reading by every section that has to reach its
 // own end, and for writing by the interrupt handler. A signal received inside
 // a critical section waits for it rather than landing in the middle of it.
+//
+// Exactly one section takes it: a single file's write. Go's read lock is not
+// re-entrant once a writer is waiting, so a hold wrapped around a loop of
+// writes would deadlock the write inside it. A cut between two files is what
+// the ownership ordering, the pending markers, and the sweeps are for.
 var interruptGuard sync.RWMutex
 
-// holdInterrupt marks a section an interrupt must not cut in half: an atomic
-// rename, a hook installed beside the manifest that claims it, a bundle swap.
+// holdInterrupt marks the section an interrupt must not cut in half: the
+// staging, rename, and sync of one file.
 func holdInterrupt() func() {
 	interruptGuard.RLock()
 	return interruptGuard.RUnlock

@@ -573,7 +573,6 @@ func (e Applier) applyChromePWAs() error {
 	for _, app := range saved {
 		desiredIDs[app.ID] = true
 	}
-	defer holdInterrupt()()
 	destinations := make(map[string]string, len(saved))
 	for _, app := range saved {
 		destinations[app.ID] = filepath.Join(chromePWALiveDir(e.Paths), app.Name+".app")
