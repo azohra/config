@@ -441,3 +441,30 @@ func TestChromePWAsIgnoreContentChromeOwns(t *testing.T) {
 		t.Fatalf("the new PWA was not named: %+v", resource.Details)
 	}
 }
+
+func TestChromePWAsUseThreeWayReconciliationOnceTheSidesHaveAgreed(t *testing.T) {
+	// Removing every PWA from a Mac whose sides have agreed is a live change
+	// the operator may want to keep. Answering "the saved side changed" and
+	// offering only a restore returned before the baseline was ever read.
+	paths := testPaths(t)
+	icon := []byte("icon")
+	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
+	writeTestLivePWA(t, paths, app, icon)
+	bidir := NewBidirectional(paths, OSRunner{Dir: paths.Root})
+	if err := bidir.CaptureChromePWAs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := bidir.MarkChromePWAsIfCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(chromePWALiveDir(paths)); err != nil {
+		t.Fatal(err)
+	}
+	resource := bidir.InspectChromePWAs()
+	if resource.State != LiveChanged {
+		t.Fatalf("uninstalling every PWA reported as %q: %#v", resource.State, resource)
+	}
+	if !resource.Allows(Capture) {
+		t.Fatalf("no way to keep this Mac's answer: %#v", resource.Actions)
+	}
+}

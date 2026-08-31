@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -56,7 +57,11 @@ func snapshotFixture(t *testing.T) (Snapshotter, string, string) {
 	live.Stdout, live.Stderr = &output, &output
 	machine := testMachine()
 	machine.Repository.URL = remote
-	snapshotter := Snapshotter{Paths: paths, Machine: machine, Runner: runner, Live: live, Log: Logger{Out: &output}}
+	snapshotter := Snapshotter{
+		Paths: paths, Machine: machine, Runner: runner, Live: live,
+		Log:      Logger{Out: &output},
+		Validate: func() error { return nil },
+	}
 	return snapshotter, root, remote
 }
 
@@ -266,5 +271,33 @@ func TestNewSnapshotterGateNeverReachesForMise(t *testing.T) {
 	if _, err := os.Stat(invocations); !os.IsNotExist(err) {
 		data, _ := os.ReadFile(invocations)
 		t.Fatalf("the snapshot gate ran mise %d time(s)", strings.Count(string(data), "called"))
+	}
+}
+
+func TestSnapshotRefusesToCommitWhenThePreflightGateFails(t *testing.T) {
+	snapshotter, root, remote := snapshotFixture(t)
+	before := gitTest(t, root, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotter.Validate = func() error { return errors.New("machine preflight failed") }
+	err := snapshotter.Save()
+	if err == nil || !strings.Contains(err.Error(), "machine preflight failed") {
+		t.Fatalf("Save past a failing gate: %v", err)
+	}
+	if head := gitTest(t, root, "rev-parse", "HEAD"); head != before {
+		t.Fatal("a failing gate still produced a commit")
+	}
+	if pushed := gitTest(t, remote, "rev-parse", "refs/heads/main"); pushed != before {
+		t.Fatal("a failing gate still pushed")
+	}
+
+	// A Snapshotter with no gate at all cannot prove what it would record.
+	snapshotter.Validate = nil
+	if err := snapshotter.Save(); err == nil {
+		t.Fatal("Save ran with no machine state gate")
+	}
+	if head := gitTest(t, root, "rev-parse", "HEAD"); head != before {
+		t.Fatal("a missing gate still produced a commit")
 	}
 }

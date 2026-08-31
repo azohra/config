@@ -335,3 +335,28 @@ printf '%s\n%s\n%s\n%s\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_V
 		}
 	}
 }
+
+func TestRepositoryHooksClaimOwnershipBeforeInstalling(t *testing.T) {
+	// An interrupted apply must not leave an executable hook that no ownership
+	// record accounts for: prune only sees hooks its manifest names, so an
+	// orphan is invisible to it and to every later refresh. Making the target
+	// unwritable stops the apply at its first write, which must be the claim.
+	fixture := newRepositoryHooksFixture(t)
+	hooks := fixture.paths.InRoot(".git", "hooks")
+	if err := os.Chmod(hooks, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(hooks, 0o755) })
+
+	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+	_, err := applier.applyRepositoryHookTargets(true)
+	if err == nil {
+		t.Fatal("an unwritable hooks directory did not stop the apply")
+	}
+	if !strings.Contains(err.Error(), "write hook ownership") {
+		t.Fatalf("the apply wrote before it claimed: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(hooks, "post-checkout")); !os.IsNotExist(statErr) {
+		t.Fatal("a hook was installed with no ownership record")
+	}
+}

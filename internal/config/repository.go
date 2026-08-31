@@ -116,7 +116,7 @@ func repositoryIdentity(locator string) (string, error) {
 	if at := strings.IndexByte(locator, '@'); at > 0 {
 		if colon := strings.IndexByte(locator[at+1:], ':'); colon >= 0 && !strings.Contains(locator[:at], "/") {
 			colon += at + 1
-			if strings.Contains(locator[:at], ":") {
+			if strings.Contains(locator[:at], ":") || strings.Contains(locator[at+1:], "@") {
 				return "", fmt.Errorf("repository locator must not contain credentials")
 			}
 			host := strings.ToLower(locator[at+1 : colon])

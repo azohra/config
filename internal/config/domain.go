@@ -55,8 +55,11 @@ func (r Resource) Allows(action Action) bool {
 	return slices.Contains(r.Actions, action)
 }
 
+// NeedsDecision is the unresolved-choice verdict. A capability that has never
+// been captured owns no snapshot content, so it cannot make a commit wrong and
+// is not a choice the operator is being asked to make.
 func (r Resource) NeedsDecision() bool {
-	return r.Bidirectional && len(r.Actions) > 0
+	return r.Bidirectional && r.State != Uncaptured && len(r.Actions) > 0
 }
 
 func (r Resource) Failed() int {
@@ -178,9 +181,6 @@ func (r Report) Counts() (failures, decisions, advisories int) {
 	return failures, decisions, advisories
 }
 
-// PreflightError is the gate Save runs before it commits. It asks only
-// whether the state this snapshot would record is describable: a resource
-// that owns no snapshot content cannot make the commit wrong.
 // NeedsAttention is the verdict behind an unsuccessful exit: a check that
 // failed, or a bidirectional resource still waiting on a choice. Every status
 // surface answers it the same way, whichever way Config was invoked.
@@ -189,6 +189,9 @@ func (r Report) NeedsAttention() bool {
 	return failures > 0 || decisions > 0
 }
 
+// PreflightError is the gate Save runs before it commits. It asks only
+// whether the state this snapshot would record is describable: a resource
+// that owns no snapshot content cannot make the commit wrong.
 func (r Report) PreflightError() error {
 	var problems []string
 	for _, resource := range r.Resources {

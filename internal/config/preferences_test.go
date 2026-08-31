@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"howett.net/plist"
@@ -73,5 +74,36 @@ func TestPreferenceBackupCopiesTheCompleteLiveDomain(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("backup mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestPreferenceBackupRefusesADomainThatHoldsNothing(t *testing.T) {
+	// defaults exits 0 for a domain that does not exist and prints <dict/>.
+	// Capturing that would report a backup over settings never read.
+	paths := testPaths(t)
+	preference := testMachine().Preferences[0]
+	empty, err := plist.Marshal(map[string]any{}, plist.XMLFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = preference.Backup(paths, preferenceRunner{exported: empty})
+	if err == nil {
+		t.Fatal("an empty defaults domain was captured as a backup")
+	}
+	if !strings.Contains(err.Error(), preference.Domain) {
+		t.Fatalf("refusal does not name the domain: %v", err)
+	}
+	if _, statErr := os.Stat(preference.snapshotPath(paths)); !os.IsNotExist(statErr) {
+		t.Fatal("refused capture still wrote a snapshot")
+	}
+
+	// An artifact already committed with nothing in it reports the way a
+	// missing one does, so Capture stays on offer.
+	if err := atomicWrite(preference.snapshotPath(paths), empty, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resource := preference.Inspect(paths)
+	if resource.State != Uncaptured || !slices.Equal(resource.Actions, []Action{Capture}) {
+		t.Fatalf("empty saved domain = %#v", resource)
 	}
 }

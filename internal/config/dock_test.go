@@ -257,3 +257,75 @@ func TestDockReadFailureReachesTheResource(t *testing.T) {
 		t.Fatalf("check detail = %q", detail)
 	}
 }
+
+func TestDockStoreWritePreservesTileValueTypes(t *testing.T) {
+	// defaults reads the value argument as a property list. OpenStep has no
+	// integer or boolean type, so encoding tiles that way silently rewrites
+	// GUID, file-type, and dock-extra in the user's Dock as strings.
+	fakeTools(t, fakeTool{name: "defaults"})
+	tile := map[string]any{
+		"GUID":      uint64(1_000_000_001),
+		"tile-type": "file-tile",
+		"tile-data": map[string]any{"dock-extra": false, "file-type": uint64(41)},
+	}
+	store := defaultsDockStore{Live: NewLiveRunner(t.TempDir())}
+	if err := store.Write(dockState{Present: true, Tiles: []any{tile}}); err != nil {
+		t.Fatal(err)
+	}
+	logged, err := os.ReadFile(os.Getenv("COMMAND_LOG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, value, found := strings.Cut(string(logged), dockKey+" ")
+	if !found {
+		t.Fatalf("Dock write = %q", logged)
+	}
+	var written []any
+	if _, err := plist.Unmarshal([]byte(strings.TrimSpace(value)), &written); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(written, []any{tile}) {
+		t.Fatalf("Dock tiles round-tripped as %#v", written)
+	}
+	if _, ok := dockGUID(written[0]); !ok {
+		t.Fatal("the written tile no longer carries a Dock GUID")
+	}
+}
+
+func TestDockDoesNotWedgeWhenASavedAppLeavesTheDisk(t *testing.T) {
+	// The saved layout and the Dock hold the same two apps; one of them was
+	// deleted from disk. Reducing only the saved side by existence compared
+	// two different lists, reported the saved side as changed, and offered a
+	// capture that rewrote the same tiles and could never clear it.
+	paths := testPaths(t)
+	present := paths.InHome("Applications", "Present.app")
+	if err := os.MkdirAll(present, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const deleted = "/Applications/Deleted.app"
+	if err := atomicWrite(dockSnapshotPath(paths),
+		[]byte("~/Applications/Present.app\n"+deleted+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bidir := testBidirectional(paths, dockRunner{state: dockState{Present: true, Tiles: []any{
+		newDockAppTile(present, 1_000_000_001),
+		newDockAppTile(deleted, 1_000_000_002),
+	}}})
+	live, _, err := bidir.dockLive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bidir.Baselines.Save(dockID, live); err != nil {
+		t.Fatal(err)
+	}
+	resource := bidir.InspectDock()
+	if resource.State != Current {
+		t.Fatalf("agreeing Dock reported as %q: %#v", resource.State, resource)
+	}
+	if resource.NeedsDecision() {
+		t.Fatalf("Dock asked for a choice it cannot clear: %#v", resource.Actions)
+	}
+	if resource.Failed() == 0 {
+		t.Fatal("the unavailable saved app was not reported")
+	}
+}

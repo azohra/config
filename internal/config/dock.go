@@ -60,7 +60,10 @@ func (s defaultsDockStore) Write(state dockState) error {
 	if !state.Present {
 		return s.Live.Command("defaults", "delete", dockDomain, dockKey)
 	}
-	value, err := plist.Marshal(state.Tiles, plist.OpenStepFormat)
+	// defaults parses an XML property list for the value argument and preserves
+	// every scalar type. OpenStep has no integer, boolean, real, or date type, so
+	// encoding tiles that way rewrites GUID, file-type, and dock-extra as strings.
+	value, err := plist.Marshal(state.Tiles, plist.XMLFormat)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", dockKey, err)
 	}
@@ -100,7 +103,11 @@ func (b Bidirectional) dockSaved() (json.RawMessage, []string, []string, bool, e
 			present = append(present, line)
 		}
 	}
-	canonical, err := json.Marshal(present)
+	// Canonicalize what the snapshot records, not what survives on disk. The
+	// live side is every decodable tile, so filtering this one by existence
+	// would compare two different reductions and leave a resource whose saved
+	// app was deleted permanently unable to converge.
+	canonical, err := json.Marshal(all)
 	return canonical, all, present, true, err
 }
 

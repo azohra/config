@@ -73,7 +73,9 @@ func fakeTools(t *testing.T, tools ...fakeTool) func() []string {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("COMMAND_LOG", log)
 	for _, tool := range tools {
-		script := fmt.Sprintf("#!/bin/sh\nprintf '%%s %%s\\n' %s \"$*\" >> \"$COMMAND_LOG\"\nexit %d\n", tool.name, tool.exit)
+		// An argument may itself span lines — a property list value does. Fold
+		// them so the log stays one line per command.
+		script := fmt.Sprintf("#!/bin/sh\nprintf '%%s %%s\\n' %s \"$(printf '%%s' \"$*\" | tr '\\n' ' ')\" >> \"$COMMAND_LOG\"\nexit %d\n", tool.name, tool.exit)
 		if err := os.WriteFile(filepath.Join(dir, tool.name), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
