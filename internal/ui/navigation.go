@@ -51,10 +51,13 @@ func (m Model) dashboardActions() []dashboardAction {
 	return actions
 }
 
-func attentionResources(report config.Report) []config.Resource {
+// unsettledResources are the ones the dashboard lists. Resource.Symbol is
+// internal/config's single answer for how a resource reads, so this asks it
+// rather than defining a third rule beside it and Report.NeedsAttention.
+func unsettledResources(report config.Report) []config.Resource {
 	var resources []config.Resource
 	for _, resource := range report.Resources {
-		if resource.State != config.Current || resource.Failed() > 0 {
+		if resource.Symbol() != config.GlyphOK {
 			resources = append(resources, resource)
 		}
 	}

@@ -78,7 +78,7 @@ func (m Model) renderDashboard() string {
 	}
 	headline, detail := dashboardHealth(m.report)
 	status := headline + "\n" + muted.Render(detail)
-	resources, hidden := m.dashboardAttention()
+	resources, hidden := m.dashboardUnsettled()
 	if len(resources) > 0 {
 		var attention []string
 		for _, resource := range resources {
@@ -87,7 +87,7 @@ func (m Model) renderDashboard() string {
 		if hidden > 0 {
 			attention = append(attention, muted.Render("  … "+config.FormatCount(hidden, "more resource", "more resources")))
 		}
-		status += "\n\n" + muted.Render("Needs attention") + "\n" + strings.Join(attention, "\n")
+		status += "\n\n" + muted.Render("Not current") + "\n" + strings.Join(attention, "\n")
 	}
 
 	var actionLines []string
@@ -104,8 +104,8 @@ func (m Model) renderDashboard() string {
 	return frame(m.width, blocks...)
 }
 
-func (m Model) dashboardAttention() ([]config.Resource, int) {
-	resources := attentionResources(m.report)
+func (m Model) dashboardUnsettled() ([]config.Resource, int) {
+	resources := unsettledResources(m.report)
 	height := m.height
 	if height <= 0 {
 		height = 24
