@@ -35,9 +35,10 @@ type OSRunner struct {
 	Executables map[string]string
 }
 
-// commandWaitDelay bounds the wait on a command's output pipes after the
-// command itself is done with them.
-const commandWaitDelay = 2 * time.Second
+// CommandWaitDelay bounds the wait on a command's output pipes after the
+// command itself is done with them. Both launchers use it, so the two halves
+// of the process contract cannot drift apart.
+const CommandWaitDelay = 2 * time.Second
 
 func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	cmd := exec.CommandContext(ctx, r.executable(name), args...)
@@ -46,7 +47,7 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	InterruptGroup(cmd, commandWaitDelay)
+	InterruptGroup(cmd, CommandWaitDelay)
 	err := cmd.Run()
 	return Result{Stdout: stdout.String(), Stderr: stderr.String(), Err: CommandFailure(cmd, err)}
 }

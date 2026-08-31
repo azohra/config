@@ -4,7 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -70,7 +69,7 @@ func runOperation(ctx context.Context, dir, name string, args []string, events c
 		defer close(events)
 		command := exec.CommandContext(ctx, name, args...)
 		command.Dir = dir
-		config.InterruptGroup(command, 2*time.Second)
+		config.InterruptGroup(command, config.CommandWaitDelay)
 		writer := eventWriter{ctx: ctx, events: events}
 		command.Stdout = writer
 		command.Stderr = writer

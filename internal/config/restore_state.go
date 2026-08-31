@@ -2,7 +2,6 @@ package config
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -196,8 +195,7 @@ func restorePlanIdentity(paths Paths, machine Machine) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode bootstrap restore plan: %w", err)
 	}
-	digest := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(digest[:]), nil
+	return contentDigest(data), nil
 }
 
 func restoreStepIDs(machine Machine) []string {
@@ -262,15 +260,6 @@ func validRestoreID(identifier string) bool {
 	return err == nil
 }
 
-func validRestorePlan(plan string) bool {
-	digest, found := strings.CutPrefix(plan, "sha256:")
-	if !found || len(digest) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(digest)
-	return err == nil
-}
-
 func validCommit(commit string) bool {
 	if len(commit) != 40 && len(commit) != 64 {
 		return false
@@ -284,7 +273,7 @@ func restoreStatePath(paths Paths, identifier string) string {
 }
 
 func (r restoreRecord) validate() error {
-	if r.Schema != restoreSchema || r.Repository == "" || !validRestoreID(r.Checkout) || !validCommit(r.Commit) || !validRestorePlan(r.Plan) {
+	if r.Schema != restoreSchema || r.Repository == "" || !validRestoreID(r.Checkout) || !validCommit(r.Commit) || !validContentDigest(r.Plan) {
 		return errors.New("bootstrap restore state is invalid")
 	}
 	if r.Status != restorePendingState && r.Status != restoreCompleteState {
