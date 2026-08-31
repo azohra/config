@@ -108,9 +108,11 @@ func (e Applier) Apply(selections []Selection) error {
 		name string
 		fn   func(Action) error
 	}
-	steps := []step{
-		{setupID, setupName, func(Action) error { return e.applyMise() }},
+	var steps []step
+	if len(e.Machine.RepositoryHooks) > 0 {
+		steps = append(steps, step{repositoryHooksID, repositoryHooksName, e.reconcileRepositoryHooks})
 	}
+	steps = append(steps, step{setupID, setupName, func(Action) error { return e.applyMise() }})
 	if e.Machine.FinderFavorite != nil {
 		steps = append(steps, step{finderFavoriteID, finderFavoriteName, e.reconcileFinderFavorite})
 	}
@@ -252,10 +254,28 @@ func (e Applier) applyMise() error {
 	if err := requireTestedMise(e.Runner); err != nil {
 		return err
 	}
+	if len(e.Machine.RepositoryHooks) > 0 {
+		if _, err := e.applyRepositoryHookTargets(false); err != nil {
+			return fmt.Errorf("prepare repository hook template: %w", err)
+		}
+	}
 	// Dirty declared repositories remain visible in status. Skipping them here
 	// lets independent machine resources converge without touching local work.
-	if err := e.Live.Command("mise", "bootstrap", "--yes", "--skip-dirty"); err != nil {
+	live := e.Live
+	if len(e.Machine.RepositoryHooks) > 0 {
+		live.Environment = append(live.Environment, repositoryHookTemplateEnvironment(e.Paths)...)
+	}
+	if err := live.Command("mise", "bootstrap", "--yes", "--skip-dirty"); err != nil {
 		return err
+	}
+	if len(e.Machine.RepositoryHooks) > 0 {
+		changed, err := e.applyRepositoryHookTargets(true)
+		if err != nil {
+			return fmt.Errorf("reconcile repository hooks: %w", err)
+		}
+		if changed > 0 {
+			e.Log.OK(FormatCount(changed, "hook copy refreshed", "hook copies refreshed"))
+		}
 	}
 	changed, err := e.converge(miseFacts(e.Machine))
 	if err != nil {

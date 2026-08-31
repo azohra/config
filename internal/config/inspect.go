@@ -280,7 +280,7 @@ func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(machineSetup bool) Report {
 	bidir := NewBidirectional(i.Paths, i.Runner)
-	var setup, chromePWAs, dock, finderFavorite Resource
+	var setup, chromePWAs, dock, finderFavorite, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
@@ -288,6 +288,11 @@ func (i Inspector) inspect(machineSetup bool) Report {
 	}
 	if machineSetup {
 		tasks = append(tasks, func() { setup = i.setup() })
+		if len(i.Machine.RepositoryHooks) > 0 {
+			tasks = append(tasks, func() {
+				repositoryHooks = InspectRepositoryHooks(i.Paths, i.Machine, i.Runner)
+			})
+		}
 		if i.Machine.FinderFavorite != nil {
 			store := i.FinderFavorites
 			if store == nil {
@@ -319,6 +324,9 @@ func (i Inspector) inspect(machineSetup bool) Report {
 	resources := slices.Clone(preferences)
 	if machineSetup {
 		resources = append([]Resource{setup}, resources...)
+		if len(i.Machine.RepositoryHooks) > 0 {
+			resources = append(resources, repositoryHooks)
+		}
 		if i.Machine.FinderFavorite != nil {
 			resources = append(resources, finderFavorite)
 		}

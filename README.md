@@ -1,7 +1,7 @@
 # Config
 
 Config reconciles a Mac against a Git repository you control. It gives mise's
-machine bootstrap a focused terminal interface, adds typed support for macOS
+machine bootstrap a focused terminal interface, adds typed support for
 resources that need more than a mise declaration, and snapshots accepted
 changes back to the same repository.
 
@@ -14,7 +14,7 @@ Config requires macOS, Git, and mise 2026.8.14 installed at
 `~/.local/bin/mise`. Mise can run the released binary for the initial handoff:
 
 ```bash
-mise x github:azohra/config@0.5.0 -- \
+mise x github:azohra/config@0.6.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -72,6 +72,10 @@ kind = "azohra.config.machine"
 schema = 1
 dock = true
 chrome_pwas = true
+
+[[repository_hooks]]
+name = "post-checkout"
+source = "hooks/post-checkout"
 
 [repository]
 branch = "main"
@@ -133,11 +137,21 @@ managed checkout and the machine document supplies only the label. Inspection
 is read-only. Apply uses macOS's native shared-file-list API to make that label
 open the managed repository.
 
+Repository hooks are also one-way desired state. Each declaration names a Git
+hook and a regular executable source inside the machine repository. Config
+installs real copies into its clone template, its managed checkout, and every
+repository declared through mise. It refreshes copies it previously installed
+when the source changes. Hook names the machine does not declare remain
+untouched. A repository-owned hook at the same destination, a linked hooks
+directory, or a `core.hooksPath` redirect is reported as a conflict instead of
+being overwritten. The template is scoped to Git commands Config runs through
+mise; it does not replace repository-owned hook lookup with `core.hooksPath`.
+
 Everything else belongs to mise. Packages, tools, repositories, dotfiles,
-services, Compose projects, macOS defaults, LaunchAgents, hooks, and custom
-bootstrap tasks keep their native meaning. Config runs `mise bootstrap` to
-apply, and reports the status of each bootstrap phase separately so a failure
-names the phase it came from.
+services, Compose projects, macOS defaults, LaunchAgents, and custom bootstrap
+tasks keep their native meaning. Config runs `mise bootstrap` to apply, and
+reports the status of each bootstrap phase separately so a failure names the
+phase it came from.
 
 ## Use
 

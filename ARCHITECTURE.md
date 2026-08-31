@@ -12,8 +12,8 @@ strict contract. Native mise declarations live under `mise/`; Config does not
 parse or reinterpret them.
 
 Mise owns the resources the machine repository declares and the order encoded
-by its bootstrap phases and hooks. Config invokes one canonical standalone
-binary at
+by its bootstrap phases and lifecycle hooks. Config invokes one canonical
+standalone binary at
 `~/.local/bin/mise`, scopes the repository's native `mise/` configuration to
 each child process, and reports each bootstrap phase's status or the apply
 result. Package names, repository purposes, commands, secret references, and
@@ -44,9 +44,9 @@ must keep pace with mise, so a test pins the list to the phases mise offers.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
-native macOS capabilities. A capability is absent unless schema 1 declares it.
-The document opts into a capability and supplies personal values; it does not
-select the files Config uses to implement that capability.
+capabilities. A capability is absent unless schema 1 declares it. The document
+opts into a capability and supplies personal values or payloads; Config owns
+where and how those declarations converge.
 
 ## Managed checkout
 
@@ -102,10 +102,24 @@ Apply first converges mise with:
 mise bootstrap --yes --skip-dirty
 ```
 
-The selected mise configuration owns any custom ordering through mise hooks.
-Config then converges declared native macOS facts and executes selected Finder
+When repository hooks are declared, Config prepares their clone template before
+mise runs and supplies that template to mise's child Git processes. It sweeps
+the declared repositories after bootstrap so existing and newly created
+checkouts converge to the same hook bodies. The selected mise configuration
+owns any custom ordering through mise lifecycle hooks. Config then converges
+declared native macOS facts and executes selected repository hook, Finder
 Favorite, preference, Chrome PWA, and Dock actions. Independent failures are
 collected so one resource does not hide the rest of the plan.
+
+Repository hooks are authoritative one-way state. A declaration names a hook
+and an executable source inside the managed repository. Config installs real
+copies into its template, its own checkout, and the common Git directory of
+each repository mise declares. A small manifest beside each copy records
+Config's last installed digest. That lets a later source change refresh the
+copy while undeclared hook names remain untouched. A repository-owned
+same-name hook, linked hooks directory, or `core.hooksPath` redirect is reported
+and preserved. Config resolves common directories through Git, so linked
+worktrees share the same hook without a path back into the machine repository.
 
 Finder Favorites are authoritative one-way state. The declaration names the
 Favorite; Config derives the managed checkout URL and uses the native macOS

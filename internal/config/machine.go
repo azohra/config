@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -17,14 +18,15 @@ const (
 
 // Machine is Config's complete contract inside config.toml.
 type Machine struct {
-	Kind           string             `toml:"kind"`
-	Schema         int                `toml:"schema"`
-	Repository     MachineRepository  `toml:"repository"`
-	Dock           bool               `toml:"dock"`
-	ChromePWAs     bool               `toml:"chrome_pwas"`
-	FinderFavorite *FinderFavorite    `toml:"finder_favorite"`
-	MacOS          MachineMacOS       `toml:"macos"`
-	Preferences    []PreferenceBackup `toml:"preferences"`
+	Kind            string             `toml:"kind"`
+	Schema          int                `toml:"schema"`
+	Repository      MachineRepository  `toml:"repository"`
+	Dock            bool               `toml:"dock"`
+	ChromePWAs      bool               `toml:"chrome_pwas"`
+	FinderFavorite  *FinderFavorite    `toml:"finder_favorite"`
+	RepositoryHooks []RepositoryHook   `toml:"repository_hooks"`
+	MacOS           MachineMacOS       `toml:"macos"`
+	Preferences     []PreferenceBackup `toml:"preferences"`
 }
 
 type MachineRepository struct {
@@ -106,6 +108,19 @@ func (m Machine) Validate() error {
 	if m.FinderFavorite != nil {
 		if err := m.FinderFavorite.Validate(); err != nil {
 			return fmt.Errorf("finder_favorite: %w", err)
+		}
+	}
+	seenHooks := map[string]bool{}
+	for _, hook := range m.RepositoryHooks {
+		if !contractIDPattern.MatchString(hook.Name) {
+			return fmt.Errorf("repository_hooks name %q is invalid", hook.Name)
+		}
+		if seenHooks[hook.Name] {
+			return fmt.Errorf("repository_hooks repeats name %q", hook.Name)
+		}
+		seenHooks[hook.Name] = true
+		if hook.Source == "" || !filepath.IsLocal(hook.Source) || filepath.Clean(hook.Source) == "." {
+			return fmt.Errorf("repository_hooks %q source must be a relative file path", hook.Name)
 		}
 	}
 	seenPreferences := map[string]bool{}

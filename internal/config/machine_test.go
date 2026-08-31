@@ -14,6 +14,10 @@ schema = 1
 dock = true
 chrome_pwas = true
 
+[[repository_hooks]]
+name = "post-checkout"
+source = "hooks/post-checkout"
+
 [repository]
 branch = "main"
 url = "https://example.com/owner/machine.git"
@@ -62,6 +66,10 @@ func TestLoadMachineReadsStrictContract(t *testing.T) {
 	if len(machine.Preferences) != 1 {
 		t.Fatalf("typed rows were not decoded: %+v", machine)
 	}
+	if len(machine.RepositoryHooks) != 1 || machine.RepositoryHooks[0].Name != "post-checkout" ||
+		machine.RepositoryHooks[0].Source != "hooks/post-checkout" {
+		t.Fatalf("repository hooks were not decoded: %+v", machine.RepositoryHooks)
+	}
 }
 
 func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
@@ -75,6 +83,10 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 1", "schema = 2", 1), "schema is 2"},
 		{"unknown field", strings.Replace(validMachineTOML(), "schema = 1", "schema = 1\ntyop = true", 1), "strict mode"},
 		{"padded favorite name", strings.Replace(validMachineTOML(), `name = "Machine config"`, `name = " Machine config"`, 1), "surrounding whitespace"},
+		{"invalid hook name", strings.Replace(validMachineTOML(), `name = "post-checkout"`, `name = "../post-checkout"`, 1), "repository_hooks name"},
+		{"absolute hook source", strings.Replace(validMachineTOML(), `source = "hooks/post-checkout"`, `source = "/tmp/post-checkout"`, 1), "relative file path"},
+		{"escaping hook source", strings.Replace(validMachineTOML(), `source = "hooks/post-checkout"`, `source = "../post-checkout"`, 1), "relative file path"},
+		{"duplicate hook", strings.Replace(validMachineTOML(), "[repository]", "[[repository_hooks]]\nname = \"post-checkout\"\nsource = \"hooks/another\"\n\n[repository]", 1), "repeats name"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := LoadMachine(writeMachineTOML(t, test.content)); err == nil || !strings.Contains(err.Error(), test.want) {
@@ -97,7 +109,7 @@ url = "https://example.com/owner/machine.git"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Dock || machine.ChromePWAs || machine.FinderFavorite != nil || len(machine.Preferences) != 0 {
+	if machine.Dock || machine.ChromePWAs || machine.FinderFavorite != nil || len(machine.RepositoryHooks) != 0 || len(machine.Preferences) != 0 {
 		t.Fatalf("undeclared capabilities were enabled: %+v", machine)
 	}
 }
@@ -107,6 +119,7 @@ func TestUndeclaredCapabilitiesDoNotBecomeResources(t *testing.T) {
 	machine.Dock = false
 	machine.ChromePWAs = false
 	machine.Preferences = nil
+	machine.RepositoryHooks = nil
 	report := NewInspector(testPaths(t), machine, converged{}).Inspect()
 	if len(report.Resources) != 1 || report.Resources[0].ID != setupID {
 		t.Fatalf("undeclared capabilities became resources: %+v", report.Resources)
