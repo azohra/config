@@ -3,6 +3,10 @@ package config
 import (
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 const snapshotCommitSubject = "Update machine snapshot"
@@ -58,6 +62,8 @@ func (s Snapshotter) Save() error {
 	}
 	s.Log.OK("machine state valid")
 	if dirty {
+		// git add -A would commit whatever a killed capture stranded.
+		s.sweepStrandedWrites()
 		if err := s.Live.Command("git", "add", "-A"); err != nil {
 			return err
 		}
@@ -82,4 +88,20 @@ func (s Snapshotter) Save() error {
 	}
 	s.Log.OK("snapshot verified")
 	return nil
+}
+
+// sweepStrandedWrites removes the staging files an interrupted atomic write
+// leaves in the managed checkout. Each is named by Config and belongs to a run
+// that is no longer here.
+func (s Snapshotter) sweepStrandedWrites() {
+	root := s.Paths.InRoot("snapshots")
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if name := entry.Name(); strings.Contains(name, ".tmp.") {
+			_ = os.Remove(path)
+		}
+		return nil
+	})
 }

@@ -222,3 +222,44 @@ func TestResizeClampsDashboardAction(t *testing.T) {
 		t.Fatalf("cursor=%d actions=%d", got.dashboardCursor, len(got.dashboardActions()))
 	}
 }
+
+func TestDashboardCursorSurvivesARebuiltActionList(t *testing.T) {
+	// The action list is rebuilt from every report. A cursor left where it
+	// was points at a different action, and enter runs the wrong one.
+	m := Model{
+		screen: screenDashboard,
+		report: config.Report{
+			Snapshot:  config.SnapshotStatus{Upstream: "origin/main", Dirty: 1},
+			Resources: []config.Resource{{ID: "dock", Name: "Dock", Bidirectional: true, Actions: []config.Action{config.Apply}}},
+		},
+	}
+	m.dashboardCursor = len(m.dashboardActions()) - 1
+	if m.dashboardCursor <= 0 {
+		t.Fatal("the fixture needs more than one dashboard action")
+	}
+	next, _ := m.Update(reportMsg{report: config.Report{}})
+	got := next.(Model)
+	actions := got.dashboardActions()
+	if got.dashboardCursor >= len(actions) {
+		t.Fatalf("cursor %d indexes past %d actions", got.dashboardCursor, len(actions))
+	}
+	if got.dashboardCursor < 0 {
+		t.Fatalf("cursor = %d", got.dashboardCursor)
+	}
+}
+
+func TestScrollStopsWhereTheContentDoes(t *testing.T) {
+	m := Model{
+		screen: screenInventory,
+		height: 40,
+		report: config.Report{Resources: []config.Resource{{ID: "dock", Name: "Dock"}}},
+	}
+	bound := m.scrollBound()
+	for range 20 {
+		next, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+		m = next.(Model)
+	}
+	if m.scroll > bound {
+		t.Fatalf("scroll ran to %d past the bound %d", m.scroll, bound)
+	}
+}

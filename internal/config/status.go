@@ -3,16 +3,19 @@ package config
 import (
 	"fmt"
 	"io"
+	"strings"
 )
 
 func WriteStatus(out io.Writer, report Report) {
 	fmt.Fprintln(out, "CONFIG")
-	fmt.Fprintf(out, "%s · %s", report.Snapshot.Branch, report.Snapshot.Commit)
-	if report.Snapshot.Dirty == 0 {
-		fmt.Fprintln(out, " · clean")
-	} else {
-		fmt.Fprintf(out, " · %s\n", FormatCount(report.Snapshot.Dirty, "changed file", "changed files"))
+	// PendingParts is the one derivation of what a snapshot still owes. This
+	// header used to name only changed files, so a checkout holding unpushed
+	// commits read as clean here while the terminal called it unpushed.
+	headline := "clean"
+	if pending := report.Snapshot.PendingParts(); len(pending) > 0 {
+		headline = strings.Join(pending, " · ")
 	}
+	fmt.Fprintf(out, "%s · %s · %s\n", report.Snapshot.Branch, report.Snapshot.Commit, headline)
 	for _, resource := range report.Resources {
 		fmt.Fprintf(out, "  %s %-20s %s\n", resource.Symbol(), resource.Name, resource.Summary)
 	}

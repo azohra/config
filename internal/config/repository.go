@@ -37,6 +37,9 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return Machine{}, false, err
 	}
+	// A terminal interrupt during bootstrap skips the cleanup below and leaves
+	// a whole clone of the machine repository beside the managed checkout.
+	sweepStaging(parent, ".config-clone-")
 	staging, err := os.MkdirTemp(parent, ".config-clone-")
 	if err != nil {
 		return Machine{}, false, err
@@ -71,7 +74,7 @@ func MaterializeRepository(paths Paths, source string, stdout, stderr io.Writer)
 }
 
 func validateMaterializedRepository(paths Paths, source string) (Machine, error) {
-	runner := OSRunner{Dir: paths.Root}
+	runner := NewGitRunner(paths.Root)
 	top := run(runner, "git", "rev-parse", "--show-toplevel")
 	if top.Err != nil || !samePath(top.Output(), paths.Root) {
 		return Machine{}, fmt.Errorf("%s is not a Git repository rooted at Config's managed checkout", paths.Root)

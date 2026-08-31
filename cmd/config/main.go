@@ -69,17 +69,29 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if len(args) > 0 && args[0] == "path" {
-		if len(args) != 1 {
-			return errors.New("usage: config path")
+	defer config.OnInterrupt(os.Stderr)()
+	// An argument error is an argument error. Deciding these after the machine
+	// document loads reported a typo on a Mac with no managed checkout as a
+	// missing repository, and prescribed bootstrap.
+	if err := checkArguments(args); err != nil {
+		return err
+	}
+	// Every command that writes takes the checkout lock. The terminal
+	// interface does not: it launches these same commands as children, and
+	// each one takes the lock for the work it does.
+	if len(args) > 0 && slices.Contains(
+		[]string{"install", "update", "bootstrap", "prune", "--apply", "--snapshot"}, args[0]) {
+		release, lockErr := config.LockCheckout(paths)
+		if lockErr != nil {
+			return lockErr
 		}
+		defer release()
+	}
+	if len(args) > 0 && args[0] == "path" {
 		fmt.Println(paths.Root)
 		return nil
 	}
 	if len(args) > 0 && args[0] == "install" {
-		if len(args) != 1 {
-			return errors.New("usage: config install")
-		}
 		return config.InstallCurrent(paths, version, os.Stdout)
 	}
 	if len(args) > 0 && args[0] == "update" {
@@ -90,20 +102,13 @@ func run() error {
 				scope = config.UpdateSoftware
 			case "repositories":
 				scope = config.UpdateRepositories
-			default:
-				return errors.New("usage: config update [software | repositories]")
 			}
-		} else if len(args) != 1 {
-			return errors.New("usage: config update [software | repositories]")
 		}
 		return config.NewUpdater(paths, os.Stdout, version).Update(scope)
 	}
 	var machine config.Machine
 	restorePending := false
 	if len(args) > 0 && args[0] == "bootstrap" {
-		if len(args) != 2 {
-			return errors.New("usage: config bootstrap <repository>")
-		}
 		machine, restorePending, err = config.MaterializeRepository(paths, args[1], os.Stdout, os.Stderr)
 		if err == nil {
 			err = config.InstallCurrent(paths, version, os.Stdout)
@@ -124,14 +129,8 @@ func run() error {
 		case "prune":
 			return prune(paths, machine, args[1:])
 		case "--status":
-			if len(args) != 1 {
-				return fmt.Errorf("unknown option: %s", args[1])
-			}
 			return status(paths, machine, runner)
 		case "--apply":
-			if len(args) != 2 {
-				return errors.New("invalid apply plan")
-			}
 			selections, err := config.DecodeSelections(args[1])
 			if err != nil {
 				return err
@@ -142,15 +141,7 @@ func run() error {
 			}
 			return config.NewApplier(paths, machine, os.Stdout).Apply(selections)
 		case "--snapshot":
-			if len(args) != 1 {
-				return errors.New("invalid snapshot request")
-			}
 			return config.NewSnapshotter(paths, machine, os.Stdout).Save()
-		default:
-			if !strings.HasPrefix(args[0], "-") {
-				return errors.New("unknown command; run config help for available commands")
-			}
-			return fmt.Errorf("unknown option: %s", args[0])
 		}
 	}
 	if !terminal(os.Stdin) || !terminal(os.Stdout) {
@@ -255,4 +246,38 @@ func status(paths config.Paths, machine config.Machine, runner config.Runner) er
 // start the interactive interface.
 func terminal(file *os.File) bool {
 	return term.IsTerminal(file.Fd())
+}
+
+// checkArguments decides every argument error before Config reads anything on
+// disk, so a typo is reported as a typo whatever state the Mac is in.
+func checkArguments(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	switch args[0] {
+	case "path", "install", "--status", "--snapshot":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: config %s", args[0])
+		}
+	case "update":
+		if len(args) > 2 || (len(args) == 2 && args[1] != "software" && args[1] != "repositories") {
+			return errors.New("usage: config update [software | repositories]")
+		}
+	case "bootstrap":
+		if len(args) != 2 {
+			return errors.New("usage: config bootstrap <repository>")
+		}
+	case "--apply":
+		if len(args) != 2 {
+			return errors.New("usage: config --apply <plan>")
+		}
+	case "prune":
+		// prune reads its own flags.
+	default:
+		if strings.HasPrefix(args[0], "-") {
+			return fmt.Errorf("unknown option: %s", args[0])
+		}
+		return errors.New("unknown command; run config help for available commands")
+	}
+	return nil
 }

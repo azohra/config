@@ -333,16 +333,24 @@ func evidenceLines(resource config.Resource) []string {
 	return evidence
 }
 
-func (m Model) renderSnapshot() string {
-	var lines []string
-	if m.report.Snapshot.Dirty > 0 {
-		lines = append(lines, fmt.Sprintf("%s → %s", config.FormatCount(m.report.Snapshot.Dirty, "changed file", "changed files"), m.report.Snapshot.Destination))
-		for _, change := range m.report.Snapshot.Changes {
+func snapshotLines(snapshot config.SnapshotStatus) []string {
+	// A policy error refuses the save, and the confirmation screen offered it
+	// anyway because nothing here rendered one.
+	if snapshot.PolicyError != "" {
+		return []string{bad.Render("Cannot save: " + snapshot.PolicyError)}
+	}
+	if snapshot.Dirty > 0 {
+		lines := []string{fmt.Sprintf("%s → %s", config.FormatCount(snapshot.Dirty, "changed file", "changed files"), snapshot.Destination)}
+		for _, change := range snapshot.Changes {
 			lines = append(lines, muted.Render(change))
 		}
-	} else {
-		lines = append(lines, fmt.Sprintf("%s → %s", config.FormatCount(m.report.Snapshot.Ahead, "local commit", "local commits"), m.report.Snapshot.Destination))
+		return lines
 	}
+	return []string{fmt.Sprintf("%s → %s", config.FormatCount(snapshot.Ahead, "local commit", "local commits"), snapshot.Destination)}
+}
+
+func (m Model) renderSnapshot() string {
+	lines := snapshotLines(m.report.Snapshot)
 	available := max(4, m.height-snapshotChrome)
 	scrollable := len(lines) > available
 	lines = visibleLines(lines, m.scroll, available)
@@ -446,4 +454,20 @@ func (m Model) operationTail(output string, available int) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// scrollBound is the largest offset the screen in front of the operator can
+// actually use. Clamping only at render time left the offset itself running
+// past the end, so every keypress past it cost one dead keypress coming back.
+func (m Model) scrollBound() int {
+	switch m.screen {
+	case screenInventory:
+		return max(0, len(inventoryLines(m.report.Resources))-max(5, m.height-inventoryChrome))
+	case screenSnapshot:
+		return max(0, len(snapshotLines(m.report.Snapshot))-max(4, m.height-snapshotChrome))
+	case screenPrune:
+		lines := strings.Split(strings.Trim(m.prunePreview, "\n"), "\n")
+		return max(0, len(lines)-max(5, m.height-pruneChrome))
+	}
+	return 0
 }

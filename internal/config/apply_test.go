@@ -650,3 +650,36 @@ func TestRestorePreferenceRefusesAnApplicationThatWillNotQuit(t *testing.T) {
 		t.Fatal("settings were imported over a running application")
 	}
 }
+
+func TestDockRestartSurvivesAKillBetweenTheWriteAndTheRestart(t *testing.T) {
+	// The domain matches, so a later apply finds no work — the running Dock
+	// would keep the old layout with nothing left to notice.
+	paths := testPaths(t)
+	machine := testMachine()
+	first := paths.InHome("Applications", "First.app")
+	if err := os.MkdirAll(first, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(dockSnapshotPath(paths), []byte("~/Applications/First.app\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setMarker(paths, dockRestartMarker); err != nil {
+		t.Fatal(err)
+	}
+	runner := &sequencedDockRunner{listings: []string{dockDocument(first)}}
+	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "killall"})
+	applier, chatter := testApplier(t, paths, machine, runner)
+	if err := applier.Apply([]Selection{{ID: dockID, Action: Apply}}); err != nil {
+		t.Fatalf("apply Dock: %v\n%s", err, chatter.String())
+	}
+	issued := strings.Join(commands(), "\n")
+	if !strings.Contains(issued, "killall Dock") {
+		t.Fatalf("a pending Dock restart was never performed:\n%s", issued)
+	}
+	if markerSet(paths, dockRestartMarker) {
+		t.Fatal("the restart marker outlived the restart")
+	}
+	if strings.Contains(issued, "defaults write") {
+		t.Fatalf("a matching layout was rewritten:\n%s", issued)
+	}
+}

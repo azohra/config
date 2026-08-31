@@ -539,6 +539,9 @@ func (e Applier) applyChromePWAs() error {
 	for _, app := range live {
 		liveByID[app.ID] = app
 	}
+	// Nothing else removes what a killed restore staged here, and a stray
+	// half-built bundle sits among the operator's applications.
+	sweepStaging(chromePWALiveDir(e.Paths), ".config-pwas.")
 	stage, err := os.MkdirTemp(chromePWALiveDir(e.Paths), ".config-pwas.*")
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(chromePWALiveDir(e.Paths), 0o755); err != nil {
@@ -572,6 +575,7 @@ func (e Applier) applyChromePWAs() error {
 	for _, app := range saved {
 		desiredIDs[app.ID] = true
 	}
+	defer holdInterrupt()()
 	destinations := make(map[string]string, len(saved))
 	for _, app := range saved {
 		destinations[app.ID] = filepath.Join(chromePWALiveDir(e.Paths), app.Name+".app")

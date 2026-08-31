@@ -213,6 +213,13 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 	}
 	if running {
 		e.Log.Info("quitting " + preference.Name + " before import")
+		// Whether to relaunch is a fact about the Mac before the quit, and the
+		// quit destroys it. Without this, a run killed after quitting leaves
+		// the application closed and the next restore, seeing it closed, never
+		// opens it again.
+		if err := setMarker(e.Paths, relaunchMarker(preference.Bundle)); err != nil {
+			return err
+		}
 		if err := e.Live.Command("osascript", "-e", `tell application id "`+preference.Bundle+`" to quit`); err != nil {
 			return err
 		}
@@ -242,10 +249,11 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 		return err
 	}
 	e.Log.OK("saved settings imported")
-	if running {
+	if running || markerSet(e.Paths, relaunchMarker(preference.Bundle)) {
 		if err := e.Live.Command("open", "-b", preference.Bundle); err != nil {
 			return err
 		}
+		clearMarker(e.Paths, relaunchMarker(preference.Bundle))
 		e.Log.OK(preference.Name + " relaunched")
 	}
 	return nil
@@ -328,11 +336,29 @@ func (e Applier) applyDock() error {
 	}
 	liveApps := dockAppPaths(original)
 	if slices.Equal(all, liveApps) {
+		// The domain can match while the running Dock does not, because a
+		// previous run was killed between the write and the restart. Nothing
+		// else would ever notice: the layout is current, so there is no work
+		// left for a later apply to find.
+		if markerSet(e.Paths, dockRestartMarker) {
+			if err := e.Live.Command("killall", "Dock"); err != nil {
+				return fmt.Errorf("restart Dock: %w", err)
+			}
+			clearMarker(e.Paths, dockRestartMarker)
+			e.Log.OK("Dock restarted to pick up the saved layout")
+			return nil
+		}
 		e.Log.OK("layout already current")
 		return nil
 	}
 	updated, err := reconcileDockTiles(original, all)
 	if err != nil {
+		return err
+	}
+	// Record the restart before the write that makes it necessary. A marker
+	// left behind by a failure costs one extra Dock restart; the other order
+	// costs a Dock that never picks up the layout.
+	if err := setMarker(e.Paths, dockRestartMarker); err != nil {
 		return err
 	}
 	if err := store.Write(updated); err != nil {
@@ -352,6 +378,7 @@ func (e Applier) applyDock() error {
 	if err := e.Live.Command("killall", "Dock"); err != nil {
 		return restoreDockAfterFailure(store, original, fmt.Errorf("restart Dock: %w", err))
 	}
+	clearMarker(e.Paths, dockRestartMarker)
 	e.Log.OK("saved layout restored")
 	return nil
 }

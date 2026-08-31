@@ -166,3 +166,33 @@ func TestOSRunnerDeadlineOutlastsNoDescendant(t *testing.T) {
 		t.Fatalf("cancellation took %v", elapsed)
 	}
 }
+
+func TestGitProbesAnswerAboutTheRepositoryConfigNamed(t *testing.T) {
+	// Every command that proves the managed checkout's identity runs Git. An
+	// exported GIT_DIR answers "is this the right repository?" from a
+	// different one.
+	elsewhere := t.TempDir()
+	for _, name := range gitLocalEnvironment {
+		t.Setenv(name, elsewhere)
+	}
+	for _, environment := range [][]string{
+		childEnvironment(NewGitRunner(t.TempDir()).Environment, NewGitRunner(t.TempDir()).Unset),
+		childEnvironment(NewMachineRunner(testPaths(t)).Environment, NewMachineRunner(testPaths(t)).Unset),
+		childEnvironment(NewLiveRunner(t.TempDir()).Environment, NewLiveRunner(t.TempDir()).Unset),
+	} {
+		for _, entry := range environment {
+			name, _, _ := strings.Cut(entry, "=")
+			if slices.Contains(gitLocalEnvironment, name) {
+				t.Errorf("%s reached a Git child as %q", name, entry)
+			}
+		}
+	}
+}
+
+func TestAnExplicitValueBeatsAClearedName(t *testing.T) {
+	t.Setenv("GIT_DIR", "/ambient")
+	environment := childEnvironment([]string{"GIT_DIR=/chosen"}, gitLocalEnvironment)
+	if !slices.Contains(environment, "GIT_DIR=/chosen") {
+		t.Fatalf("an explicit value was cleared: %v", environment)
+	}
+}

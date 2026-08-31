@@ -377,3 +377,116 @@ func TestDeadConfigLinksIgnoreLiveLinksAndNonLinks(t *testing.T) {
 		t.Fatalf("dead links = %+v", links)
 	}
 }
+
+func TestPruneRefusesEveryFileThatChangedAfterPreview(t *testing.T) {
+	// ARCHITECTURE promises Config revalidates every file it removes
+	// immediately before the operation. These are the two functions that
+	// actually delete, and nothing drove either of them.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "baseline.json")
+	body := []byte("{\"schema\":1}\n")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := pruneFile{Label: "a baseline", Path: path, Digest: repositoryHookDigest(body)}
+
+	if err := os.WriteFile(path, []byte("{\"schema\":2}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPruneFile(file); err == nil {
+		t.Fatal("a file that changed after preview was deleted")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the refused file was removed anyway: %v", err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", path); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPruneFile(file); err == nil {
+		t.Fatal("a path that is no longer a regular file was followed")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("the refused symlink was removed: %v", err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPruneFile(file); err != nil {
+		t.Fatalf("an unchanged file was refused: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("an unchanged file survived the prune")
+	}
+}
+
+func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte("#!/bin/sh\nexit 0\n")
+	digest := repositoryHookDigest(body)
+	hookPath := filepath.Join(dir, "post-checkout")
+	manifestPath := filepath.Join(dir, repositoryHookManifestName)
+	writeManifest := func(hookDigest string) []byte {
+		t.Helper()
+		encoded, err := json.MarshalIndent(repositoryHookManifest{Schema: repositoryHookManifestSchema, Hooks: map[string]string{"post-checkout": hookDigest}}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded = append(encoded, '\n')
+		if err := os.WriteFile(manifestPath, encoded, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	manifestBytes := writeManifest(digest)
+	if err := os.WriteFile(hookPath, body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := pruneHookTarget{
+		Name: "a repository", Dir: dir, ManifestDigest: repositoryHookDigest(manifestBytes),
+		Hooks: []pruneHook{{Name: "post-checkout", Digest: digest, RemoveFile: true}},
+	}
+
+	// The manifest moved: something re-claimed the hook after the preview.
+	writeManifest(repositoryHookDigest([]byte("#!/bin/sh\nexit 1\n")))
+	if err := applyPruneHooks(target); err == nil {
+		t.Fatal("a hook whose ownership moved after preview was deleted")
+	}
+	if _, err := os.Stat(hookPath); err != nil {
+		t.Fatalf("the refused hook was removed: %v", err)
+	}
+
+	// The manifest is back, but the hook body itself changed.
+	manifestBytes = writeManifest(digest)
+	target.ManifestDigest = repositoryHookDigest(manifestBytes)
+	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\necho mine\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPruneHooks(target); err == nil {
+		t.Fatal("a hook that changed after preview was deleted")
+	}
+	if _, err := os.Stat(hookPath); err != nil {
+		t.Fatalf("the refused hook was removed: %v", err)
+	}
+
+	// Unchanged: the hook and the manifest that claimed it both go.
+	if err := os.WriteFile(hookPath, body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPruneHooks(target); err != nil {
+		t.Fatalf("an unchanged hook was refused: %v", err)
+	}
+	if _, err := os.Stat(hookPath); !os.IsNotExist(err) {
+		t.Fatal("an unchanged hook survived the prune")
+	}
+	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
+		t.Fatal("an emptied ownership manifest survived the prune")
+	}
+}

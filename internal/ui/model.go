@@ -109,7 +109,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.dashboardCursor = min(m.dashboardCursor, max(0, len(m.dashboardActions())-1))
 	case reportMsg:
 		m.report = msg.report
 		m.loading = false
@@ -169,5 +168,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePrune(msg)
 		}
 	}
+	// The action list is rebuilt from every report, so clamping only on a
+	// resize left the highlighted row pointing at a different action, or at
+	// none, after an operation.
+	m.dashboardCursor = min(max(0, m.dashboardCursor), max(0, len(m.dashboardActions())-1))
+	m.scroll = min(max(0, m.scroll), m.scrollBound())
 	return m, tea.Batch(commands...)
 }
