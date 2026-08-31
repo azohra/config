@@ -9,10 +9,10 @@ You choose the machine repository and keep control of its authentication.
 
 ## Install
 
-Config requires macOS, Git, and mise 2026.8.14 at `~/.local/bin/mise`.
+Config requires macOS, Git, and mise 2026.8.16 at `~/.local/bin/mise`.
 
 ```bash
-mise x github:azohra/config@0.10.0 -- \
+mise x github:azohra/config@0.10.1 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -85,7 +85,7 @@ A domain that holds nothing is refused rather than captured.
 The booleans belong before the first TOML table. Mise keeps its native syntax:
 
 ```toml
-min_version = "2026.8.14"
+min_version = "2026.8.16"
 
 [tools]
 node = "24"

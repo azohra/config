@@ -99,14 +99,15 @@ func TestADirtyCheckoutDoesNotBlockApply(t *testing.T) {
 
 func TestApplyMiseRefusesAnUnsupportedVersionBeforeMutation(t *testing.T) {
 	commands := fakeTools(t, fakeTool{name: "mise"})
+	unsupported := unsupportedMiseVersions()[1]
 	applier := Applier{
-		Runner: &miseStubRunner{version: "2026.8.15"},
+		Runner: &miseStubRunner{version: unsupported},
 		Live:   LiveRunner{},
 		Log:    Logger{Out: &bytes.Buffer{}},
 	}
 
 	err := applier.applyMise()
-	if err == nil || !strings.Contains(err.Error(), "2026.8.15 is unsupported") {
+	if err == nil || !strings.Contains(err.Error(), unsupported+" is unsupported") {
 		t.Fatalf("applyMise() error = %v, want unsupported mise version", err)
 	}
 	if issued := commands(); len(issued) != 0 {

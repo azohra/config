@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/azohra/config/internal/config"
 )
 
 // buildConfig compiles the command so a test drives the real argv boundary
@@ -342,5 +344,33 @@ func TestApplyRefusesAPlanTheCurrentStateDoesNotAllow(t *testing.T) {
 	garbage, code := runConfig(t, binary, home, "--apply", "not-a-plan")
 	if code != 1 {
 		t.Fatalf("config --apply accepted an undecodable plan (exit %d):\n%s", code, garbage)
+	}
+}
+
+func TestInstallDoesNotContendForTheCheckoutLock(t *testing.T) {
+	// update takes the checkout lock and then runs the acquired release's own
+	// install as a child. Installing writes ~/.local/bin/config, not the
+	// checkout, so contending for that lock deadlocks an update against
+	// itself and no release can ever install its successor.
+	binary, home := buildConfig(t), t.TempDir()
+	paths, err := config.NewPaths("", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := config.LockCheckout(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	output, code := runConfig(t, binary, home, "install")
+	if code != 0 {
+		t.Fatalf("config install refused while the checkout lock was held (exit %d):\n%s", code, output)
+	}
+	if strings.Contains(output, "already working on") {
+		t.Fatalf("config install contended for the checkout lock:\n%s", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".local", "bin", "config")); statErr != nil {
+		t.Fatalf("install wrote no command: %v", statErr)
 	}
 }

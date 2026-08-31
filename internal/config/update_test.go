@@ -154,10 +154,11 @@ func TestUpdaterVerifiesMiseBeforeFurtherMutations(t *testing.T) {
 	}
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
+	unsupported := unsupportedMiseVersions()[1]
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
-  printf '%s\n' '2026.8.15'
+  printf '%s\n' '` + unsupported + `'
 fi
 `
 	if err := os.WriteFile(canonical, []byte(script), 0o755); err != nil {
@@ -169,7 +170,7 @@ fi
 	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
 	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
 	err := updater.Update(UpdateAll)
-	if err == nil || !strings.Contains(err.Error(), "2026.8.15 is unsupported") {
+	if err == nil || !strings.Contains(err.Error(), unsupported+" is unsupported") {
 		t.Fatalf("Update() error = %v, want unsupported mise version", err)
 	}
 	commands, readErr := os.ReadFile(logPath)

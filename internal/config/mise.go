@@ -12,7 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const testedMiseVersion = "2026.8.14"
+const testedMiseVersion = "2026.8.16"
 
 // misePath returns Config's canonical execution substrate.
 func misePath(paths Paths) string {
