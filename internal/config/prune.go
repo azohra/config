@@ -380,6 +380,7 @@ func (p Pruner) planConfigFiles(warnings []string) ([]pruneFile, []string, error
 	}{
 		{p.Machine.Dock, dockID, dockName + " baseline"},
 		{p.Machine.ChromePWAs, chromePWAsID, chromePWAsName + " baseline"},
+		{p.Machine.FinderFavorites, finderFavoritesID, finderFavoritesName + " baseline"},
 	} {
 		if capability.enabled {
 			continue

@@ -215,3 +215,47 @@ func TestPendingRestoreRetriesADockWhoseAppWasInitiallyUnavailable(t *testing.T)
 		t.Fatalf("first live edit after restore = %s, want %s", resource.State, LiveChanged)
 	}
 }
+
+func TestPendingRestoreRestoresFinderFavoritesAndEstablishesABaseline(t *testing.T) {
+	paths := testPaths(t)
+	machine := testMachine()
+	machine.FinderFavorites = true
+	machine.ChromePWAs = false
+	machine.Dock = false
+	machine.Preferences = nil
+	first := favoriteDir(t, paths, "First")
+	second := favoriteDir(t, paths, "Second")
+	writeFinderFavoritesSnapshot(t, paths, []finderFavoriteSnapshotItem{
+		snapshotFinderFavorite(paths, finderFavorite{Name: "First", Path: first}),
+		snapshotFinderFavorite(paths, finderFavorite{Name: "Second", Path: second}),
+	})
+	progress := testRestoreProgress(t, paths, machine)
+	progress.record.Completed = []string{restoreSetupStep}
+	if err := progress.save(); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeFinderFavorites{}
+	applier, _ := testApplier(t, paths, machine, converged{})
+	applier.FinderFavorites = store
+
+	if err := restorePending(applier, progress); err != nil {
+		t.Fatal(err)
+	}
+	if !progress.done("resource/" + finderFavoritesID) {
+		t.Fatalf("Finder Favorites restore was not checkpointed: %v", progress.record.Completed)
+	}
+	_, actual, _, err := finderFavoritesLive(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []finderFavorite{{Name: "First", Path: first}, {Name: "Second", Path: second}}
+	if !slices.Equal(actual, want) {
+		t.Fatalf("restored Favorites = %+v, want %+v", actual, want)
+	}
+
+	liveEdit := favoriteDir(t, paths, "Live edit")
+	store.items = append(store.items, finderFavoriteItem{ID: 3, Name: "Live edit", Path: liveEdit})
+	if resource := applier.Bidir.InspectFinderFavorites(store); resource.State != LiveChanged {
+		t.Fatalf("first live edit after restore = %s, want %s", resource.State, LiveChanged)
+	}
+}

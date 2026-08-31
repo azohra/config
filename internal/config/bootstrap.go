@@ -74,13 +74,23 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 // a declared Dock layout is rebuilt.
 func freshRestoreSteps(applier Applier) []freshRestoreStep {
 	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+3)
-	if applier.Machine.FinderFavorite != nil {
+	if applier.Machine.FinderFavorites {
 		steps = append(steps, freshRestoreStep{
-			id:   "resource/" + finderFavoriteID,
-			name: finderFavoriteName,
+			id:   "resource/" + finderFavoritesID,
+			name: finderFavoritesName,
 			run: func() error {
-				applier.Log.Section(finderFavoriteName)
-				return applier.reconcileFinderFavorite(Apply)
+				applier.Log.Section(finderFavoritesName)
+				_, _, _, hasSaved, err := applier.Bidir.finderFavoritesSaved()
+				if err != nil {
+					return err
+				}
+				if !hasSaved {
+					return nil
+				}
+				if err := applier.applyFinderFavorites(); err != nil {
+					return err
+				}
+				return applier.Bidir.MarkFinderFavoritesIfCurrent(applier.FinderFavorites)
 			},
 		})
 	}

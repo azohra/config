@@ -217,7 +217,11 @@ func (*recordingRunner) Exists(string) bool { return true }
 // bootstrap probe for an answer that is then thrown away.
 func TestSnapshotValidationSkipsMachineSetup(t *testing.T) {
 	runner := &recordingRunner{}
-	report := NewInspector(testPaths(t), testMachine(), runner).InspectSnapshot()
+	machine := testMachine()
+	machine.FinderFavorites = true
+	inspector := NewInspector(testPaths(t), machine, runner)
+	inspector.FinderFavorites = &fakeFinderFavorites{}
+	report := inspector.InspectSnapshot()
 
 	if _, found := report.Resource(setupID); found {
 		t.Fatalf("the snapshot gate inspected machine setup: %+v", report.Resources)
@@ -228,13 +232,13 @@ func TestSnapshotValidationSkipsMachineSetup(t *testing.T) {
 		}
 	}
 	// The resources it does gate on still have to be there.
-	for _, id := range []string{dockID, chromePWAsID, testMachine().Preferences[0].ID} {
+	for _, id := range []string{finderFavoritesID, dockID, chromePWAsID, machine.Preferences[0].ID} {
 		if _, found := report.Resource(id); !found {
 			t.Fatalf("%s is missing from the snapshot gate: %+v", id, report.Resources)
 		}
 	}
 	// A full inspection still reports everything.
-	if _, found := NewInspector(testPaths(t), testMachine(), runner).Inspect().Resource(setupID); !found {
+	if _, found := inspector.Inspect().Resource(setupID); !found {
 		t.Fatal("a full inspection dropped machine setup")
 	}
 }

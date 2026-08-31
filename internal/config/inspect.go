@@ -280,7 +280,7 @@ func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(machineSetup bool) Report {
 	bidir := NewBidirectional(i.Paths, i.Runner)
-	var setup, chromePWAs, dock, finderFavorite, repositoryHooks Resource
+	var setup, chromePWAs, dock, finderFavorites, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
@@ -293,15 +293,15 @@ func (i Inspector) inspect(machineSetup bool) Report {
 				repositoryHooks = InspectRepositoryHooks(i.Paths, i.Machine, i.Runner)
 			})
 		}
-		if i.Machine.FinderFavorite != nil {
-			store := i.FinderFavorites
-			if store == nil {
-				store = newFinderFavoritesStore()
-			}
-			tasks = append(tasks, func() {
-				finderFavorite = InspectFinderFavorite(i.Paths, *i.Machine.FinderFavorite, store)
-			})
+	}
+	if i.Machine.FinderFavorites {
+		store := i.FinderFavorites
+		if store == nil {
+			store = newFinderFavoritesStore()
 		}
+		tasks = append(tasks, func() {
+			finderFavorites = bidir.InspectFinderFavorites(store)
+		})
 	}
 	if i.Machine.ChromePWAs {
 		tasks = append(tasks, func() { chromePWAs = bidir.InspectChromePWAs() })
@@ -327,9 +327,9 @@ func (i Inspector) inspect(machineSetup bool) Report {
 		if len(i.Machine.RepositoryHooks) > 0 {
 			resources = append(resources, repositoryHooks)
 		}
-		if i.Machine.FinderFavorite != nil {
-			resources = append(resources, finderFavorite)
-		}
+	}
+	if i.Machine.FinderFavorites {
+		resources = append(resources, finderFavorites)
 	}
 	if i.Machine.ChromePWAs {
 		resources = append(resources, chromePWAs)

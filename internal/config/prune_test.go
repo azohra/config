@@ -63,6 +63,7 @@ type pruneFixture struct {
 	live           *pruneCommandRecorder
 	dockBaseline   string
 	chromeBaseline string
+	finderBaseline string
 	oldRestore     string
 	currentRestore string
 	hook           string
@@ -100,6 +101,9 @@ func newPruneFixture(t *testing.T) pruneFixture {
 		t.Fatal(err)
 	}
 	if err := baselines.Save(chromePWAsID, json.RawMessage(`["abcdefghijklmnopabcdefghijklmnop"]`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := baselines.Save(finderFavoritesID, json.RawMessage(`[{"name":"Development","path":"/Users/example/Development"}]`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,6 +165,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 		pruner: pruner, live: live,
 		dockBaseline:   filepath.Join(paths.StateDir, dockID+".json"),
 		chromeBaseline: filepath.Join(paths.StateDir, chromePWAsID+".json"),
+		finderBaseline: filepath.Join(paths.StateDir, finderFavoritesID+".json"),
 		oldRestore:     restoreStatePath(paths, oldID), currentRestore: restoreStatePath(paths, currentID),
 		hook: hookPath, manifest: manifestPath,
 	}
@@ -211,7 +216,7 @@ func TestPrunePlanUsesMiseInventoryAndProvesConfigOwnership(t *testing.T) {
 	if len(plan.hooks) != 1 || len(plan.hooks[0].Hooks) != 1 || !plan.hooks[0].Hooks[0].RemoveFile {
 		t.Fatalf("hook plan = %+v", plan.hooks)
 	}
-	if len(plan.files) != 3 {
+	if len(plan.files) != 4 {
 		t.Fatalf("Config file plan = %+v", plan.files)
 	}
 	if len(plan.warnings) != 1 || !strings.Contains(plan.warnings[0], "mise WARN") {
@@ -222,7 +227,7 @@ func TestPrunePlanUsesMiseInventoryAndProvesConfigOwnership(t *testing.T) {
 	WritePrunePlan(&output, plan)
 	for _, want := range []string{
 		"1 dead tracked link", "1 dead trust link", "github:azohra/config@0.5.0",
-		"brew: would remove orphan-package", "post-checkout", "Dock baseline",
+		"brew: would remove orphan-package", "post-checkout", "Dock baseline", "Finder Favorites baseline",
 		"mas does not support pruning; left untouched", "mise WARN stale tracked configuration",
 	} {
 		if !strings.Contains(output.String(), want) {
@@ -248,7 +253,7 @@ func TestPruneApplyRechecksThenUsesOwnedDeletionPaths(t *testing.T) {
 	if !slices.Equal(fixture.live.commands, wantCommands) {
 		t.Fatalf("apply commands = %v, want %v", fixture.live.commands, wantCommands)
 	}
-	for _, path := range []string{fixture.dockBaseline, fixture.chromeBaseline, fixture.oldRestore, fixture.hook, fixture.manifest} {
+	for _, path := range []string{fixture.dockBaseline, fixture.chromeBaseline, fixture.finderBaseline, fixture.oldRestore, fixture.hook, fixture.manifest} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("pruned path still exists: %s (%v)", path, err)
 		}

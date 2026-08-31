@@ -55,7 +55,7 @@ phases mise offers.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
-capabilities. A capability is absent unless schema 1 declares it. The document
+capabilities. A capability is absent unless schema 2 declares it. The document
 opts into a capability and supplies personal values or payloads; Config owns
 where and how those declarations converge.
 
@@ -119,7 +119,7 @@ the declared repositories after bootstrap so existing and newly created
 checkouts converge to the same hook bodies. The selected mise configuration
 owns any custom ordering through mise lifecycle hooks. Config then converges
 declared native macOS facts and executes selected repository hook, Finder
-Favorite, preference, Chrome PWA, and Dock actions. Independent failures are
+Favorites, preference, Chrome PWA, and Dock actions. Independent failures are
 collected so one resource does not hide the rest of the plan.
 
 Repository hooks are authoritative one-way state. A declaration names a hook
@@ -132,21 +132,25 @@ same-name hook, linked hooks directory, or `core.hooksPath` redirect is reported
 and preserved. Config resolves common directories through Git, so linked
 worktrees share the same hook without a path back into the machine repository.
 
-Finder Favorites are authoritative one-way state. The declaration names the
-Favorite; Config derives the managed checkout URL and uses the native macOS
-shared-file-list API to replace same-named entries that point elsewhere. Order
-and unrelated Favorites remain outside the resource. Config loads that API at
-runtime and reports the resource unavailable if macOS no longer exposes it.
-
-Dock and Chrome PWAs use three-way reconciliation:
+Finder Favorites, Dock, and Chrome PWAs use three-way reconciliation:
 
 ```text
 saved snapshot + live state + last agreement -> current, saved changed,
 live changed, unknown, or conflict
 ```
 
+The Finder Favorites snapshot owns the label, path, and order of every
+resolvable path-backed directory entry. It stores the managed checkout as a
+symbolic target and home-relative paths portably; unresolved or non-directory
+entries remain opaque and outside Config's ownership. Restore verifies every
+target before writing, uses the native macOS shared-file-list API to insert or
+move desired entries before removing extras, and restores the original layout
+if the result cannot be verified. Config loads the API at runtime and
+reports the resource unavailable if macOS no longer exposes it.
+
 Each side reduces to the fact Config tracks before it is compared: the apps
-in the Dock, and the PWAs installed. A PWA's name, URL, icon, and schemes are
+in the Dock, the PWAs installed, and the ordered path-backed Finder Favorites.
+A PWA's name, URL, icon, and schemes are
 kept because a restore rebuilds the bundle from them, but Chrome owns that
 content and rewrites it on its own schedule, so comparing it would report
 Chrome's churn as a choice.
@@ -160,9 +164,10 @@ and restores the original key when verification fails. The Dock restarts once,
 after a verified change.
 
 Baselines live outside the repository under `~/.cache/config/state`. They are
-written only when saved and live state agree. Captures use atomic writes; PWA
-snapshots validate identifiers, URLs, schemes, icon digests, and plist input
-before replacing saved state.
+written only when saved and live state agree. Captures use atomic writes;
+Finder snapshots validate names, portable targets, and unique absolute paths,
+while PWA snapshots validate identifiers, URLs, schemes, icon digests, and
+plist input before replacing saved state.
 
 Preference plists use a different contract. Their declaration identifies the
 application and defaults domain; Config derives

@@ -5,6 +5,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -39,33 +40,70 @@ func (darwinFinderFavorites) List() ([]finderFavoriteItem, error) {
 	return api.items(list)
 }
 
-func (darwinFinderFavorites) Add(name, path string) error {
+func (darwinFinderFavorites) PutAfter(name, path string, after *finderFavoriteItem) (finderFavoriteItem, error) {
 	api, err := openFinderFavoritesAPI()
 	if err != nil {
-		return err
+		return finderFavoriteItem{}, err
 	}
 	defer api.close()
 	list := api.newList()
 	if list == 0 {
-		return fmt.Errorf("open Finder Favorites")
+		return finderFavoriteItem{}, fmt.Errorf("open Finder Favorites")
 	}
 	defer api.cfRelease(list)
+	position := api.itemBeforeFirst
+	if after != nil {
+		snapshot := api.copySnapshot(list, nil)
+		if snapshot == 0 {
+			return finderFavoriteItem{}, fmt.Errorf("read Finder Favorites")
+		}
+		defer api.cfRelease(snapshot)
+		count := api.cfArrayGetCount(snapshot)
+		var found uintptr
+		for index := range count {
+			item := api.cfArrayGetValueAtIndex(snapshot, index)
+			if item != 0 && api.itemGetID(item) == after.ID {
+				if found != 0 {
+					return finderFavoriteItem{}, fmt.Errorf("Finder Favorite id %d is ambiguous", after.ID)
+				}
+				found = item
+			}
+		}
+		if found == 0 {
+			return finderFavoriteItem{}, fmt.Errorf("Finder Favorite id %d disappeared", after.ID)
+		}
+		current, itemErr := api.item(found)
+		if itemErr != nil {
+			return finderFavoriteItem{}, fmt.Errorf("reread Finder Favorite id %d: %w", after.ID, itemErr)
+		}
+		if current != *after {
+			return finderFavoriteItem{}, fmt.Errorf("Finder Favorite id %d changed before insertion", after.ID)
+		}
+		position = found
+	}
 	displayName, err := api.newString(name)
 	if err != nil {
-		return err
+		return finderFavoriteItem{}, err
 	}
 	defer api.cfRelease(displayName)
 	fileURL, err := api.newFileURL(path)
 	if err != nil {
-		return err
+		return finderFavoriteItem{}, err
 	}
 	defer api.cfRelease(fileURL)
-	item := api.insertItemURL(list, api.itemLast, displayName, 0, fileURL, 0, 0)
+	item := api.insertItemURL(list, position, displayName, 0, fileURL, 0, 0)
 	if item == 0 {
-		return fmt.Errorf("insert Finder Favorite")
+		return finderFavoriteItem{}, fmt.Errorf("insert Finder Favorite")
 	}
-	api.cfRelease(item)
-	return nil
+	defer api.cfRelease(item)
+	inserted, err := api.item(item)
+	if err != nil {
+		return finderFavoriteItem{}, fmt.Errorf("read inserted Finder Favorite: %w", err)
+	}
+	if inserted.Name != name || filepath.Clean(inserted.Path) != filepath.Clean(path) {
+		return finderFavoriteItem{}, fmt.Errorf("Finder inserted %q at %q", inserted.Name, inserted.Path)
+	}
+	return inserted, nil
 }
 
 func (darwinFinderFavorites) Remove(expected finderFavoriteItem) error {
@@ -112,10 +150,10 @@ func (darwinFinderFavorites) Remove(expected finderFavoriteItem) error {
 }
 
 type finderFavoritesAPI struct {
-	sharedFileList uintptr
-	coreFoundation uintptr
-	favoriteItems  uintptr
-	itemLast       uintptr
+	sharedFileList  uintptr
+	coreFoundation  uintptr
+	favoriteItems   uintptr
+	itemBeforeFirst uintptr
 
 	create                  func(uintptr, uintptr, uintptr) uintptr
 	copySnapshot            func(uintptr, *uint32) uintptr
@@ -180,12 +218,12 @@ func openFinderFavoritesAPI() (*finderFavoritesAPI, error) {
 	if err != nil {
 		return fail(err)
 	}
-	itemLast, err := finderConstant(sharedFileList, "kLSSharedFileListItemLast")
+	api.favoriteItems = favoriteItems
+	itemBeforeFirst, err := finderConstant(sharedFileList, "kLSSharedFileListItemBeforeFirst")
 	if err != nil {
 		return fail(err)
 	}
-	api.favoriteItems = favoriteItems
-	api.itemLast = itemLast
+	api.itemBeforeFirst = itemBeforeFirst
 	return api, nil
 }
 

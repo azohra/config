@@ -113,8 +113,8 @@ func (e Applier) Apply(selections []Selection) error {
 		steps = append(steps, step{repositoryHooksID, repositoryHooksName, e.reconcileRepositoryHooks})
 	}
 	steps = append(steps, step{setupID, setupName, func(Action) error { return e.applyMise() }})
-	if e.Machine.FinderFavorite != nil {
-		steps = append(steps, step{finderFavoriteID, finderFavoriteName, e.reconcileFinderFavorite})
+	if e.Machine.FinderFavorites {
+		steps = append(steps, step{finderFavoritesID, finderFavoritesName, e.reconcileFinderFavorites})
 	}
 	for _, preference := range e.Machine.Preferences {
 		steps = append(steps, step{preference.ID, preference.Name, func(action Action) error {
@@ -156,6 +156,11 @@ func (e Applier) Apply(selections []Selection) error {
 		mark func() error
 	}
 	var baselines []baselineStep
+	if e.Machine.FinderFavorites {
+		baselines = append(baselines, baselineStep{finderFavoritesID, finderFavoritesName, func() error {
+			return e.Bidir.MarkFinderFavoritesIfCurrent(e.FinderFavorites)
+		}})
+	}
 	if e.Machine.ChromePWAs {
 		baselines = append(baselines, baselineStep{chromePWAsID, chromePWAsName, e.Bidir.MarkChromePWAsIfCurrent})
 	}

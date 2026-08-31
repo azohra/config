@@ -12,7 +12,7 @@ import (
 
 const (
 	MachineKind   = "azohra.config.machine"
-	MachineSchema = 1
+	MachineSchema = 2
 	managedRemote = "origin"
 )
 
@@ -23,7 +23,7 @@ type Machine struct {
 	Repository      MachineRepository  `toml:"repository"`
 	Dock            bool               `toml:"dock"`
 	ChromePWAs      bool               `toml:"chrome_pwas"`
-	FinderFavorite  *FinderFavorite    `toml:"finder_favorite"`
+	FinderFavorites bool               `toml:"finder_favorites"`
 	RepositoryHooks []RepositoryHook   `toml:"repository_hooks"`
 	MacOS           MachineMacOS       `toml:"macos"`
 	Preferences     []PreferenceBackup `toml:"preferences"`
@@ -103,11 +103,6 @@ func (m Machine) Validate() error {
 		spotlight := m.MacOS.Spotlight
 		if spotlight.ID <= 0 || spotlight.Type != "standard" || len(spotlight.Parameters) != 3 {
 			return fmt.Errorf("macos.spotlight must declare a positive id, type standard, and three parameters")
-		}
-	}
-	if m.FinderFavorite != nil {
-		if err := m.FinderFavorite.Validate(); err != nil {
-			return fmt.Errorf("finder_favorite: %w", err)
 		}
 	}
 	seenHooks := map[string]bool{}
