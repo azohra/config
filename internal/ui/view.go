@@ -456,8 +456,9 @@ func (m Model) operationTail(output string, available int) string {
 	return strings.Join(lines, "\n")
 }
 
-// scrollBound is the largest offset the rendered screen can actually use. Clamping only at render time left the offset itself running
-// past the end, so every keypress past it cost one dead keypress coming back.
+// scrollBound is the largest offset the rendered screen can actually use.
+// Clamping only at render time left the offset itself running past the end,
+// so every keypress past it cost one dead keypress coming back.
 func (m Model) scrollBound() int {
 	switch m.screen {
 	case screenInventory:

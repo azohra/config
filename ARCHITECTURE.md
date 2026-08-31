@@ -62,10 +62,14 @@ interleaving with another Config. The terminal interface holds no lock of its
 own, because the commands it launches take it for the work they do.
 
 An interrupt lands between writes, not inside one. SIGINT and SIGTERM end the
-process once no critical section is running: an atomic rename, a hook beside
-the manifest that claims it, a bundle swap. A section that has not finished
-still running after ten seconds is reported and the process exits anyway.
-Config names what it stages, and the next run sweeps it.
+process once no file is mid-write; the staging, rename, and sync of a single
+artifact is the section a signal waits out. A write still running after ten
+seconds is reported and the process exits anyway.
+
+A signal can still land between two files, and the rest of the design is what
+makes that recoverable. Ownership is recorded before the hook it claims. A
+fact the next write destroys is recorded before that write. Config names what
+it stages, and the next run sweeps it.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
