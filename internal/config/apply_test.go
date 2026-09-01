@@ -78,11 +78,11 @@ func TestADirtyCheckoutDoesNotBlockApply(t *testing.T) {
 
 	var chatter bytes.Buffer
 	applier := Applier{
-		Paths:   testPaths(t),
-		Machine: testMachine(),
-		Runner:  converged{},
-		Live:    LiveRunner{Stdout: &chatter, Stderr: &chatter},
-		Log:     Logger{Out: &chatter},
+		Paths:    testPaths(t),
+		Machine:  testMachine(),
+		Mise:     converged{},
+		MiseLive: LiveRunner{Stdout: &chatter, Stderr: &chatter},
+		Log:      Logger{Out: &chatter},
 	}
 	if err := applier.applyMise(); err != nil {
 		t.Fatalf("a dirty checkout blocked apply: %v", err)
@@ -101,9 +101,9 @@ func TestApplyMiseRefusesAnUnsupportedVersionBeforeMutation(t *testing.T) {
 	commands := fakeTools(t, fakeTool{name: "mise"})
 	unsupported := unsupportedMiseVersions()[1]
 	applier := Applier{
-		Runner: &miseStubRunner{version: unsupported},
-		Live:   LiveRunner{},
-		Log:    Logger{Out: &bytes.Buffer{}},
+		Mise:     &miseStubRunner{version: unsupported},
+		MiseLive: LiveRunner{},
+		Log:      Logger{Out: &bytes.Buffer{}},
 	}
 
 	err := applier.applyMise()
@@ -158,7 +158,7 @@ func TestApplyRunsOnlyTheSelectedSteps(t *testing.T) {
 	if !strings.Contains(out, dockName) {
 		t.Fatalf("the selected step did not run:\n%s", out)
 	}
-	for _, unselected := range []string{setupName, chromePWAsName, "Example App"} {
+	for _, unselected := range []string{miseName, macOSName, chromePWAsName, "Example App"} {
 		if strings.Contains(out, unselected) {
 			t.Fatalf("%s ran without being selected:\n%s", unselected, out)
 		}
@@ -456,8 +456,8 @@ func (r *sequencedDockRunner) Run(ctx context.Context, name string, args ...stri
 		r.reads++
 		return Result{Stdout: listing}
 	}
-	// Machine setup converges, so a test of what follows it is not answering
-	// for the macOS facts as well.
+	// The platform resources converge, so a test of what follows them is not
+	// answering for the macOS facts as well.
 	return converged{}.Run(ctx, name, args...)
 }
 

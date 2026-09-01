@@ -1,45 +1,50 @@
 # Config
 
-Config turns a Git repository into a reproducible Mac setup. Mise handles
-tools, packages, repositories, dotfiles, services, and bootstrap tasks. Config
-adds a small terminal interface, native macOS resources, safe restore, and
-snapshot commits.
+Config turns a Git repository into a reproducible Mac setup. It inspects,
+plans, and reconciles resources such as Mise, native macOS settings, Finder
+Favorites, application state, and the Dock.
 
 You choose the machine repository and keep control of its authentication.
 
 ## Install
 
-Config requires macOS, Git, and mise 2026.8.16 at `~/.local/bin/mise`.
+Config requires macOS and Git. The caller supplies an authenticated repository
+handoff. When the machine contract opts into Mise, Config installs its tested
+standalone release when that resource first converges.
+
+On a machine that already has Mise, one way to run the released binary is:
 
 ```bash
-mise x github:azohra/config@0.10.1 -- \
+mise x github:azohra/config@0.11.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
 Bootstrap validates the repository, clones it to
 `~/Library/Application Support/Config/repository`, installs the released binary
-at `~/.local/bin/config`, runs mise, and restores any existing snapshots. Each
-successful restore step is checkpointed. If one fails, rerun the same command;
-completed work will not repeat.
+at `~/.local/bin/config`, and restores declared resources and existing
+snapshots. Each successful restore step is checkpointed independently. If one
+fails, rerun the same command; completed work will not repeat.
 
 Authentication comes from the calling Git environment or credential helper.
 Config rejects repository URLs containing credentials.
 
 ## Configure
 
-The machine repository has two inputs:
+Every machine repository has a strict Config contract. A repository that opts
+into Mise also carries its native declarations:
 
 ```text
-config.toml       Config's strict machine contract
-mise/config.toml  native mise configuration
+config.toml       required Config contract
+mise/config.toml  optional native Mise configuration
 mise/conf.d/*.toml
 ```
 
-Only the repository identity is required. Native capabilities are opt-in:
+Only the repository identity is required. Every capability is opt-in:
 
 ```toml
 kind = "azohra.config.machine"
-schema = 2
+schema = 3
+mise = true
 dock = true
 chrome_pwas = true
 finder_favorites = true
@@ -82,7 +87,9 @@ byte for byte and unfiltered, into the machine repository, which Config then
 commits and pushes. Declare a domain only if everything in it belongs there.
 A domain that holds nothing is refused rather than captured.
 
-The booleans belong before the first TOML table. Mise keeps its native syntax:
+The booleans belong before the first TOML table. `mise = true` enables the
+Mise resource; without it Config neither inspects nor installs Mise. Mise keeps
+its native syntax under `mise/`:
 
 ```toml
 min_version = "2026.8.16"
@@ -94,11 +101,15 @@ node = "24"
 "~/.gitconfig" = "gitconfig"
 ```
 
-Config sets `MISE_CONFIG_DIR` for its child processes and stops parent
-configuration discovery. It does not create a private mise installation or
-inventory. Repository-local mise files can still add narrower authority while
-they are loadable, and mise considers that shared inventory when pruning tools
-and packages.
+Mise is a first-class Config resource. When enabled, its inspection reports the
+exact tested version, bootstrap phases, declared tools, and repository
+presence. Apply installs the pinned standalone binary at
+`~/.local/bin/mise` when necessary, then delegates convergence to
+`mise bootstrap`. Only machine Mise commands receive the managed
+`MISE_CONFIG_DIR` and related selectors; native resources and Git operations
+receive none of that authority. Repository-local Mise files can still add
+narrower authority while they are loadable, and Mise considers that shared
+inventory when pruning tools and packages.
 
 ## Native state
 
@@ -132,9 +143,10 @@ comparison tracks installed apps rather than bundle churn that Chrome owns;
 replacements are built and signed in staging before live bundles change.
 
 Preferences are one-way backups on an established Mac. Existing backups are
-restored only during a pending bootstrap for that exact checkout. Repository
-hooks are one-way desired state: Config refreshes only copies it previously
-installed and reports a repository-owned hook as a conflict.
+restored only during a pending bootstrap for that exact checkout. A missing
+application leaves its step pending without blocking independent resources.
+Repository hooks are one-way desired state: Config refreshes only copies it
+previously installed and reports a repository-owned hook as a conflict.
 
 ## Use
 
@@ -165,10 +177,14 @@ config --version
 repository remotes. `config update repositories` fast-forwards clean declared
 repositories. The unqualified command runs both scopes. A released build first
 updates Config itself and continues from the installed binary; a development
-build skips that release transition.
+build skips that release transition. When Mise is not declared, the machine
+portion has no Mise work to perform.
 
-`config prune` previews mise's shared inventory decisions alongside Config's
-own stale state. Config deletes only artifacts whose ownership it can prove:
+`config prune` previews Mise's shared inventory decisions alongside Config's
+own stale state. A declared but unavailable Mise is reported and its state
+stays untouched; Config-owned cleanup still proceeds. Config deletes only
+artifacts whose
+ownership it can prove:
 unchanged hook copies, baselines for disabled capabilities, and completed
 restore records from older managed checkouts. Ambiguous items stay put. A
 terminal asks for confirmation; redirected output remains preview-only unless

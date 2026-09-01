@@ -142,17 +142,18 @@ func TestConvergeAttemptsEveryFactAndRunsTheRealFixes(t *testing.T) {
 
 func TestMacOSFactsDoNotDependOnMise(t *testing.T) {
 	// The three facts invoke defaults, plutil and hidutil. None of them
-	// touches anything mise installs, yet they were reported only past mise's
-	// version gate and converged only past its deliberate stop.
+	// touches anything Mise installs, so the two resources must report and
+	// converge independently.
 	paths := testPaths(t)
 	machine := testMachine()
 	probes := setupRunner{answers: map[string]string{
 		"defaults": "0", "hidutil": "(mapped)", "plutil": spotlightDeclared,
 	}}
 
-	// Inspection: a mise Config cannot use hides the whole substrate, not the
-	// native settings beside it.
-	resource := Inspector{Paths: paths, Machine: machine, Runner: unsupportedMiseRunner{setupRunner: probes}}.setup()
+	// Inspection: an unsupported Mise cannot hide native settings beside it.
+	inspector := Inspector{Paths: paths, Machine: machine, Runner: probes,
+		Mise: unsupportedMiseRunner{setupRunner: probes}}
+	resource := inspector.macOS()
 	var labels []string
 	for _, check := range resource.Checks {
 		labels = append(labels, check.Label)
@@ -164,11 +165,12 @@ func TestMacOSFactsDoNotDependOnMise(t *testing.T) {
 		}
 	}
 
-	// Apply: mise failing is the one deliberate stop, and the facts still run.
+	// Apply: Mise can fail while the selected macOS resource still runs.
 	commands := fakeTools(t, fakeTool{name: "mise", exit: 1},
 		fakeTool{name: "defaults"}, fakeTool{name: "hidutil"}, fakeTool{name: "plutil"})
 	applier, chatter := testApplier(t, paths, machine, probes)
-	if err := applier.applyMise(); err == nil {
+	applier.Mise = unsupportedMiseRunner{setupRunner: probes}
+	if err := applier.Apply([]Selection{{ID: macOSID, Action: Apply}, {ID: miseID, Action: Apply}}); err == nil {
 		t.Fatal("a failed mise bootstrap was reported as success")
 	}
 	issued := strings.Join(commands(), "\n")

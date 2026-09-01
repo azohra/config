@@ -17,7 +17,7 @@ func press(code rune) tea.KeyPressMsg {
 
 func TestBuildPlanUsesInspectedActionsAndSafeDefaults(t *testing.T) {
 	report := config.Report{Resources: []config.Resource{
-		{ID: "setup", Name: "Machine setup", State: config.Drift, Actions: []config.Action{config.Apply}},
+		{ID: "mise", Name: "Mise", State: config.Drift, Actions: []config.Action{config.Apply}},
 		{ID: "example-app", Name: "Example App", State: config.LiveChanged, Bidirectional: true, Actions: []config.Action{config.Capture, config.Apply}},
 	}}
 	plan := buildPlan(report)
@@ -34,7 +34,7 @@ func TestBuildPlanUsesInspectedActionsAndSafeDefaults(t *testing.T) {
 
 func TestReviewRefreshesBeforeBuildingPlan(t *testing.T) {
 	report := config.Report{Resources: []config.Resource{{
-		ID: "setup", Name: "Machine setup", State: config.Drift, Actions: []config.Action{config.Apply},
+		ID: "mise", Name: "Mise", State: config.Drift, Actions: []config.Action{config.Apply},
 	}}}
 	m := Model{screen: screenDashboard, report: report}
 	next, _ := m.updateDashboard(press(tea.KeyEnter))
@@ -73,7 +73,7 @@ func TestPlanConfirmsInlineChoiceAndRunsExplicitSelection(t *testing.T) {
 
 func TestInspectOpensCombinedEvidenceView(t *testing.T) {
 	report := config.Report{
-		Resources: []config.Resource{{ID: "setup", Name: "Machine setup", State: config.Current}},
+		Resources: []config.Resource{{ID: "mise", Name: "Mise", State: config.Current}},
 		Snapshot:  config.SnapshotStatus{Upstream: "origin/main"},
 	}
 	m := Model{screen: screenDashboard, report: report}

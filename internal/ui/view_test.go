@@ -16,7 +16,7 @@ import (
 func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 	m := Model{
 		report: config.Report{
-			Resources: []config.Resource{{ID: "setup", Name: "Machine setup", State: config.Current}},
+			Resources: []config.Resource{{ID: "mise", Name: "Mise", State: config.Current}},
 			Snapshot:  config.SnapshotStatus{Upstream: "origin/main"},
 		},
 		width: 80, height: 24,
@@ -38,7 +38,7 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 			t.Fatalf("clean dashboard missing %q:\n%s", present, view)
 		}
 	}
-	for _, absent := range []string{"Review changes", "Save snapshot", "Machine setup"} {
+	for _, absent := range []string{"Review changes", "Save snapshot", "Mise"} {
 		if strings.Contains(view, absent) {
 			t.Fatalf("clean dashboard exposes %q:\n%s", absent, view)
 		}
@@ -48,7 +48,7 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 	m.report.Resources[0].Actions = []config.Action{config.Apply}
 	m.report.Snapshot.Dirty = 1
 	view = m.renderDashboard()
-	for _, present := range []string{"Review changes", "Save snapshot", "Machine setup", "1 changed file"} {
+	for _, present := range []string{"Review changes", "Save snapshot", "Mise", "1 changed file"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("changed dashboard missing %q:\n%s", present, view)
 		}
@@ -110,14 +110,14 @@ func TestCleanupPreviewBoundsLongPlans(t *testing.T) {
 func TestInventoryShowsCombinedConcreteEvidence(t *testing.T) {
 	m := Model{
 		report: config.Report{Resources: []config.Resource{
-			{ID: "setup", Name: "Machine setup", State: config.Current, Summary: "12 checks current", Checks: []config.Check{{Label: "mise 2026.8.14", OK: true}, {Label: "mise bootstrap state", OK: true}}},
+			{ID: "mise", Name: "Mise", State: config.Current, Summary: "12 checks current", Checks: []config.Check{{Label: "mise 2026.8.16", OK: true}, {Label: "mise bootstrap state", OK: true}}},
 			{ID: "example-app", Name: "Example App", State: config.Current, Summary: "this Mac matches the saved settings", Bidirectional: true},
 			{ID: "dock", Name: "Dock", State: config.Current, Summary: "this Mac matches the saved layout", Bidirectional: true},
 		}},
 		width: 100, height: 30,
 	}
 	view := m.renderInventory()
-	for _, present := range []string{"3 resources", "Machine setup", "mise 2026.8.14", "mise bootstrap state", "Example App", "Dock"} {
+	for _, present := range []string{"3 resources", "Mise", "mise 2026.8.16", "mise bootstrap state", "Example App", "Dock"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("inventory missing %q:\n%s", present, view)
 		}

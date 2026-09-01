@@ -8,53 +8,57 @@ binary starts belong to the caller.
 ## Ownership
 
 The machine repository owns policy and data. Its root `config.toml` is Config's
-strict contract. Native mise declarations live under `mise/`; Config does not
-parse or reinterpret them.
+strict contract. `mise = true` opts into the Mise resource; native Mise
+declarations then live under `mise/`, where Config does not parse or reinterpret
+them. Without that declaration Config does not inspect, install, update, or
+prune machine Mise state.
 
-Mise owns the resources the machine repository declares and the order encoded
-by its bootstrap phases and lifecycle hooks. Config invokes one canonical
-standalone binary at
-`~/.local/bin/mise`, scopes the repository's native `mise/` configuration to
-each child process, and reports each bootstrap phase's status or the apply
-result. Package names, repository purposes, commands, secret references, and
-provider configuration remain opaque mise input. The standalone mise
-installation is Config's execution substrate, and Config accepts exactly the
-version whose command and phase vocabulary the release tests.
-Config disables mise's ambient auto-update behavior in child processes;
-`config update` is the explicit version transition for Config, mise, and the
-resources declared by the machine repository. A released Config first repairs
-canonical mise to the version it knows, then uses that isolated substrate to
-acquire the latest stable Config release with GitHub artifact attestation
-enabled. It atomically installs that executable and continues the same update
-from the installed command before loading the machine document. The current
-release validates that document, normalizes mise to the exact version it was
-tested against, and updates the selected resources. The software scope updates
-tools and packages; the repository scope performs the networked fast-forward of
-clean declared checkouts. The unqualified `config update` selects both scopes.
-Unversioned development builds skip the Config release transition. Release
-acquisition alone disables
-mise's general release-age delay because this explicit operation promises the
-latest release; an exact resolved version, provenance verification, and
-downgrade refusal still gate replacement.
+Mise is one Config resource. When declared, Config inspects the canonical
+standalone binary at `~/.local/bin/mise`, installs the exact release whose
+command vocabulary it tests, and delegates the declared tools, packages,
+repositories, dotfiles, services, and lifecycle hooks to that binary. Package
+names, repository purposes, commands, secret references, and provider
+configuration remain opaque Mise input. Only commands issued for the Mise
+resource receive the managed `mise/` selectors. Native resources and repository
+operations clear those selectors, so storing Mise declarations in the machine
+repository grants no authority over unrelated child processes.
 
-The scoped child configuration is not a separate mise installation. Mise's
+`config update` is the explicit version transition for Config and the resources
+declared by the machine repository. A released Config uses a pinned,
+checksummed Mise adapter in its own cache to acquire the latest stable Config
+release with GitHub artifact attestation enabled. The adapter has no machine
+configuration and is not the canonical machine executable. Config atomically
+installs the acquired executable and continues the same update from it before
+loading the machine document. The current release validates that document and,
+when Mise is declared, reconciles that resource to its exact tested version and
+updates the selected declarations.
+The software scope updates tools and packages; the repository scope performs
+the networked fast-forward of clean declared checkouts. The unqualified
+`config update` selects both scopes. Unversioned development builds skip the
+Config release transition. Release acquisition alone disables Mise's general
+release-age delay because this explicit operation promises the latest release;
+an exact resolved version, provenance verification, and downgrade refusal still
+gate replacement.
+
+The scoped child configuration is not a separate Mise installation. Mise's
 tool store and tracked-configuration ledger remain user-wide. The machine
 repository is the Mac's baseline authority, while a loadable repository-local
-mise document can remain an additional authority for that repository. Config
-therefore delegates tool and package liveness to mise's combined inventory
+Mise document can remain an additional authority for that repository. Config
+therefore delegates tool and package liveness to Mise's combined inventory
 instead of treating the machine document as an exclusive manifest.
 
-Config asks once whether mise can read the machine document at all, because a
-phase probe answers the same exit code for real drift and for a document mise
+For a declared resource, Config asks once whether Mise can read the machine
+document at all, because a phase probe answers the same exit code for real
+drift and for a document Mise
 rejects. Beyond that, Config probes the phases separately rather than taking
-mise's aggregate.
-The aggregate includes `repos`, where mise answers two questions at once:
+Mise's aggregate.
+The aggregate includes `repos`, where Mise answers two questions at once:
 whether a checkout exists, which is a local stat, and whether it matches its
 remote, which is one network round trip per declared repository. Only presence
-is machine setup, so Config asks mise for the declared paths and checks those
+is resource state, so Config asks Mise for the declared paths and checks those
 itself; freshness belongs to the explicit repository update scope. Naming the
-phases means Config must keep pace with mise, so a test pins the list to the
-phases mise offers.
+phases means Config must keep pace with Mise, so a test pins the list to the
+phases Mise offers.
 
 Config is one writer at a time. Every command that writes takes an advisory
 lock on the managed checkout before it starts, and refuses rather than
@@ -73,7 +77,7 @@ it stages, and the next run sweeps it.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
-capabilities. A capability is absent unless schema 2 declares it. The document
+capabilities. A capability is absent unless schema 3 declares it. The document
 opts into a capability and supplies personal values or payloads; Config owns
 where and how those declarations converge.
 
@@ -124,40 +128,44 @@ capture establishes the tracked configuration; later inspections can compare
 saved and live state. A pending bootstrap restores only artifacts already
 present and leaves missing ones uncaptured. It reports an artifact it cannot
 read rather than stopping, because the capabilities beside it may restore
-perfectly well. Completed steps stay complete across retries. Converging mise
-stays the one deliberate stop: it installs the applications every later step
-restores into. A missing snapshot completes as uncaptured; a missing application
-leaves its dependent step pending for a later retry.
+perfectly well. Completed steps stay complete across retries. Every resource is
+attempted and checkpointed independently. A missing snapshot completes as
+uncaptured; a missing application leaves its dependent step pending for a later
+retry. A failed Mise resource does not prevent native resources from
+converging.
 
-Apply first converges mise with:
+Applying the Mise resource installs the tested standalone release when it is
+missing or incompatible, then delegates machine convergence with:
 
 ```text
 mise bootstrap --yes --skip-dirty
 ```
 
-When repository hooks are declared, Config reconciles them first. It prepares
-their clone template before mise runs and supplies that template to mise's
-child Git processes. It sweeps the declared repositories after bootstrap so
-existing and newly created checkouts converge to the same hook bodies. The
-selected mise configuration owns any custom ordering through mise lifecycle
-hooks. The declared native macOS facts converge alongside mise rather than
-behind it. None of them touches anything mise installs, so a mise version
-Config cannot use neither hides them from status nor stops them converging. A
-fact Config cannot read is reported rather than written over, and a fact that
-fails is an advisory, so the facts beside it and the steps after it still run.
-Config then executes the selected Finder Favorites, preference, Chrome PWA,
-and Dock actions. Independent failures are collected so one resource does not
-hide the rest of the plan.
+When repository hooks are declared, Config prepares their clone template before
+Mise runs and supplies that template only to Mise's child Git processes. It
+sweeps the declared repositories after bootstrap so existing and newly created
+checkouts converge to the same hook bodies. The selected Mise configuration
+owns any custom ordering inside that resource through Mise lifecycle hooks.
+The declared native macOS facts are a separate resource. None of them touches
+anything Mise installs, so an unusable Mise version neither hides their status
+nor stops them converging. A fact Config cannot read is reported rather than
+written over, and a fact that fails is an advisory, so the facts beside it and
+the steps after it still run. Config executes every other selected resource
+independently and collects failures so one resource does not hide the rest of
+the plan.
 
 Repository hooks are authoritative one-way state. A declaration names a hook
 and an executable source inside the managed repository. Config installs real
-copies into its template, its own checkout, and the common Git directory of
-each repository mise declares. A small manifest beside each copy records
-Config's last installed digest. That lets a later source change refresh the
-copy while undeclared hook names remain untouched. A repository-owned
-same-name hook, linked hooks directory, or `core.hooksPath` redirect is reported
-and preserved. Config resolves common directories through Git, so linked
-worktrees share the same hook without a path back into the machine repository.
+copies into its template and its own checkout. When Mise is declared, it also
+installs them into the common Git directory of each repository Mise declares.
+Repository hooks receive that inventory from the Mise adapter; they do not
+select or parse Mise configuration themselves. A small manifest beside each
+copy records Config's last installed digest. That lets a later source change
+refresh the copy while undeclared hook names remain untouched. A
+repository-owned same-name hook, linked hooks directory, or `core.hooksPath`
+redirect is reported and preserved. Config resolves common directories through
+Git, so linked worktrees share the same hook without a path back into the
+machine repository.
 
 Finder Favorites, Dock, and Chrome PWAs use three-way reconciliation:
 
@@ -202,8 +210,8 @@ application and defaults domain; Config derives
 current settings: the whole domain, unfiltered, into a repository Config
 commits and pushes. A domain that holds nothing is refused, because `defaults`
 answers with an empty dictionary for a domain that does not exist. A pending
-bootstrap may restore existing backups after mise installs their applications.
-The restore validates
+bootstrap attempts existing backups independently; an application that is not
+yet installed leaves only its own restore pending. The restore validates
 the plist, checks the bundle, quits a running application before import, and
 relaunches it afterward.
 
@@ -213,9 +221,9 @@ Save stages the entire managed tree because the repository itself is the
 snapshot. Before committing, Config verifies the repository root, declared
 branch, exact `origin/<branch>` upstream, and remote identity. It then refuses
 when a resource that owns snapshot content is unreadable or still waiting on a
-bidirectional choice. Machine setup is reported in status but does not gate a
-save: it converges live settings and records nothing in the repository, so a
-package or checkout mise owns cannot make a commit wrong. Config writes the
+bidirectional choice. Authoritative live resources are reported in status but
+do not gate a save: they record nothing in the repository, so a package or
+checkout Mise owns cannot make a commit wrong. Config writes the
 fixed `Update machine snapshot` subject, commits under the repository's Git
 policy, and performs an append-only push. Push failure leaves the local commit
 intact.
@@ -226,13 +234,15 @@ Config state.
 
 ## Pruning
 
-Pruning crosses two ownership domains without merging them. Mise computes
-prunable tool versions and provider-owned packages from its shared inventory.
-Config asks mise where its state lives, reads the tracked and trusted
-configuration ledgers there to name the links that no longer resolve, and
-leaves every deletion to mise. Config discovers package managers from mise
+Pruning crosses two ownership domains without merging them. When declared,
+Mise computes prunable tool versions and provider-owned packages from its
+shared inventory. Config asks Mise where its state lives, reads the tracked and
+trusted configuration ledgers there to name the links that no longer resolve,
+and leaves every deletion to Mise. Config discovers package managers from Mise
 rather than maintaining its own provider list. A provider with no prune
-operation is reported and left alone.
+operation is reported and left alone. If declared Mise is unavailable, its
+cleanup and dependent repository inventory are reported and preserved while
+Config still plans its own state. Undeclared Mise is never probed.
 
 Config directly removes only artifacts with verifiable Config provenance. An
 undeclared repository hook is eligible when its bytes still match the digest
@@ -261,9 +271,11 @@ and launches scoped operations in child processes. `cmd/config` owns argument
 parsing and selects the CLI or terminal interface.
 
 The release contains a single static binary for each supported macOS
-architecture. GitHub Releases is Config's distribution channel. Mise hands the
-selected release to Config for the initial handoff and for explicit updates;
-Config installs that executable as its permanent command. Each release also
+architecture. GitHub Releases is Config's distribution channel. The caller
+supplies a verified binary for the initial handoff; explicit updates acquire a
+verified release through Config's cache-owned release adapter, independently of
+the machine's Mise declaration or canonical Mise command. Config installs the
+executable as its permanent command. Each release also
 ships Config's license and the license material required to redistribute its
 dependencies. A read-only canary on a disposable macOS CI runner exercises the
 native Finder Favorites boundary without changing the runner's state.

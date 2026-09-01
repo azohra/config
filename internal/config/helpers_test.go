@@ -37,6 +37,7 @@ func testMachine() Machine {
 	return Machine{
 		Kind:   MachineKind,
 		Schema: MachineSchema,
+		Mise:   true,
 		Repository: MachineRepository{
 			Branch: "main",
 			URL:    "https://github.com/example/machine.git",
@@ -97,11 +98,13 @@ func testApplier(t *testing.T, paths Paths, machine Machine, runner Runner) (App
 	var chatter bytes.Buffer
 	live := LiveRunner{Dir: paths.Root, Stdout: &chatter, Stderr: &chatter}
 	return Applier{
-		Paths:   paths,
-		Machine: machine,
-		Runner:  runner,
-		Live:    live,
-		Log:     Logger{Out: &chatter},
+		Paths:    paths,
+		Machine:  machine,
+		Runner:   runner,
+		Live:     live,
+		Mise:     runner,
+		MiseLive: live,
+		Log:      Logger{Out: &chatter},
 		Bidir: Bidirectional{
 			Paths: paths, Dock: defaultsDockStore{Runner: runner, Live: live},
 			Baselines: Baselines{Dir: paths.StateDir},

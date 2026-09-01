@@ -217,10 +217,10 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) Re
 
 func (*recordingRunner) Exists(string) bool { return true }
 
-// Save gates on the resources a snapshot records, and PreflightError skips
-// machine setup entirely. Computing it anyway makes every save wait on mise's
-// bootstrap probe for an answer that is then thrown away.
-func TestSnapshotValidationSkipsMachineSetup(t *testing.T) {
+// Save gates on the resources a snapshot records. Computing live platform
+// resources anyway makes every save wait on probes whose answers are then
+// thrown away.
+func TestSnapshotValidationSkipsLivePlatformResources(t *testing.T) {
 	runner := &recordingRunner{}
 	machine := testMachine()
 	machine.FinderFavorites = true
@@ -228,8 +228,10 @@ func TestSnapshotValidationSkipsMachineSetup(t *testing.T) {
 	inspector.FinderFavorites = &fakeFinderFavorites{}
 	report := inspector.InspectSnapshot()
 
-	if _, found := report.Resource(setupID); found {
-		t.Fatalf("the snapshot gate inspected machine setup: %+v", report.Resources)
+	for _, id := range []string{miseID, macOSID} {
+		if _, found := report.Resource(id); found {
+			t.Fatalf("the snapshot gate inspected %s: %+v", id, report.Resources)
+		}
 	}
 	for _, command := range runner.commands {
 		if strings.HasPrefix(command, "mise ") {
@@ -243,8 +245,10 @@ func TestSnapshotValidationSkipsMachineSetup(t *testing.T) {
 		}
 	}
 	// A full inspection still reports everything.
-	if _, found := inspector.Inspect().Resource(setupID); !found {
-		t.Fatal("a full inspection dropped machine setup")
+	for _, id := range []string{miseID, macOSID} {
+		if _, found := inspector.Inspect().Resource(id); !found {
+			t.Fatalf("a full inspection dropped %s", id)
+		}
 	}
 }
 

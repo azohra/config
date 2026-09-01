@@ -42,72 +42,86 @@ func (s UpdateScope) arguments() []string {
 }
 
 type Updater struct {
-	Version           string
-	Mise              string
-	Config            string
-	ReleaseCache      string
-	ReleaseState      string
-	MiseProbe         Runner
-	Installed         Runner
-	Substrate         LiveRunner
-	Machine           LiveRunner
-	Log               Logger
-	CurrentExecutable func() (string, error)
-	ValidateMachine   func() error
-	Reexec            func(string, []string, []string) error
+	Version            string
+	Config             string
+	ReleaseCache       string
+	ReleaseState       string
+	ReleaseMiseProbe   Runner
+	MachineMiseProbe   Runner
+	Installed          Runner
+	ReleaseMise        LiveRunner
+	MachineMise        LiveRunner
+	InstallReleaseMise func() error
+	InstallMachineMise func() error
+	Log                Logger
+	CurrentExecutable  func() (string, error)
+	LoadMachine        func() (Machine, error)
+	Reexec             func(string, []string, []string) error
 }
 
 func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 	command := configCommandPath(paths)
-	substrateEnvironment := []string{"MISE_AUTO_UPDATE=0", "MISE_NO_CONFIG=1"}
+	releaseRoot := configReleaseRoot(paths)
+	releaseMise := releaseMisePath(paths)
+	releaseEnvironment := []string{"MISE_AUTO_UPDATE=0", "MISE_NO_CONFIG=1"}
 	live := newLiveRunner(paths.Home)
-	live.Environment = substrateEnvironment
-	live.Executables = map[string]string{"mise": misePath(paths)}
+	live.Environment = releaseEnvironment
+	live.Unset = append(live.Unset, miseLocalEnvironment...)
+	live.Executables = map[string]string{"mise": releaseMise}
+	releaseInstaller := testedMiseInstallerAt(releaseMise)
+	machineInstaller := testedMiseInstaller(paths)
 	return Updater{
-		Version: version,
-		Mise:    misePath(paths),
-		Config:  command,
-		ReleaseCache: filepath.Join(
-			filepath.Dir(paths.StateDir), "release-mise",
-		),
-		ReleaseState: filepath.Join(
-			filepath.Dir(paths.StateDir), "release-mise-state",
-		),
-		MiseProbe: OSRunner{
+		Version:      version,
+		Config:       command,
+		ReleaseCache: filepath.Join(releaseRoot, "cache"),
+		ReleaseState: filepath.Join(releaseRoot, "state"),
+		ReleaseMiseProbe: OSRunner{
 			Dir:         paths.Home,
-			Environment: substrateEnvironment,
+			Environment: releaseEnvironment,
+			Unset:       miseLocalEnvironment,
+			Executables: map[string]string{"mise": releaseMise},
+		},
+		MachineMiseProbe: OSRunner{
+			Dir:         paths.Home,
+			Environment: releaseEnvironment,
+			Unset:       miseLocalEnvironment,
 			Executables: map[string]string{"mise": misePath(paths)},
 		},
 		Installed: OSRunner{Dir: paths.Home, Executables: map[string]string{
 			"config": command,
 		}},
-		Substrate:         live,
-		Machine:           newMachineLiveRunner(paths),
-		Log:               Logger{Out: out},
-		CurrentExecutable: os.Executable,
-		ValidateMachine: func() error {
-			_, err := LoadMachine(paths)
-			return err
-		},
-		Reexec: syscall.Exec,
+		ReleaseMise:        live,
+		MachineMise:        newMiseLiveRunner(paths),
+		InstallReleaseMise: releaseInstaller.Install,
+		InstallMachineMise: machineInstaller.Install,
+		Log:                Logger{Out: out},
+		CurrentExecutable:  os.Executable,
+		LoadMachine:        func() (Machine, error) { return LoadMachine(paths) },
+		Reexec:             syscall.Exec,
 	}
+}
+
+func configReleaseRoot(paths Paths) string {
+	return filepath.Join(filepath.Dir(paths.StateDir), "release")
+}
+
+func releaseMisePath(paths Paths) string {
+	return filepath.Join(configReleaseRoot(paths), "mise")
 }
 
 func (u Updater) Update(scope UpdateScope) error {
 	if !scope.valid() {
 		return errors.New("invalid update scope")
 	}
-	if err := requireExecutableFile(u.Mise); err != nil {
-		return fmt.Errorf("mise unavailable at %s", u.Mise)
-	}
 	if u.Version == "dev" {
 		// Say it. Otherwise a machine whose canonical command is a local build
 		// looks up to date forever.
 		u.Log.Warn("this is an unversioned development build; skipping the Config release transition")
-		if err := u.ValidateMachine(); err != nil {
+		machine, err := u.LoadMachine()
+		if err != nil {
 			return err
 		}
-		return u.updateMachine(scope)
+		return u.updateMachine(scope, machine)
 	}
 	if !stableConfigVersion(u.Version) {
 		return fmt.Errorf("Config build version %q cannot update itself", u.Version)
@@ -119,18 +133,19 @@ func (u Updater) Update(scope UpdateScope) error {
 		if err := u.requireCanonicalExecutable(); err != nil {
 			return err
 		}
-		if err := u.ValidateMachine(); err != nil {
+		machine, err := u.LoadMachine()
+		if err != nil {
 			return err
 		}
 		if err := os.Unsetenv(updateReexecEnv); err != nil {
 			return fmt.Errorf("clear Config update state: %w", err)
 		}
-		return u.updateMachine(scope)
+		return u.updateMachine(scope, machine)
 	}
 
-	// The current release first restores the mise version it was tested with.
-	// That gives release acquisition a known substrate even when mise drifted.
-	if err := u.updateMise(); err != nil {
+	// Release acquisition owns its private adapter. The machine Mise resource
+	// is not read or changed until the installed Config resumes machine work.
+	if err := u.prepareReleaseMise(); err != nil {
 		return err
 	}
 	u.Log.Section("Config")
@@ -168,8 +183,11 @@ func (u Updater) Update(scope UpdateScope) error {
 	return nil
 }
 
-func (u Updater) updateMachine(scope UpdateScope) error {
-	if err := u.updateMise(); err != nil {
+func (u Updater) updateMachine(scope UpdateScope, machine Machine) error {
+	if !machine.Mise {
+		return nil
+	}
+	if err := u.prepareMachineMise(); err != nil {
 		return err
 	}
 
@@ -195,7 +213,7 @@ func (u Updater) updateMachine(scope UpdateScope) error {
 	var failures []error
 	for _, step := range steps {
 		u.Log.Section(step.name)
-		if err := u.Machine.Command("mise", step.args...); err != nil {
+		if err := u.MachineMise.Command("mise", step.args...); err != nil {
 			u.Log.Error(err.Error())
 			failures = append(failures, fmt.Errorf("%s: %w", step.name, err))
 			continue
@@ -205,17 +223,23 @@ func (u Updater) updateMachine(scope UpdateScope) error {
 	return errors.Join(failures...)
 }
 
-func (u Updater) updateMise() error {
-	u.Log.Section("mise")
-	if err := u.Substrate.Command("mise", "--no-config", "self-update", testedMiseVersion, "--yes", "--no-plugins"); err != nil {
+func (u Updater) prepareReleaseMise() error {
+	u.Log.Section("Config release transport")
+	if err := ensureTestedMise(u.ReleaseMiseProbe, u.InstallReleaseMise); err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("Config release transport: %w", err)
+	}
+	u.Log.OK("verified release adapter ready")
+	return nil
+}
+
+func (u Updater) prepareMachineMise() error {
+	u.Log.Section(miseName)
+	if err := ensureTestedMise(u.MachineMiseProbe, u.InstallMachineMise); err != nil {
 		u.Log.Error(err.Error())
 		return fmt.Errorf("mise: %w", err)
 	}
-	if err := requireTestedMise(u.MiseProbe); err != nil {
-		u.Log.Error(err.Error())
-		return fmt.Errorf("mise: %w", err)
-	}
-	u.Log.OK("standalone mise set to " + testedMiseVersion)
+	u.Log.OK("standalone mise " + testedMiseVersion + " ready")
 	return nil
 }
 
@@ -307,7 +331,7 @@ func (u Updater) releaseOutput(name string, args ...string) (string, error) {
 }
 
 func (u Updater) releaseRunner() LiveRunner {
-	runner := u.Substrate
+	runner := u.ReleaseMise
 	runner.Environment = append(runner.Environment,
 		// Provenance is the whole point of this runner, so every knob that
 		// relaxes it is pinned here rather than inherited from the caller.

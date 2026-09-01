@@ -17,12 +17,13 @@ type Inspector struct {
 	Paths           Paths
 	Machine         Machine
 	Runner          Runner
+	Mise            Runner
 	FinderFavorites finderFavoritesStore
 }
 
 func NewInspector(paths Paths, machine Machine, runner Runner) Inspector {
 	return Inspector{
-		Paths: paths, Machine: machine, Runner: runner,
+		Paths: paths, Machine: machine, Runner: runner, Mise: NewMiseRunner(paths),
 		FinderFavorites: newFinderFavoritesStore(),
 	}
 }
@@ -51,18 +52,24 @@ func authoritativeResource(id, name string, checks []Check) Resource {
 	return resource
 }
 
-func (i Inspector) substrateChecks() []Check {
-	if i.Runner.Exists("git") {
-		return []Check{yes("git")}
+func (i Inspector) miseRunner() Runner {
+	if i.Mise != nil {
+		return i.Mise
 	}
-	return []Check{no("git unavailable", "install Git")}
+	return i.Runner
 }
 
 func (i Inspector) miseChecks() []Check {
-	if !i.Runner.Exists("mise") {
+	runner := i.miseRunner()
+	return i.miseChecksWithInventory(newMiseRepositoryInventory(i.Paths, runner))
+}
+
+func (i Inspector) miseChecksWithInventory(inventory *miseRepositoryInventory) []Check {
+	runner := i.miseRunner()
+	if !runner.Exists("mise") {
 		return []Check{no("mise unavailable at ~/.local/bin/mise", "install the standalone mise binary")}
 	}
-	currentVersion, err := currentMiseVersion(i.Runner)
+	currentVersion, err := currentMiseVersion(runner)
 	if err != nil {
 		return []Check{no("mise version unreadable", "replace the standalone mise binary")}
 	}
@@ -72,7 +79,7 @@ func (i Inspector) miseChecks() []Check {
 	// Every phase probe returns exit 1 for real drift and for a document mise
 	// cannot read, so a broken machine document reported as thirteen drifted
 	// phases with the true cause buried below them. Ask once, first.
-	if listing := run(i.Runner, "mise", "config", "ls", "-J"); listing.Err != nil {
+	if listing := run(runner, "mise", "config", "ls", "-J"); listing.Err != nil {
 		return []Check{
 			yes("mise " + currentVersion),
 			no("machine document unreadable", listing.Failure().Error()),
@@ -85,7 +92,7 @@ func (i Inspector) miseChecks() []Check {
 	for _, probe := range []func(){
 		func() { bootstrap = i.bootstrapChecks() },
 		func() { tools = []Check{i.toolCheck()} },
-		func() { repositories = i.repositoryChecks() },
+		func() { repositories = i.repositoryChecks(inventory.Repositories()) },
 	} {
 		wg.Add(1)
 		go func() {
@@ -116,7 +123,7 @@ func (i Inspector) bootstrapChecks() []Check {
 		go func() {
 			defer wg.Done()
 			args := append(append([]string{"bootstrap"}, phase...), "status", "--missing")
-			outcomes[index] = outcome{strings.Join(phase, " "), run(i.Runner, "mise", args...)}
+			outcomes[index] = outcome{strings.Join(phase, " "), run(i.miseRunner(), "mise", args...)}
 		}()
 	}
 	wg.Wait()
@@ -150,7 +157,7 @@ func (i Inspector) bootstrapChecks() []Check {
 // own. `mise ls --missing` exits zero either way, so a complete machine is an
 // empty listing rather than a successful command.
 func (i Inspector) toolCheck() Check {
-	listing := run(i.Runner, "mise", "ls", "--missing", "-J")
+	listing := run(i.miseRunner(), "mise", "ls", "--missing", "-J")
 	if listing.Err != nil {
 		return no("declared tools unreadable", listing.Failure().Error())
 	}
@@ -170,8 +177,7 @@ func (i Inspector) toolCheck() Check {
 // belongs at this path. Both halves read locally. How far a checkout has
 // drifted from its remote is a different question owned by the repository
 // update scope, and one that costs a network round trip for every repository.
-func (i Inspector) repositoryChecks() []Check {
-	declared, err := miseRepositories(i.Paths, i.Runner)
+func (i Inspector) repositoryChecks(declared []miseRepository, err error) []Check {
 	if err != nil {
 		return []Check{no("declared repositories unreadable", err.Error())}
 	}
@@ -224,14 +230,13 @@ func (i Inspector) repositoryChecks() []Check {
 	return []Check{yes(FormatCount(len(declared), "repository checked out", "repositories checked out"))}
 }
 
-func (i Inspector) setup() Resource {
-	checks := i.substrateChecks()
-	checks = append(checks, i.miseChecks()...)
-	// The declared macOS facts read defaults, plutil and hidutil. None of them
-	// depends on anything mise installs, so they are their own group rather
-	// than rows past mise's version gate that a wrong mise hides entirely.
-	checks = append(checks, setupChecks(i.Paths, i.Runner, macOSFacts(i.Machine))...)
-	return authoritativeResource(setupID, setupName, checks)
+func (i Inspector) mise(inventory *miseRepositoryInventory) Resource {
+	return authoritativeResource(miseID, miseName, i.miseChecksWithInventory(inventory))
+}
+
+func (i Inspector) macOS() Resource {
+	return authoritativeResource(macOSID, macOSName,
+		setupChecks(i.Paths, i.Runner, macOSFacts(i.Machine)))
 }
 
 // snapshotStatus is the one derivation of repository snapshot facts; the
@@ -307,23 +312,35 @@ func snapshotPolicyError(paths Paths, machine Machine, runner Runner, status Sna
 func (i Inspector) Inspect() Report { return i.inspect(true) }
 
 // InspectSnapshot reports only the resources whose state the repository
-// snapshot records. Save's gate discards machine setup, and machine setup is
-// the probe that reaches the network, so a save should not wait for it.
+// snapshot records. Save's gate discards authoritative live resources, so a
+// save does not wait for Mise or native macOS probes it cannot use.
 func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
-func (i Inspector) inspect(machineSetup bool) Report {
+func (i Inspector) inspect(allResources bool) Report {
 	bidir := newBidirectional(i.Paths, i.Runner)
-	var setup, chromePWAs, dock, finderFavorites, repositoryHooks Resource
+	var mise, macOS, chromePWAs, dock, finderFavorites, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
 		func() { snapshot = snapshotStatus(i.Paths, i.Machine, i.Runner) },
 	}
-	if machineSetup {
-		tasks = append(tasks, func() { setup = i.setup() })
+	var inventory *miseRepositoryInventory
+	if allResources {
+		if i.Machine.Mise {
+			inventory = newMiseRepositoryInventory(i.Paths, i.miseRunner())
+			tasks = append(tasks, func() { mise = i.mise(inventory) })
+		}
+		if len(macOSFacts(i.Machine)) > 0 {
+			tasks = append(tasks, func() { macOS = i.macOS() })
+		}
 		if len(i.Machine.RepositoryHooks) > 0 {
 			tasks = append(tasks, func() {
-				repositoryHooks = inspectRepositoryHooks(i.Paths, i.Machine, i.Runner)
+				var repositories []miseRepository
+				var err error
+				if inventory != nil {
+					repositories, err = inventory.Repositories()
+				}
+				repositoryHooks = inspectRepositoryHooks(i.Paths, i.Machine, i.Runner, repositories, err)
 			})
 		}
 	}
@@ -354,9 +371,17 @@ func (i Inspector) inspect(machineSetup bool) Report {
 		}(task)
 	}
 	wg.Wait()
-	resources := slices.Clone(preferences)
-	if machineSetup {
-		resources = append([]Resource{setup}, resources...)
+	resources := make([]Resource, 0, len(preferences)+6)
+	if allResources {
+		if i.Machine.Mise {
+			resources = append(resources, mise)
+		}
+		if len(macOSFacts(i.Machine)) > 0 {
+			resources = append(resources, macOS)
+		}
+	}
+	resources = append(resources, preferences...)
+	if allResources {
 		if len(i.Machine.RepositoryHooks) > 0 {
 			resources = append(resources, repositoryHooks)
 		}

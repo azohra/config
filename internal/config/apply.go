@@ -64,6 +64,9 @@ type Applier struct {
 	Machine         Machine
 	Runner          Runner
 	Live            LiveRunner
+	Mise            Runner
+	MiseLive        LiveRunner
+	InstallMise     func() error
 	FinderFavorites finderFavoritesStore
 	Log             Logger
 	Bidir           Bidirectional
@@ -81,11 +84,15 @@ const (
 
 func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 	runner := NewMachineRunner(paths)
+	installer := testedMiseInstaller(paths)
 	return Applier{
 		Paths:           paths,
 		Machine:         machine,
 		Runner:          runner,
 		Live:            newMachineLiveRunner(paths),
+		Mise:            NewMiseRunner(paths),
+		MiseLive:        newMiseLiveRunner(paths),
+		InstallMise:     installer.Install,
 		FinderFavorites: newFinderFavoritesStore(),
 		Log:             Logger{Out: out},
 		Bidir:           newBidirectional(paths, runner),
@@ -112,7 +119,15 @@ func (e Applier) Apply(selections []Selection) error {
 	if len(e.Machine.RepositoryHooks) > 0 {
 		steps = append(steps, step{repositoryHooksID, repositoryHooksName, e.reconcileRepositoryHooks})
 	}
-	steps = append(steps, step{setupID, setupName, func(Action) error { return e.applyMise() }})
+	if len(macOSFacts(e.Machine)) > 0 {
+		steps = append(steps, step{macOSID, macOSName, func(Action) error {
+			e.convergeMacOS()
+			return nil
+		}})
+	}
+	if e.Machine.Mise {
+		steps = append(steps, step{miseID, miseName, func(Action) error { return e.applyMise() }})
+	}
 	if e.Machine.FinderFavorites {
 		steps = append(steps, step{finderFavoritesID, finderFavoritesName, e.reconcileFinderFavorites})
 	}
@@ -259,17 +274,8 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 	return nil
 }
 
-// Mise's declared packages establish the commands every later phase consumes.
 func (e Applier) applyMise() error {
-	// The declared macOS facts converge whether or not mise is usable: none of
-	// them touches anything mise installs, and mise's gate is the one stop a
-	// pending bootstrap honours. A fact that fails is an advisory, so the
-	// facts beside it and the steps after it still run.
-	defer e.convergeMacOS()
-	if !e.Runner.Exists("mise") {
-		return fmt.Errorf("mise unavailable at %s", misePath(e.Paths))
-	}
-	if err := requireTestedMise(e.Runner); err != nil {
+	if err := ensureTestedMise(e.Mise, e.InstallMise); err != nil {
 		return err
 	}
 	if len(e.Machine.RepositoryHooks) > 0 {
@@ -279,7 +285,7 @@ func (e Applier) applyMise() error {
 	}
 	// Dirty declared repositories remain visible in status. Skipping them here
 	// lets independent machine resources converge without touching local work.
-	live := e.Live
+	live := e.MiseLive
 	if len(e.Machine.RepositoryHooks) > 0 {
 		live.Environment = append(live.Environment, repositoryHookTemplateEnvironment(e.Paths)...)
 	}
@@ -382,8 +388,8 @@ func (e Applier) applyDock() error {
 }
 
 // convergeMacOS applies the declared native settings and reports what it could
-// not do without failing the step. Machine setup records nothing in the
-// repository, so one unreadable probe must not stop a restore.
+// not do without failing the resource. macOS records nothing in the repository,
+// so one unreadable probe must not stop a restore.
 func (e Applier) convergeMacOS() {
 	changed, err := e.converge(macOSFacts(e.Machine))
 	if changed > 0 {

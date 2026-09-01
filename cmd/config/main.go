@@ -34,10 +34,12 @@ Bootstrap clones an authenticated Git repository into Config's managed storage,
 installs the permanent Config command, and resumes restore until every declared
 step has completed. Path prints the managed repository's canonical location.
 
-Update verifies its canonical mise substrate and installs the latest verified
-Config release before updating the selected resources. With no selection it
-updates declared tools, packages, and clean repositories. Software omits the
-networked repository phase; repositories runs only that phase.
+Update acquires the latest verified Config release through a separate
+cache-owned adapter before reading the machine contract. If Mise is declared,
+it then installs that resource when necessary and updates its selected
+declarations. With no selection it updates declared tools, packages, and clean
+repositories. Software omits the networked repository phase; repositories runs
+only that phase.
 
 Prune previews stale mise inventory and Config-owned local state. Without a
 terminal it is preview-only; --yes applies the exact plan after checking it

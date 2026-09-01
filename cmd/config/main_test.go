@@ -41,7 +41,8 @@ func fixtureHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	document := `kind = "azohra.config.machine"
-schema = 2
+schema = 3
+dock = true
 
 [repository]
 branch = "main"
@@ -89,22 +90,17 @@ func TestStatusReportsTheSameVerdictWithoutATerminal(t *testing.T) {
 	explicit, explicitCode := runConfig(t, binary, home, "--status")
 	implicit, implicitCode := runConfig(t, binary, home)
 
-	if explicitCode != 1 {
-		t.Fatalf("config --status on a failing machine exited %d:\n%s", explicitCode, explicit)
+	if explicitCode != 0 {
+		t.Fatalf("config --status on an inspectable machine exited %d:\n%s", explicitCode, explicit)
 	}
 	if implicitCode != explicitCode {
 		t.Fatalf("config without a terminal exited %d, but --status exited %d:\n%s", implicitCode, explicitCode, implicit)
 	}
-	// Both write the same failure line to stderr; the reports either side of
-	// it are what has to match.
-	withoutVerdict := func(output string) string {
-		return strings.ReplaceAll(output, "error: configuration needs attention\n", "")
-	}
-	if withoutVerdict(explicit) != withoutVerdict(implicit) {
+	if explicit != implicit {
 		t.Fatalf("the two status surfaces disagree:\n--status:\n%s\nbare:\n%s", explicit, implicit)
 	}
-	if !strings.Contains(implicit, "error: configuration needs attention") {
-		t.Fatalf("config without a terminal did not say why it failed:\n%s", implicit)
+	if strings.Contains(implicit, "error:") {
+		t.Fatalf("config without a terminal invented a failure:\n%s", implicit)
 	}
 }
 
@@ -189,6 +185,13 @@ func TestPathAndInstallDoNotRequireAMachineRepository(t *testing.T) {
 
 func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
 	binary, home := buildConfigVersion(t, "v0.4.0"), t.TempDir()
+	writeMainTestReleaseMise(t, home, `#!/bin/sh
+if [ "$1" = --version ]; then
+  printf '2026.8.16\n'
+  exit 0
+fi
+exit 1
+`)
 	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -199,7 +202,7 @@ func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
 
 	for _, args := range [][]string{{"update"}, {"update", "software"}, {"update", "repositories"}} {
 		output, code := runConfig(t, binary, home, args...)
-		if code != 1 || !strings.Contains(output, "mise unavailable") || strings.Contains(output, "config.toml") {
+		if code != 1 || !strings.Contains(output, "Config:") || strings.Contains(output, "config.toml") {
 			t.Fatalf("config %s read the machine document before updating itself (exit %d):\n%s", strings.Join(args, " "), code, output)
 		}
 	}
@@ -255,8 +258,15 @@ func TestPruneRequiresAnExplicitApplyChoice(t *testing.T) {
 	}
 }
 
-func TestBootstrapInstallsTheCommandBeforeARestoreFailure(t *testing.T) {
+func TestBootstrapInstallsTheCommandBeforeAResourceFailure(t *testing.T) {
 	binary, home := buildConfig(t), t.TempDir()
+	writeMainTestMise(t, home, `#!/bin/sh
+if [ "$1" = --version ]; then
+  printf '2026.8.16\n'
+  exit 0
+fi
+exit 1
+`)
 	source := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
@@ -269,7 +279,8 @@ func TestBootstrapInstallsTheCommandBeforeARestoreFailure(t *testing.T) {
 	git("config", "user.name", "Config Test")
 	git("config", "user.email", "config@example.invalid")
 	document := `kind = "azohra.config.machine"
-schema = 2
+schema = 3
+mise = true
 
 [repository]
 branch = "main"
@@ -282,12 +293,34 @@ url = "` + source + `"
 	git("commit", "--quiet", "-m", "Add machine contract")
 
 	output, code := runConfig(t, binary, home, "bootstrap", source)
-	if code != 1 || !strings.Contains(output, "mise unavailable") {
-		t.Fatalf("bootstrap without mise = %q (exit %d)", output, code)
+	if code != 1 || !strings.Contains(output, "Mise") {
+		t.Fatalf("bootstrap with a failed resource = %q (exit %d)", output, code)
 	}
 	installed := filepath.Join(home, ".local", "bin", "config")
 	if info, err := os.Stat(installed); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("bootstrap did not leave a permanent command: %v, %v", info, err)
+	}
+}
+
+func writeMainTestMise(t *testing.T, home, script string) {
+	t.Helper()
+	path := filepath.Join(home, ".local", "bin", "mise")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeMainTestReleaseMise(t *testing.T, home, script string) {
+	t.Helper()
+	path := filepath.Join(home, ".cache", "config", "release", "mise")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -329,14 +362,14 @@ func TestApplyRefusesAPlanTheCurrentStateDoesNotAllow(t *testing.T) {
 	}
 
 	// A real resource, and an action its current state does not allow.
-	stale, code := runConfig(t, binary, home, "--apply", `[{"id":"setup","action":"capture"}]`)
-	if code != 1 || !strings.Contains(stale, "no longer allows capture") {
+	stale, code := runConfig(t, binary, home, "--apply", `[{"id":"dock","action":"apply"}]`)
+	if code != 1 || !strings.Contains(stale, "no longer allows apply") {
 		t.Fatalf("config --apply accepted a stale plan (exit %d):\n%s", code, stale)
 	}
 
 	// The same resource twice, which a forged plan can carry and the terminal
 	// interface never produces.
-	repeated, code := runConfig(t, binary, home, "--apply", `[{"id":"setup","action":"apply"},{"id":"setup","action":"apply"}]`)
+	repeated, code := runConfig(t, binary, home, "--apply", `[{"id":"dock","action":"capture"},{"id":"dock","action":"capture"}]`)
 	if code != 1 || !strings.Contains(repeated, "appears more than once") {
 		t.Fatalf("config --apply accepted a repeated selection (exit %d):\n%s", code, repeated)
 	}

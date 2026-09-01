@@ -27,7 +27,7 @@ func NewSnapshotter(paths Paths, machine Machine, out io.Writer) Snapshotter {
 		Paths:   paths,
 		Machine: machine,
 		Runner:  runner,
-		Live:    newLiveRunner(paths.Root),
+		Live:    newMachineLiveRunner(paths),
 		Log:     Logger{Out: out},
 		Validate: func() error {
 			return inspector.InspectSnapshot().PreflightError()

@@ -175,17 +175,30 @@ func newLiveRunner(dir string) LiveRunner {
 
 func NewMachineRunner(paths Paths) OSRunner {
 	return OSRunner{
-		Dir:         paths.Root,
-		Environment: miseEnvironment(paths),
-		Unset:       gitLocalEnvironment,
-		Executables: map[string]string{"mise": misePath(paths)},
+		Dir:   paths.Root,
+		Unset: append(append([]string{}, gitLocalEnvironment...), miseLocalEnvironment...),
 	}
 }
 
 func newMachineLiveRunner(paths Paths) LiveRunner {
 	runner := newLiveRunner(paths.Root)
+	runner.Unset = append(runner.Unset, miseLocalEnvironment...)
+	return runner
+}
+
+// NewMiseRunner confines the managed machine document to commands issued on
+// behalf of the Mise resource. Native resources and repository operations use
+// NewMachineRunner and inherit none of Mise's configuration selectors.
+func NewMiseRunner(paths Paths) OSRunner {
+	runner := NewMachineRunner(paths)
 	runner.Environment = miseEnvironment(paths)
-	runner.Unset = gitLocalEnvironment
+	runner.Executables = map[string]string{"mise": misePath(paths)}
+	return runner
+}
+
+func newMiseLiveRunner(paths Paths) LiveRunner {
+	runner := newMachineLiveRunner(paths)
+	runner.Environment = miseEnvironment(paths)
 	runner.Executables = map[string]string{"mise": misePath(paths)}
 	return runner
 }

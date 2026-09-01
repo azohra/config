@@ -52,6 +52,27 @@ func testRestoreProgress(t *testing.T, paths Paths, machine Machine) *restorePro
 	return progress
 }
 
+func completedPlatformRestoreSteps(machine Machine) []string {
+	var steps []string
+	if len(macOSFacts(machine)) > 0 {
+		steps = append(steps, restoreMacOSStep)
+	}
+	if machine.Mise {
+		steps = append(steps, restoreMiseStep)
+	}
+	return steps
+}
+
+func TestFreshRestoreOmitsUndeclaredMise(t *testing.T) {
+	machine := testMachine()
+	machine.Mise = false
+	for _, step := range freshRestoreSteps(Applier{Machine: machine}) {
+		if step.id == restoreMiseStep {
+			t.Fatal("an undeclared Mise resource entered the restore plan")
+		}
+	}
+}
+
 // A fresh Mac has no earlier state to fall back on, so one unreadable backup
 // must not cost the capabilities beside it. The Dock here is independent of
 // the Chrome PWA backup and would restore perfectly well without it.
@@ -74,9 +95,9 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	}
 
 	commands := fakeTools(t, fakeTool{name: "mise"}, fakeTool{name: "defaults"}, fakeTool{name: "killall"})
-	// Setup records an already-current baseline, then restore reads, verifies,
-	// and records the restored agreement explicitly.
-	runner := &sequencedDockRunner{listings: []string{dockDocument(), dockDocument(), dockDocument(app)}}
+	// Platform resources record their own checkpoints, then restore reads,
+	// verifies, and records the restored agreement explicitly.
+	runner := &sequencedDockRunner{listings: []string{dockDocument(), dockDocument(app), dockDocument(app)}}
 	applier, chatter := testApplier(t, paths, machine, runner)
 	progress := testRestoreProgress(t, paths, machine)
 
@@ -91,7 +112,8 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	if !strings.Contains(issued, "defaults write "+dockDomain+" "+dockKey) {
 		t.Fatalf("the Dock never restored past the unreadable PWA backup:\ncommands:[%s]\nlog:%s", issued, chatter.String())
 	}
-	if !progress.done(restoreSetupStep) || !progress.done("resource/"+dockID) || progress.done("resource/"+chromePWAsID) {
+	if !progress.done(restoreMacOSStep) || !progress.done(restoreMiseStep) ||
+		!progress.done("resource/"+dockID) || progress.done("resource/"+chromePWAsID) {
 		t.Fatalf("restore progress after partial failure = %v", progress.record.Completed)
 	}
 	beforeRetry := strings.Join(commands(), "\n")
@@ -104,13 +126,11 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 		t.Fatal("retry hid the unreadable PWA backup")
 	}
 	if afterRetry := strings.Join(commands(), "\n"); afterRetry != beforeRetry {
-		t.Fatalf("retry repeated completed setup or Dock work:\nbefore:\n%s\nafter:\n%s", beforeRetry, afterRetry)
+		t.Fatalf("retry repeated completed platform or Dock work:\nbefore:\n%s\nafter:\n%s", beforeRetry, afterRetry)
 	}
 }
 
-// Mise installs the applications every later step restores into, so a failed
-// setup is the one place the sequence should stop.
-func TestPendingRestoreStopsWhenSetupFails(t *testing.T) {
+func TestPendingRestoreContinuesPastMiseFailure(t *testing.T) {
 	paths := testPaths(t)
 	machine := testMachine()
 	machine.Preferences = nil
@@ -119,14 +139,16 @@ func TestPendingRestoreStopsWhenSetupFails(t *testing.T) {
 	progress := testRestoreProgress(t, paths, machine)
 
 	if err := restorePending(applier, progress); err == nil {
-		t.Fatal("a failed setup was reported as a successful restore")
+		t.Fatal("a failed Mise resource was reported as a successful restore")
 	}
-	if progress.done(restoreSetupStep) {
-		t.Fatal("a failed setup was recorded as complete")
+	if progress.done(restoreMiseStep) {
+		t.Fatal("a failed Mise resource was recorded as complete")
 	}
-	issued := strings.Join(commands(), "\n")
-	if strings.Contains(issued, dockDomain) || strings.Contains(issued, "killall") {
-		t.Fatalf("the restore continued into the Dock after setup failed:\n%s", issued)
+	if !progress.done(restoreMacOSStep) || !progress.done("resource/"+dockID) {
+		t.Fatalf("Mise blocked independent resources: %v", progress.record.Completed)
+	}
+	if issued := strings.Join(commands(), "\n"); !strings.Contains(issued, "mise bootstrap --yes --skip-dirty") {
+		t.Fatalf("the Mise failure was not exercised:\n%s", issued)
 	}
 }
 
@@ -143,7 +165,7 @@ func TestPendingRestoreDoesNotCompleteDockWhenRestartFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	progress := testRestoreProgress(t, paths, machine)
-	progress.record.Completed = []string{restoreSetupStep}
+	progress.record.Completed = completedPlatformRestoreSteps(machine)
 	if err := progress.save(); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +201,7 @@ func TestPendingRestoreRetriesADockWhoseAppWasInitiallyUnavailable(t *testing.T)
 		t.Fatal(err)
 	}
 	progress := testRestoreProgress(t, paths, machine)
-	progress.record.Completed = []string{restoreSetupStep}
+	progress.record.Completed = completedPlatformRestoreSteps(machine)
 	if err := progress.save(); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +254,7 @@ func TestPendingRestoreRestoresFinderFavoritesAndEstablishesABaseline(t *testing
 		snapshotFinderFavorite(paths, finderFavorite{Name: "Second", Path: second}),
 	})
 	progress := testRestoreProgress(t, paths, machine)
-	progress.record.Completed = []string{restoreSetupStep}
+	progress.record.Completed = completedPlatformRestoreSteps(machine)
 	if err := progress.save(); err != nil {
 		t.Fatal(err)
 	}

@@ -97,6 +97,10 @@ func newRepositoryHooksFixture(t *testing.T) repositoryHooksFixture {
 	}
 }
 
+func (f repositoryHooksFixture) inventory() []miseRepository {
+	return []miseRepository{{Path: f.repo, URL: f.runner.repositories[f.repo]}}
+}
+
 func TestRepositoryHookDeclarationRequiresARegularExecutableSource(t *testing.T) {
 	fixture := newRepositoryHooksFixture(t)
 	if _, err := repositoryHookPayloads(fixture.paths, fixture.machine.RepositoryHooks); err != nil {
@@ -138,11 +142,11 @@ func TestRepositoryHooksReconcileTemplateAndDeclaredRepositories(t *testing.T) {
 	}
 	managedRootHook := fixture.paths.InRoot(".git", "hooks", "post-checkout")
 
-	resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+	resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil)
 	if resource.State != Drift || !resource.Allows(Apply) {
 		t.Fatalf("unreconciled hooks = %+v", resource)
 	}
-	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner, Log: Logger{Out: io.Discard}}
 	changed, err := applier.applyRepositoryHookTargets(true)
 	if err != nil {
 		t.Fatal(err)
@@ -171,14 +175,14 @@ func TestRepositoryHooksReconcileTemplateAndDeclaredRepositories(t *testing.T) {
 			t.Errorf("%s manifest = %+v, %v", hook, manifest, err)
 		}
 	}
-	if current := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); current.State != Current {
+	if current := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil); current.State != Current {
 		t.Fatalf("reconciled hooks = %+v", current)
 	}
 }
 
 func TestRepositoryHooksRefreshOnlyCopiesConfigStillOwns(t *testing.T) {
 	fixture := newRepositoryHooksFixture(t)
-	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner, Log: Logger{Out: io.Discard}}
 	if _, err := applier.applyRepositoryHookTargets(true); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +190,7 @@ func TestRepositoryHooksRefreshOnlyCopiesConfigStillOwns(t *testing.T) {
 	if err := atomicWrite(fixture.source, updated, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); resource.State != Drift || !resource.Allows(Apply) {
+	if resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil); resource.State != Drift || !resource.Allows(Apply) {
 		t.Fatalf("changed declaration = %+v", resource)
 	}
 	if _, err := applier.applyRepositoryHookTargets(true); err != nil {
@@ -201,7 +205,7 @@ func TestRepositoryHooksRefreshOnlyCopiesConfigStillOwns(t *testing.T) {
 	if err := atomicWrite(repoHook, foreign, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+	resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil)
 	if resource.State != Drift || resource.Allows(Apply) || resource.Failed() == 0 {
 		t.Fatalf("foreign hook = %+v", resource)
 	}
@@ -227,12 +231,12 @@ func TestRepositoryHooksPreserveRepositoryOwnedHookConfiguration(t *testing.T) {
 		fixture.runner.hookDirs = map[string]string{
 			fixture.repo: filepath.Join(fixture.repo, "repository-hooks"),
 		}
-		resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+		resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil)
 		if resource.State != Drift || resource.Allows(Apply) || resource.Failed() == 0 ||
 			!strings.Contains(strings.Join(resource.Details, "\n"), "core.hooksPath") {
 			t.Fatalf("redirected hooks = %+v", resource)
 		}
-		applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+		applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner, Log: Logger{Out: io.Discard}}
 		if _, err := applier.applyRepositoryHookTargets(true); err == nil || !strings.Contains(err.Error(), "core.hooksPath") {
 			t.Fatalf("redirected hook apply error = %v", err)
 		}
@@ -251,7 +255,7 @@ func TestRepositoryHooksPreserveRepositoryOwnedHookConfiguration(t *testing.T) {
 		if err := os.Symlink(external, hooksDir); err != nil {
 			t.Fatal(err)
 		}
-		resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner)
+		resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil)
 		if resource.State != Drift || resource.Allows(Apply) || resource.Failed() == 0 ||
 			!strings.Contains(strings.Join(resource.Details, "\n"), "directory is a repository-owned symlink") {
 			t.Fatalf("linked hooks directory = %+v", resource)
@@ -276,7 +280,7 @@ func TestRepositoryHookTemplateEnvironmentIsProcessScoped(t *testing.T) {
 
 func TestGitCopiesThePreparedHookAndOwnershipManifest(t *testing.T) {
 	fixture := newRepositoryHooksFixture(t)
-	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner, Log: Logger{Out: io.Discard}}
 	if _, err := applier.applyRepositoryHookTargets(false); err != nil {
 		t.Fatal(err)
 	}
@@ -307,8 +311,8 @@ printf '%s\n%s\n%s\n%s\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_V
 		t.Fatal(err)
 	}
 	applier := Applier{
-		Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner,
-		Live: LiveRunner{Stdout: io.Discard, Stderr: io.Discard}, Log: Logger{Out: io.Discard},
+		Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner,
+		MiseLive: LiveRunner{Stdout: io.Discard, Stderr: io.Discard}, Log: Logger{Out: io.Discard},
 	}
 	if err := applier.applyMise(); err != nil {
 		t.Fatal(err)
@@ -345,7 +349,7 @@ func TestRepositoryHooksClaimOwnershipBeforeInstalling(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(hooks, 0o755) })
 
-	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner, Log: Logger{Out: io.Discard}}
 	_, err := applier.applyRepositoryHookTargets(true)
 	if err == nil {
 		t.Fatal("an unwritable hooks directory did not stop the apply")
@@ -368,7 +372,7 @@ func TestRepositoryHookMarkerDoesNotGrantOwnership(t *testing.T) {
 	if err := os.WriteFile(claimant, body, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Log: Logger{Out: io.Discard}}
+	applier := Applier{Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner, Log: Logger{Out: io.Discard}}
 	if _, err := applier.applyRepositoryHookTargets(true); err == nil ||
 		!strings.Contains(err.Error(), "repository-owned hook") {
 		t.Fatalf("a self-declared hook was adopted: %v", err)
@@ -403,7 +407,7 @@ func TestApplyRoutesTheRepositoryHooksSelection(t *testing.T) {
 	if err != nil || manifest.Hooks["post-checkout"] != contentDigest(source) {
 		t.Fatalf("ownership was not recorded: %+v %v", manifest, err)
 	}
-	if resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner); resource.State != Current {
+	if resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil); resource.State != Current {
 		t.Fatalf("hooks after apply = %+v", resource)
 	}
 }

@@ -8,7 +8,7 @@ import (
 
 func TestValidateSelections(t *testing.T) {
 	report := Report{Resources: []Resource{
-		{ID: "setup", Name: "Machine setup", State: Drift, Actions: []Action{Apply}},
+		{ID: "mise", Name: "Mise", State: Drift, Actions: []Action{Apply}},
 		{ID: "dock", Name: "Dock", State: LiveChanged, Bidirectional: true, Actions: []Action{Capture, Apply}},
 	}}
 	tests := []struct {
@@ -16,10 +16,10 @@ func TestValidateSelections(t *testing.T) {
 		selections []Selection
 		wantError  bool
 	}{
-		{"valid", []Selection{{ID: "setup", Action: Apply}, {ID: "dock", Action: Capture}}, false},
-		{"duplicate", []Selection{{ID: "setup", Action: Apply}, {ID: "setup", Action: Apply}}, true},
+		{"valid", []Selection{{ID: "mise", Action: Apply}, {ID: "dock", Action: Capture}}, false},
+		{"duplicate", []Selection{{ID: "mise", Action: Apply}, {ID: "mise", Action: Apply}}, true},
 		{"unknown", []Selection{{ID: "missing", Action: Apply}}, true},
-		{"wrong direction", []Selection{{ID: "setup", Action: Capture}}, true},
+		{"wrong direction", []Selection{{ID: "mise", Action: Capture}}, true},
 		{"read only", []Selection{{ID: "snapshot", Action: Apply}}, true},
 	}
 	for _, tt := range tests {
@@ -78,7 +78,7 @@ func TestDecodeSelectionsRejectsMalformedPlans(t *testing.T) {
 // The plan crosses a process boundary as one argv element, so what the parent
 // encodes must be exactly what the child acts on.
 func TestSelectionsSurviveTheProcessBoundary(t *testing.T) {
-	want := []Selection{{ID: "setup", Action: Apply}, {ID: "chrome-pwas", Action: Capture}}
+	want := []Selection{{ID: "mise", Action: Apply}, {ID: "chrome-pwas", Action: Capture}}
 	encoded, err := EncodeSelections(want)
 	if err != nil {
 		t.Fatal(err)
@@ -120,25 +120,25 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 	}
 }
 
-// A snapshot records Config-owned state. Machine setup converges live
-// settings and writes nothing into the repository, so mise needing attention
+// A snapshot records Config-owned state. Mise converges live machine state
+// and writes nothing into the repository, so Mise needing attention
 // — a checkout behind its remote, a package not installed — must not stop a
 // backup of the Dock, the PWAs, and the saved preferences.
-func TestPreflightErrorDoesNotLetMachineSetupBlockASnapshot(t *testing.T) {
+func TestPreflightErrorDoesNotLetMiseBlockASnapshot(t *testing.T) {
 	report := Report{Resources: []Resource{
-		authoritativeResource(setupID, setupName, []Check{
+		authoritativeResource(miseID, miseName, []Check{
 			no("mise bootstrap state needs attention", "repos"),
 		}),
 		{ID: dockID, Name: dockName, State: Current, Bidirectional: true},
 	}}
 	if err := report.PreflightError(); err != nil {
-		t.Fatalf("machine setup blocked a snapshot: %v", err)
+		t.Fatalf("Mise blocked a snapshot: %v", err)
 	}
 
 	// A resource that owns snapshot content still blocks: its saved artifact
 	// is what the commit would record.
 	corrupt := Report{Resources: []Resource{
-		authoritativeResource(setupID, setupName, nil),
+		authoritativeResource(miseID, miseName, nil),
 		{ID: chromePWAsID, Name: chromePWAsName, State: Unavailable, Checks: []Check{
 			no("saved PWA backup valid", "icon digest mismatch"),
 		}},

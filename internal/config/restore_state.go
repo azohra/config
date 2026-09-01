@@ -19,7 +19,7 @@ const (
 	restoreCheckoutKey   = "azohra-config.restore-id"
 	restorePendingState  = "pending"
 	restoreCompleteState = "complete"
-	restorePlanVersion   = 2
+	restorePlanVersion   = 3
 )
 
 type restoreRecord struct {
@@ -199,7 +199,13 @@ func restorePlanIdentity(paths Paths, machine Machine) (string, error) {
 }
 
 func restoreStepIDs(machine Machine) []string {
-	steps := []string{restoreSetupStep}
+	var steps []string
+	if len(macOSFacts(machine)) > 0 {
+		steps = append(steps, restoreMacOSStep)
+	}
+	if machine.Mise {
+		steps = append(steps, restoreMiseStep)
+	}
 	if machine.FinderFavorites {
 		steps = append(steps, "resource/"+finderFavoritesID)
 	}

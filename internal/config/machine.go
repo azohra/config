@@ -13,7 +13,7 @@ import (
 
 const (
 	MachineKind   = "azohra.config.machine"
-	MachineSchema = 2
+	MachineSchema = 3
 	managedRemote = "origin"
 )
 
@@ -22,6 +22,7 @@ type Machine struct {
 	Kind            string             `toml:"kind"`
 	Schema          int                `toml:"schema"`
 	Repository      MachineRepository  `toml:"repository"`
+	Mise            bool               `toml:"mise"`
 	Dock            bool               `toml:"dock"`
 	ChromePWAs      bool               `toml:"chrome_pwas"`
 	FinderFavorites bool               `toml:"finder_favorites"`
@@ -56,7 +57,7 @@ type SpotlightShortcut struct {
 // A preference that borrowed one would collide with that capability wherever a
 // report, a selection, or a baseline is keyed by resource id.
 var reservedResourceIDs = []string{
-	setupID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
+	miseID, macOSID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
 }
 
 var (
@@ -150,8 +151,20 @@ func validGitName(value string) bool {
 		!strings.HasSuffix(value, ".") && !strings.HasSuffix(value, "/")
 }
 
-// miseEnvironment selects the repository's native mise configuration for a
-// Config child process and stops discovery at the managed checkout.
+// miseEnvironment selects the repository's native Mise configuration for a
+// command issued by the Mise resource and stops discovery at the managed
+// checkout.
+var miseLocalEnvironment = []string{
+	"MISE_AUTO_UPDATE",
+	"MISE_NO_CONFIG",
+	"MISE_CONFIG_DIR",
+	"MISE_GLOBAL_CONFIG_ROOT",
+	"MISE_CEILING_PATHS",
+	"MISE_GLOBAL_CONFIG_FILE",
+	"MISE_SYSTEM_CONFIG_FILE",
+	"MISE_IGNORED_CONFIG_PATHS",
+}
+
 func miseEnvironment(paths Paths) []string {
 	return []string{
 		"MISE_AUTO_UPDATE=0",

@@ -10,7 +10,8 @@ import (
 func validMachineTOML() string {
 	return `
 kind = "azohra.config.machine"
-schema = 2
+schema = 3
+mise = true
 dock = true
 chrome_pwas = true
 finder_favorites = true
@@ -57,7 +58,7 @@ func TestLoadMachineReadsStrictContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Repository.Destination() != "origin/main" || !machine.Dock || !machine.ChromePWAs || !machine.FinderFavorites {
+	if machine.Repository.Destination() != "origin/main" || !machine.Mise || !machine.Dock || !machine.ChromePWAs || !machine.FinderFavorites {
 		t.Fatalf("unexpected machine contract: %+v", machine)
 	}
 	if len(machine.Preferences) != 1 {
@@ -77,8 +78,9 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 	}{
 		{"empty contract", "", "kind is"},
 		{"wrong kind", strings.Replace(validMachineTOML(), MachineKind, "another.machine", 1), "kind is"},
-		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 2", "schema = 1", 1), "schema is 1"},
-		{"unknown field", strings.Replace(validMachineTOML(), "schema = 2", "schema = 2\ntyop = true", 1), "strict mode"},
+		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 3", "schema = 1", 1), "schema is 1"},
+		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 3", "schema = 2", 1), "schema is 2"},
+		{"unknown field", strings.Replace(validMachineTOML(), "schema = 3", "schema = 3\ntyop = true", 1), "strict mode"},
 		{"removed singular favorite", strings.Replace(validMachineTOML(), "finder_favorites = true", "[finder_favorite]\nname = \"Machine config\"", 1), "strict mode"},
 		{"invalid hook name", strings.Replace(validMachineTOML(), `name = "post-checkout"`, `name = "../post-checkout"`, 1), "repository_hooks name"},
 		{"absolute hook source", strings.Replace(validMachineTOML(), `source = "hooks/post-checkout"`, `source = "/tmp/post-checkout"`, 1), "relative file path"},
@@ -96,7 +98,7 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 func TestLoadMachineAcceptsOnlyRepositoryIdentity(t *testing.T) {
 	content := `
 kind = "azohra.config.machine"
-schema = 2
+schema = 3
 
 [repository]
 branch = "main"
@@ -106,20 +108,43 @@ url = "https://example.com/owner/machine.git"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Dock || machine.ChromePWAs || machine.FinderFavorites || len(machine.RepositoryHooks) != 0 || len(machine.Preferences) != 0 {
+	if machine.Mise || machine.Dock || machine.ChromePWAs || machine.FinderFavorites || len(machine.RepositoryHooks) != 0 || len(machine.Preferences) != 0 {
 		t.Fatalf("undeclared capabilities were enabled: %+v", machine)
 	}
 }
 
 func TestUndeclaredCapabilitiesDoNotBecomeResources(t *testing.T) {
 	machine := testMachine()
+	machine.Mise = false
 	machine.Dock = false
 	machine.ChromePWAs = false
 	machine.Preferences = nil
 	machine.RepositoryHooks = nil
+	machine.MacOS = MachineMacOS{}
 	report := NewInspector(testPaths(t), machine, converged{}).Inspect()
-	if len(report.Resources) != 1 || report.Resources[0].ID != setupID {
+	if len(report.Resources) != 0 {
 		t.Fatalf("undeclared capabilities became resources: %+v", report.Resources)
+	}
+}
+
+func TestMiseAndMacOSAreSeparateResources(t *testing.T) {
+	inspector := NewInspector(testPaths(t), testMachine(), converged{})
+	inspector.Mise = &miseStubRunner{}
+	report := inspector.Inspect()
+	mise, hasMise := report.Resource(miseID)
+	macOS, hasMacOS := report.Resource(macOSID)
+	if !hasMise || !hasMacOS {
+		t.Fatalf("platform resources = %+v", report.Resources)
+	}
+	for _, check := range mise.Checks {
+		if strings.Contains(strings.ToLower(check.Label), "tap") || strings.Contains(check.Label, "Spotlight") {
+			t.Fatalf("Mise owns a macOS check: %+v", check)
+		}
+	}
+	for _, check := range macOS.Checks {
+		if strings.HasPrefix(strings.ToLower(check.Label), "mise") {
+			t.Fatalf("macOS owns a Mise check: %+v", check)
+		}
 	}
 }
 
@@ -193,7 +218,7 @@ func TestMiseEnvironmentNamesTheSelectedRootWithoutMutatingTheProcess(t *testing
 func TestMachineRefusesAPreferenceIdConfigAlreadyAnswersTo(t *testing.T) {
 	// Reports, selections, and baselines are all keyed by resource id, so a
 	// preference borrowing a capability's id collides with that capability.
-	for _, id := range []string{"setup", "dock", "chrome-pwas", "finder-favorites", "repository-hooks"} {
+	for _, id := range []string{"mise", "macos", "dock", "chrome-pwas", "finder-favorites", "repository-hooks"} {
 		machine := testMachine()
 		machine.Preferences[0].ID = id
 		if err := machine.Validate(); err == nil {

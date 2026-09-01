@@ -60,7 +60,7 @@ func TestReleaseRunnerPinsEveryProvenanceKnob(t *testing.T) {
 	for name := range pinned {
 		t.Setenv(name, "false")
 	}
-	updater := Updater{Substrate: newLiveRunner(t.TempDir())}
+	updater := Updater{ReleaseMise: newLiveRunner(t.TempDir())}
 	environment := childEnvironment(updater.releaseRunner().Environment, nil)
 	for name, want := range pinned {
 		var values []string
@@ -75,7 +75,7 @@ func TestReleaseRunnerPinsEveryProvenanceKnob(t *testing.T) {
 	}
 }
 
-func TestMachineRunnersUseOnlyTheCanonicalMise(t *testing.T) {
+func TestMiseRunnersUseOnlyTheCanonicalMise(t *testing.T) {
 	paths := testPaths(t)
 	canonical := misePath(paths)
 	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
@@ -90,20 +90,38 @@ func TestMachineRunnersUseOnlyTheCanonicalMise(t *testing.T) {
 	}
 	t.Setenv("PATH", fallback+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	runner := NewMachineRunner(paths)
+	runner := NewMiseRunner(paths)
 	result := runner.Run(context.Background(), "mise")
 	if result.Err != nil || result.Stdout != "canonical" {
-		t.Fatalf("machine runner = %+v", result)
+		t.Fatalf("Mise runner = %+v", result)
 	}
 
 	var output bytes.Buffer
-	live := newMachineLiveRunner(paths)
+	live := newMiseLiveRunner(paths)
 	live.Stdout, live.Stderr = &output, &output
 	if err := live.Command("mise"); err != nil {
 		t.Fatal(err)
 	}
 	if output.String() != "canonical" {
-		t.Fatalf("machine live runner used %q", output.String())
+		t.Fatalf("Mise live runner used %q", output.String())
+	}
+}
+
+func TestNativeMachineRunnersCarryNoMiseAuthority(t *testing.T) {
+	paths := testPaths(t)
+	for _, name := range []string{"MISE_CONFIG_DIR", "MISE_GLOBAL_CONFIG_ROOT", "MISE_CEILING_PATHS"} {
+		t.Setenv(name, "/ambient")
+	}
+	for _, environment := range [][]string{
+		childEnvironment(NewMachineRunner(paths).Environment, NewMachineRunner(paths).Unset),
+		childEnvironment(newMachineLiveRunner(paths).Environment, newMachineLiveRunner(paths).Unset),
+	} {
+		for _, entry := range environment {
+			name, _, _ := strings.Cut(entry, "=")
+			if slices.Contains(miseLocalEnvironment, name) {
+				t.Fatalf("native machine child inherited %q", entry)
+			}
+		}
 	}
 }
 

@@ -122,6 +122,13 @@ func TestMiseChecksRequireTheTestedVersion(t *testing.T) {
 	}
 }
 
+func TestMiseChecksReportAnUnavailableResource(t *testing.T) {
+	checks := (Inspector{Runner: unavailableRunner{}}).miseChecks()
+	if len(checks) != 1 || checks[0].OK || checks[0].Label != "mise unavailable at ~/.local/bin/mise" {
+		t.Fatalf("unavailable Mise produced %+v", checks)
+	}
+}
+
 // A converged phase exits zero, which Result.ExitCode reports as -1 because
 // there is no ExitError to read. Reading the code before the error turns
 // every healthy phase into a missing binary.
@@ -210,7 +217,8 @@ url = "git@github.com:example/absent.git"
 		},
 	}
 
-	checks := (Inspector{Paths: paths, Runner: runner}).repositoryChecks()
+	declared, err := miseRepositories(paths, runner)
+	checks := (Inspector{Paths: paths, Runner: runner}).repositoryChecks(declared, err)
 	found := map[string]string{}
 	for _, check := range checks {
 		if check.OK {
@@ -231,7 +239,8 @@ url = "git@github.com:example/absent.git"
 		t.Fatal(err)
 	}
 	runner.origins["absent"] = "git@github.com:example/absent.git"
-	checks = (Inspector{Paths: paths, Runner: runner}).repositoryChecks()
+	declared, err = miseRepositories(paths, runner)
+	checks = (Inspector{Paths: paths, Runner: runner}).repositoryChecks(declared, err)
 	if len(checks) != 1 || !checks[0].OK {
 		t.Fatalf("every checkout correct but repositoryChecks() = %+v", checks)
 	}
@@ -490,7 +499,11 @@ func TestRepositoryChecksBoundTheirFanOut(t *testing.T) {
 	}
 	runner := &countingRepoRunner{files: []string{"/machine/mise/config.toml"}, repos: repos.String()}
 	paths := testPaths(t)
-	Inspector{Paths: paths, Machine: testMachine(), Runner: runner}.repositoryChecks()
+	repositories, err := miseRepositories(paths, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Inspector{Paths: paths, Machine: testMachine(), Runner: runner}.repositoryChecks(repositories, nil)
 	runner.mu.Lock()
 	peak := runner.peak
 	runner.mu.Unlock()

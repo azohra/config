@@ -54,6 +54,13 @@ type pruneCommandRecorder struct {
 	commands []string
 }
 
+type unavailableRunner struct{}
+
+func (unavailableRunner) Run(context.Context, string, ...string) Result {
+	return Result{Err: exec.ErrNotFound}
+}
+func (unavailableRunner) Exists(string) bool { return false }
+
 func (r *pruneCommandRecorder) Command(name string, args ...string) error {
 	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
 	return nil
@@ -159,7 +166,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	machine.ChromePWAs = false
 	machine.RepositoryHooks = nil
 	pruner := Pruner{
-		Paths: paths, Machine: machine, Runner: runner, Live: live,
+		Paths: paths, Machine: machine, Runner: runner, Mise: runner, MiseLive: live,
 		MiseStateDir: miseState, Log: Logger{Out: &output},
 	}
 	return pruneFixture{
@@ -187,19 +194,53 @@ func TestNewPrunerLeavesMiseStateToMise(t *testing.T) {
 	if pruner.MiseStateDir != "" {
 		t.Fatalf("pruner derived a mise state directory: %q", pruner.MiseStateDir)
 	}
-	runner, ok := pruner.Runner.(OSRunner)
+	runner, ok := pruner.Mise.(OSRunner)
 	if !ok {
-		t.Fatalf("planning runner = %#v", pruner.Runner)
+		t.Fatalf("Mise planning runner = %#v", pruner.Mise)
 	}
-	live, ok := pruner.Live.(LiveRunner)
+	live, ok := pruner.MiseLive.(LiveRunner)
 	if !ok {
-		t.Fatalf("apply runner = %#v", pruner.Live)
+		t.Fatalf("Mise apply runner = %#v", pruner.MiseLive)
 	}
 	for _, environment := range [][]string{runner.Environment, live.Environment} {
 		for _, entry := range environment {
 			if strings.HasPrefix(entry, "MISE_STATE_DIR=") {
 				t.Fatalf("Config forced mise state onto its own subprocess: %q", entry)
 			}
+		}
+	}
+}
+
+func TestPrunerStillPlansConfigStateWhenMiseIsUnavailable(t *testing.T) {
+	fixture := newPruneFixture(t)
+	fixture.pruner.Mise = unavailableRunner{}
+	plan, err := fixture.pruner.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.files) == 0 || len(plan.hooks) == 0 {
+		t.Fatalf("Config-owned cleanup disappeared with Mise: files=%v hooks=%v", plan.files, plan.hooks)
+	}
+	if !slices.ContainsFunc(plan.warnings, func(warning string) bool {
+		return strings.Contains(warning, "Mise repository inventory is unavailable")
+	}) {
+		t.Fatalf("missing Mise warning: %v", plan.warnings)
+	}
+}
+
+func TestPrunerDoesNotProbeUndeclaredMise(t *testing.T) {
+	machine := testMachine()
+	machine.Mise = false
+	plan, err := (Pruner{
+		Paths: testPaths(t), Machine: machine, Runner: converged{},
+		Mise: unavailableRunner{}, Log: Logger{Out: &bytes.Buffer{}},
+	}).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, warning := range plan.warnings {
+		if strings.Contains(strings.ToLower(warning), "mise") {
+			t.Fatalf("undeclared Mise produced warning %q", warning)
 		}
 	}
 }

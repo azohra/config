@@ -6,7 +6,10 @@ import (
 	"io"
 )
 
-const restoreSetupStep = "setup"
+const (
+	restoreMacOSStep = "resource/" + macOSID
+	restoreMiseStep  = "resource/" + miseID
+)
 
 type freshRestoreStep struct {
 	id   string
@@ -32,22 +35,11 @@ func RestorePending(paths Paths, machine Machine, out io.Writer) error {
 	return err
 }
 
-// restorePending converges setup, then restores each unfinished capability.
-// A backup that cannot be read is reported without stopping the capabilities
-// beside it. Successful steps are recorded before the next one starts, so a
-// later bootstrap retries only the work that remains.
+// restorePending attempts every unfinished capability. A missing provider or
+// an unreadable backup is reported without stopping independent resources.
+// Successful steps are recorded before the next one starts, so a later
+// bootstrap retries only the work that remains.
 func restorePending(applier Applier, progress *restoreProgress) error {
-	// The one deliberate stop. Mise installs the applications every later
-	// step restores into, so nothing below can converge without it.
-	if !progress.done(restoreSetupStep) {
-		if err := applier.Apply([]Selection{{ID: setupID, Action: Apply}}); err != nil {
-			return err
-		}
-		if err := progress.markDone(restoreSetupStep, applier.Machine); err != nil {
-			return fmt.Errorf("record machine setup restore: %w", err)
-		}
-	}
-
 	var failures []error
 	for _, step := range freshRestoreSteps(applier) {
 		if progress.done(step.id) {
@@ -73,7 +65,26 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 // capabilities. Chrome PWAs precede the Dock so saved shortcuts exist before
 // a declared Dock layout is rebuilt.
 func freshRestoreSteps(applier Applier) []freshRestoreStep {
-	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+3)
+	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+5)
+	if len(macOSFacts(applier.Machine)) > 0 {
+		steps = append(steps, freshRestoreStep{
+			id: restoreMacOSStep, name: macOSName,
+			run: func() error {
+				applier.Log.Section(macOSName)
+				applier.convergeMacOS()
+				return nil
+			},
+		})
+	}
+	if applier.Machine.Mise {
+		steps = append(steps, freshRestoreStep{
+			id: restoreMiseStep, name: miseName,
+			run: func() error {
+				applier.Log.Section(miseName)
+				return applier.applyMise()
+			},
+		})
+	}
 	if applier.Machine.FinderFavorites {
 		steps = append(steps, freshRestoreStep{
 			id:   "resource/" + finderFavoritesID,

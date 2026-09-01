@@ -86,18 +86,20 @@ type Pruner struct {
 	Paths        Paths
 	Machine      Machine
 	Runner       Runner
-	Live         commandRunner
+	Mise         Runner
+	MiseLive     commandRunner
 	MiseStateDir string
 	Log          Logger
 }
 
 func NewPruner(paths Paths, machine Machine, out io.Writer) Pruner {
 	return Pruner{
-		Paths:   paths,
-		Machine: machine,
-		Runner:  NewMachineRunner(paths),
-		Live:    newMachineLiveRunner(paths),
-		Log:     Logger{Out: out},
+		Paths:    paths,
+		Machine:  machine,
+		Runner:   NewMachineRunner(paths),
+		Mise:     NewMiseRunner(paths),
+		MiseLive: newMiseLiveRunner(paths),
+		Log:      Logger{Out: out},
 	}
 }
 
@@ -127,32 +129,50 @@ func miseStateDir(runner Runner) (string, error) {
 }
 
 func (p Pruner) Plan() (PrunePlan, error) {
-	if err := requireTestedMise(p.Runner); err != nil {
-		return PrunePlan{}, err
-	}
-	stateDir := p.MiseStateDir
-	if stateDir == "" {
-		resolved, err := miseStateDir(p.Runner)
-		if err != nil {
-			return PrunePlan{}, err
-		}
-		stateDir = resolved
-	}
 	var plan PrunePlan
+	var repositories []miseRepository
+	var miseErr error
+	if p.Machine.Mise {
+		miseErr = requireTestedMise(p.Mise)
+		if miseErr != nil {
+			plan.warnings = append(plan.warnings, "Mise cleanup is unavailable; its state was left untouched: "+miseErr.Error())
+		}
+	}
+	if p.Machine.Mise && miseErr == nil {
+		stateDir := p.MiseStateDir
+		if stateDir == "" {
+			var err error
+			stateDir, err = miseStateDir(p.Mise)
+			if err != nil {
+				plan.warnings = append(plan.warnings, "Mise configuration cleanup is unavailable: "+err.Error())
+			}
+		}
+		if stateDir != "" {
+			var err error
+			plan.registry, err = p.planRegistry(stateDir)
+			if err != nil {
+				plan.warnings = append(plan.warnings, "Mise configuration cleanup is unavailable: "+err.Error())
+			}
+		}
+		var err error
+		plan.tools, plan.warnings, err = p.planTools(plan.warnings)
+		if err != nil {
+			plan.warnings = append(plan.warnings, "Mise tool cleanup is unavailable: "+err.Error())
+		}
+		plan.packages, plan.skippedManagers, plan.warnings, err = p.planPackages(plan.warnings)
+		if err != nil {
+			plan.warnings = append(plan.warnings, "package cleanup is unavailable: "+err.Error())
+		}
+		repositories, err = miseRepositories(p.Paths, p.Mise)
+		if err != nil {
+			miseErr = err
+		}
+	}
+	if p.Machine.Mise && miseErr != nil {
+		plan.warnings = append(plan.warnings, "Mise repository inventory is unavailable: "+miseErr.Error())
+	}
 	var err error
-	plan.registry, err = p.planRegistry(stateDir)
-	if err != nil {
-		return PrunePlan{}, err
-	}
-	plan.tools, plan.warnings, err = p.planTools(plan.warnings)
-	if err != nil {
-		return PrunePlan{}, err
-	}
-	plan.packages, plan.skippedManagers, plan.warnings, err = p.planPackages(plan.warnings)
-	if err != nil {
-		return PrunePlan{}, err
-	}
-	plan.hooks, plan.warnings, err = p.planHooks(plan.warnings)
+	plan.hooks, plan.warnings, err = p.planHooks(plan.warnings, repositories, miseErr)
 	if err != nil {
 		return PrunePlan{}, err
 	}
@@ -216,7 +236,7 @@ func deadConfigLinks(dir string) ([]pruneLink, error) {
 }
 
 func (p Pruner) planTools(warnings []string) ([]pruneTool, []string, error) {
-	result := run(p.Runner, "mise", "ls", "--prunable", "-J")
+	result := run(p.Mise, "mise", "ls", "--prunable", "-J")
 	warnings = appendMiseWarnings(warnings, result.Stderr)
 	if result.Err != nil {
 		return nil, warnings, fmt.Errorf("list prunable mise tools: %w", result.Failure())
@@ -246,7 +266,7 @@ func (p Pruner) planTools(warnings []string) ([]pruneTool, []string, error) {
 }
 
 func (p Pruner) planPackages(warnings []string) ([]prunePackageManager, []string, []string, error) {
-	status := run(p.Runner, "mise", "bootstrap", "packages", "status", "--json")
+	status := run(p.Mise, "mise", "bootstrap", "packages", "status", "--json")
 	warnings = appendMiseWarnings(warnings, status.Stderr)
 	if status.Err != nil {
 		return nil, nil, warnings, fmt.Errorf("list mise package managers: %w", status.Failure())
@@ -266,7 +286,7 @@ func (p Pruner) planPackages(warnings []string) ([]prunePackageManager, []string
 	var planned []prunePackageManager
 	var skipped []string
 	for _, name := range names {
-		result := run(p.Runner, "mise", "bootstrap", "packages", "prune", "--manager", name, "--dry-run")
+		result := run(p.Mise, "mise", "bootstrap", "packages", "prune", "--manager", name, "--dry-run")
 		warnings = appendMiseWarnings(warnings, result.Stderr)
 		if result.Err != nil {
 			if strings.Contains(result.Stderr, "does not support pruning") ||
@@ -307,8 +327,11 @@ func appendMiseWarnings(warnings []string, output string) []string {
 	return warnings
 }
 
-func (p Pruner) planHooks(warnings []string) ([]pruneHookTarget, []string, error) {
-	targets, err := repositoryHookTargets(p.Paths, p.Runner, true)
+func (p Pruner) planHooks(warnings []string, repositories []miseRepository, inventoryErr error) ([]pruneHookTarget, []string, error) {
+	if inventoryErr != nil {
+		warnings = append(warnings, "declared repository hook cleanup is unavailable; only the managed checkout and Git template were inspected")
+	}
+	targets, err := repositoryHookTargets(p.Paths, p.Runner, repositories, true)
 	if err != nil {
 		return nil, warnings, fmt.Errorf("inspect repository hook targets: %w", err)
 	}
@@ -610,7 +633,7 @@ func (p Pruner) Apply(expected PrunePlan) error {
 	var failures []error
 	if len(current.registry.Tracked) > 0 || len(current.registry.Trusted) > 0 {
 		p.Log.Section("Mise configuration registry")
-		if err := p.Live.Command("mise", "prune", "--configs", "--yes"); err != nil {
+		if err := p.MiseLive.Command("mise", "prune", "--configs", "--yes"); err != nil {
 			p.Log.Error(err.Error())
 			failures = append(failures, fmt.Errorf("mise configuration registry: %w", err))
 		} else {
@@ -619,7 +642,7 @@ func (p Pruner) Apply(expected PrunePlan) error {
 	}
 	if len(current.tools) > 0 {
 		p.Log.Section("Mise tools")
-		if err := p.Live.Command("mise", "prune", "--tools", "--yes"); err != nil {
+		if err := p.MiseLive.Command("mise", "prune", "--tools", "--yes"); err != nil {
 			p.Log.Error(err.Error())
 			failures = append(failures, fmt.Errorf("mise tools: %w", err))
 		} else {
@@ -629,7 +652,7 @@ func (p Pruner) Apply(expected PrunePlan) error {
 	if len(current.packages) > 0 {
 		p.Log.Section("Packages")
 		for _, manager := range current.packages {
-			if err := p.Live.Command("mise", "bootstrap", "packages", "prune", "--manager", manager.Name, "--yes"); err != nil {
+			if err := p.MiseLive.Command("mise", "bootstrap", "packages", "prune", "--manager", manager.Name, "--yes"); err != nil {
 				p.Log.Error(manager.Name + ": " + err.Error())
 				failures = append(failures, fmt.Errorf("%s packages: %w", manager.Name, err))
 			} else {

@@ -116,14 +116,10 @@ func regularFileInside(root, path string) (os.FileInfo, error) {
 	return nil, errors.New("source is not a regular file")
 }
 
-func repositoryHookTargets(paths Paths, runner Runner, includeRepositories bool) ([]repositoryHookTarget, error) {
+func repositoryHookTargets(paths Paths, runner Runner, repositories []miseRepository, includeRepositories bool) ([]repositoryHookTarget, error) {
 	targets := []repositoryHookTarget{{Name: "Git template", Dir: filepath.Join(repositoryHookTemplateDir(paths), "hooks")}}
 	if !includeRepositories {
 		return targets, nil
-	}
-	repositories, err := miseRepositories(paths, runner)
-	if err != nil {
-		return nil, err
 	}
 	repositoryPaths := []string{paths.Root}
 	seen := map[string]bool{filepath.Clean(paths.Root): true}
@@ -304,7 +300,7 @@ func pathInside(root, path string) bool {
 	return err == nil && relative != "." && filepath.IsLocal(relative)
 }
 
-func inspectRepositoryHooks(paths Paths, machine Machine, runner Runner) Resource {
+func inspectRepositoryHooks(paths Paths, machine Machine, runner Runner, repositories []miseRepository, inventoryErr error) Resource {
 	resource := Resource{ID: repositoryHooksID, Name: repositoryHooksName, Authoritative: true}
 	payloads, err := repositoryHookPayloads(paths, machine.RepositoryHooks)
 	if err != nil {
@@ -313,7 +309,13 @@ func inspectRepositoryHooks(paths Paths, machine Machine, runner Runner) Resourc
 		resource.Checks = []Check{no("Repository hook sources readable", err.Error())}
 		return resource
 	}
-	targets, err := repositoryHookTargets(paths, runner, true)
+	if inventoryErr != nil {
+		resource.State = Unavailable
+		resource.Summary = "Repository inventory is unavailable"
+		resource.Checks = []Check{no("Repository inventory readable", inventoryErr.Error())}
+		return resource
+	}
+	targets, err := repositoryHookTargets(paths, runner, repositories, true)
 	if err != nil {
 		resource.State = Unavailable
 		resource.Summary = "Repository hook targets are unavailable"
@@ -381,7 +383,14 @@ func (e Applier) applyRepositoryHookTargets(includeRepositories bool) (int, erro
 	if err != nil {
 		return 0, err
 	}
-	targets, err := repositoryHookTargets(e.Paths, e.Runner, includeRepositories)
+	var repositories []miseRepository
+	if includeRepositories && e.Machine.Mise {
+		repositories, err = miseRepositories(e.Paths, e.Mise)
+		if err != nil {
+			return 0, err
+		}
+	}
+	targets, err := repositoryHookTargets(e.Paths, e.Runner, repositories, includeRepositories)
 	if err != nil {
 		return 0, err
 	}

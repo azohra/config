@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	setupID   = "setup"
-	setupName = "Machine setup"
+	macOSID   = "macos"
+	macOSName = "macOS"
 )
 
 // setupFact pairs one desired-state predicate with the fix that converges it.

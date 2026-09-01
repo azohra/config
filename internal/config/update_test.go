@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,8 +34,8 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "dev")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
-	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
+	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
 	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "Tools") {
 		t.Fatalf("Update() error = %v, want Tools failure", err)
@@ -46,7 +47,6 @@ fi
 	}
 	selection := filepath.Join(paths.Root, "mise")
 	want := strings.Join([]string{
-		"--no-config self-update " + testedMiseVersion + " --yes --no-plugins||||0|1|",
 		"--version||||0|1|",
 		"upgrade --yes|" + selection + "|" + paths.Root + "|" + paths.Root + "|0||",
 		"bootstrap packages upgrade --yes|" + selection + "|" + paths.Root + "|" + paths.Root + "|0||",
@@ -56,7 +56,7 @@ fi
 	if string(commands) != want {
 		t.Fatalf("commands =\n%s\nwant =\n%s", commands, want)
 	}
-	for _, message := range []string{"standalone mise set to " + testedMiseVersion, "declared packages updated", "clean repositories updated"} {
+	for _, message := range []string{"standalone mise " + testedMiseVersion + " ready", "declared packages updated", "clean repositories updated"} {
 		if !strings.Contains(output.String(), message) {
 			t.Fatalf("output missing %q:\n%s", message, output.String())
 		}
@@ -73,7 +73,6 @@ func TestUpdaterRunsOnlyTheSelectedMachineUpdateScope(t *testing.T) {
 			name:  "software",
 			scope: UpdateSoftware,
 			want: []string{
-				"--no-config self-update " + testedMiseVersion + " --yes --no-plugins",
 				"--version",
 				"upgrade --yes",
 				"bootstrap packages upgrade --yes",
@@ -83,7 +82,6 @@ func TestUpdaterRunsOnlyTheSelectedMachineUpdateScope(t *testing.T) {
 			name:  "repositories",
 			scope: UpdateRepositories,
 			want: []string{
-				"--no-config self-update " + testedMiseVersion + " --yes --no-plugins",
 				"--version",
 				"bootstrap repos update --yes --skip-dirty",
 			},
@@ -167,8 +165,9 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "dev")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
-	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
+	updater.InstallMachineMise = nil
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
+	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
 	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), unsupported+" is unsupported") {
 		t.Fatalf("Update() error = %v, want unsupported mise version", err)
@@ -177,7 +176,7 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n"
+	want := "--version\n"
 	if string(commands) != want {
 		t.Fatalf("commands = %q, want %q", commands, want)
 	}
@@ -201,8 +200,9 @@ exit 23
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "dev")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
-	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
+	updater.InstallMachineMise = func() error { return errors.New("install failed") }
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
+	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
 	err := updater.Update(UpdateAll)
 	if err == nil || !strings.Contains(err.Error(), "mise") {
 		t.Fatalf("Update() error = %v, want mise failure", err)
@@ -211,7 +211,7 @@ exit 23
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n"
+	want := "--version\n"
 	if string(commands) != want {
 		t.Fatalf("commands = %q, want %q", commands, want)
 	}
@@ -219,25 +219,64 @@ exit 23
 
 func TestUpdaterRequiresCanonicalMise(t *testing.T) {
 	paths := testPaths(t)
-	err := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev").Update(UpdateAll)
-	if err == nil || !strings.Contains(err.Error(), misePath(paths)) {
-		t.Fatalf("Update() error = %v, want the canonical path", err)
+	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev")
+	updater.InstallMachineMise = nil
+	err := updater.Update(UpdateAll)
+	if err == nil || !strings.Contains(err.Error(), "mise is unavailable") {
+		t.Fatalf("Update() error = %v, want unavailable Mise", err)
+	}
+}
+
+func TestUpdaterInstallsCanonicalMiseWhenMissing(t *testing.T) {
+	paths := testPaths(t)
+	installed := 0
+	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev")
+	updater.InstallMachineMise = func() error {
+		installed++
+		writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+if [ "$1" = --version ]; then
+  printf '%s\n' '`+testedMiseVersion+`'
+fi
+`)
+		return nil
+	}
+	if err := updater.Update(UpdateSoftware); err != nil {
+		t.Fatal(err)
+	}
+	if installed != 1 {
+		t.Fatalf("Mise installer ran %d times, want once", installed)
+	}
+}
+
+func TestUpdaterLeavesMachineMiseUntouchedWhenUndeclared(t *testing.T) {
+	paths := testPaths(t)
+	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev")
+	updater.LoadMachine = func() (Machine, error) { return Machine{}, nil }
+	updater.InstallMachineMise = func() error {
+		t.Fatal("an undeclared Mise resource was installed")
+		return nil
+	}
+	if err := updater.Update(UpdateAll); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(misePath(paths)); !os.IsNotExist(err) {
+		t.Fatalf("undeclared Mise resource changed: %v", err)
 	}
 }
 
 func TestReleasedUpdaterInstallsAndReexecutesTheVerifiedPermanentRelease(t *testing.T) {
 	paths := testPaths(t)
-	canonicalMise := misePath(paths)
+	releaseMise := releaseMisePath(paths)
 	canonicalConfig := configCommandPath(paths)
 	releaseDirectory := t.TempDir()
 	releaseConfig := filepath.Join(releaseDirectory, "config")
-	releaseCache := filepath.Join(filepath.Dir(paths.StateDir), "release-mise")
-	releaseState := filepath.Join(filepath.Dir(paths.StateDir), "release-mise-state")
+	releaseCache := filepath.Join(configReleaseRoot(paths), "cache")
+	releaseState := filepath.Join(configReleaseRoot(paths), "state")
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
 	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
 	t.Setenv("PATH", filepath.Dir(canonicalConfig)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	writeUpdateExecutable(t, canonicalMise, `#!/bin/sh
+	writeUpdateExecutable(t, releaseMise, `#!/bin/sh
 printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$*" "$MISE_CONFIG_DIR" "$MISE_AUTO_UPDATE" "$MISE_NO_CONFIG" "$MISE_GITHUB_GITHUB_ATTESTATIONS" "$MISE_MINIMUM_RELEASE_AGE" "$MISE_CACHE_DIR" "$MISE_STATE_DIR" "$MISE_USE_VERSIONS_HOST" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
@@ -259,12 +298,12 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
-	updater.ValidateMachine = func() error {
+	updater.LoadMachine = func() (Machine, error) {
 		t.Fatal("fresh released update parsed the machine before re-exec")
-		return nil
+		return Machine{}, nil
 	}
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
-	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
+	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
 	var reexecPath string
 	var reexecArgs, reexecEnvironment []string
 	updater.Reexec = func(path string, args, environment []string) error {
@@ -282,7 +321,6 @@ fi
 		t.Fatal(err)
 	}
 	want := strings.Join([]string{
-		"--no-config self-update " + testedMiseVersion + " --yes --no-plugins||0|1|||||",
 		"--version||0|1|||||",
 		"--no-config cache clear||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
 		"--no-config latest " + configReleaseBackend + "||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
@@ -294,6 +332,9 @@ fi
 	}, "\n")
 	if string(commands) != want {
 		t.Fatalf("commands =\n%s\nwant =\n%s", commands, want)
+	}
+	if _, err := os.Lstat(misePath(paths)); !os.IsNotExist(err) {
+		t.Fatalf("release acquisition changed the machine Mise resource: %v", err)
 	}
 	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "software"}) {
 		t.Fatalf("re-exec = %q %q", reexecPath, reexecArgs)
@@ -310,7 +351,7 @@ func TestReleasedUpdaterStopsWhenReleaseAcquisitionFails(t *testing.T) {
 	paths := testPaths(t)
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
-	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+	writeUpdateExecutable(t, releaseMisePath(paths), `#!/bin/sh
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
@@ -322,7 +363,7 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.Reexec = func(string, []string, []string) error {
 		t.Fatal("failed acquisition attempted to re-exec")
 		return nil
@@ -335,7 +376,7 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config cache clear\n--no-config latest " + configReleaseBackend + "\n"
+	want := "--version\n--no-config cache clear\n--no-config latest " + configReleaseBackend + "\n"
 	if string(commands) != want {
 		t.Fatalf("commands = %q, want %q", commands, want)
 	}
@@ -345,7 +386,7 @@ func TestReleasedUpdaterRefusesAnUnverifiedInstalledBuild(t *testing.T) {
 	paths := testPaths(t)
 	releaseDirectory := t.TempDir()
 	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
-	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+	writeUpdateExecutable(t, releaseMisePath(paths), `#!/bin/sh
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
@@ -361,7 +402,7 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.Reexec = func(string, []string, []string) error {
 		t.Fatal("unverified build attempted to re-exec")
 		return nil
@@ -376,7 +417,7 @@ func TestReleasedUpdaterVerifiesTheExactInstalledRelease(t *testing.T) {
 	paths := testPaths(t)
 	releaseDirectory := t.TempDir()
 	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
-	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+	writeUpdateExecutable(t, releaseMisePath(paths), `#!/bin/sh
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
@@ -392,7 +433,7 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.Reexec = func(string, []string, []string) error {
 		t.Fatal("mismatched installed release attempted to re-exec")
 		return nil
@@ -409,7 +450,7 @@ func TestReleasedUpdaterVerifiesTheAcquiredExecutableBeforeInstall(t *testing.T)
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
 	t.Setenv("UPDATE_TEST_RELEASE_DIR", releaseDirectory)
-	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+	writeUpdateExecutable(t, releaseMisePath(paths), `#!/bin/sh
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
 fi
@@ -429,7 +470,7 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.Reexec = func(string, []string, []string) error {
 		t.Fatal("mismatched release executable attempted to re-exec")
 		return nil
@@ -451,7 +492,7 @@ func TestReleasedUpdaterRefusesADowngradeBeforeInstall(t *testing.T) {
 	paths := testPaths(t)
 	logPath := filepath.Join(t.TempDir(), "commands")
 	t.Setenv("UPDATE_TEST_LOG", logPath)
-	writeUpdateExecutable(t, misePath(paths), `#!/bin/sh
+	writeUpdateExecutable(t, releaseMisePath(paths), `#!/bin/sh
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then
   printf '%s\n' '`+testedMiseVersion+`'
@@ -463,7 +504,7 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.Reexec = func(string, []string, []string) error {
 		t.Fatal("downgrade attempted to re-exec")
 		return nil
@@ -476,7 +517,7 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	want := "--no-config self-update " + testedMiseVersion + " --yes --no-plugins\n--version\n--no-config cache clear\n--no-config latest " + configReleaseBackend + "\n"
+	want := "--version\n--no-config cache clear\n--no-config latest " + configReleaseBackend + "\n"
 	if string(commands) != want || strings.Contains(string(commands), "config install") {
 		t.Fatalf("downgrade commands = %q, want no install after resolution", commands)
 	}
@@ -498,8 +539,8 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.5.0")
-	updater.Substrate.Stdout, updater.Substrate.Stderr = &output, &output
-	updater.Machine.Stdout, updater.Machine.Stderr = &output, &output
+	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
+	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
 	updater.CurrentExecutable = func() (string, error) { return canonicalConfig, nil }
 	updater.Reexec = func(string, []string, []string) error {
 		t.Fatal("resumed update attempted to re-exec")
@@ -513,7 +554,6 @@ fi
 		t.Fatal(err)
 	}
 	want := strings.Join([]string{
-		"--no-config self-update " + testedMiseVersion + " --yes --no-plugins",
 		"--version",
 		"upgrade --yes",
 		"bootstrap packages upgrade --yes",
@@ -626,7 +666,7 @@ func writeUpdateExecutable(t *testing.T, path, content string) {
 
 func newUpdateTestUpdater(paths Paths, out *bytes.Buffer, version string) Updater {
 	updater := NewUpdater(paths, out, version)
-	updater.ValidateMachine = func() error { return nil }
+	updater.LoadMachine = func() (Machine, error) { return Machine{Mise: true}, nil }
 	return updater
 }
 

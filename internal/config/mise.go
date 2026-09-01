@@ -8,13 +8,20 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
 const testedMiseVersion = "2026.8.16"
 
-// misePath returns Config's canonical execution substrate.
+const (
+	miseID   = "mise"
+	miseName = "Mise"
+)
+
+// misePath returns the canonical standalone executable Config uses only for a
+// declared machine Mise resource.
 func misePath(paths Paths) string {
 	return paths.InHome(".local", "bin", "mise")
 }
@@ -52,9 +59,9 @@ func currentMiseVersion(runner Runner) (string, error) {
 	return version, nil
 }
 
-// requireTestedMise is the mutation gate for Config-owned mise commands.
-// Inspection may report an unsupported version, while only config update is
-// allowed to replace it.
+// requireTestedMise is the mutation gate for Config-owned Mise commands.
+// Inspection may report an unsupported version; apply and update install the
+// tested release before they cross this gate.
 func requireTestedMise(runner Runner) error {
 	version, err := currentMiseVersion(runner)
 	if err != nil {
@@ -99,6 +106,25 @@ var misePhases = [][]string{
 type miseRepository struct {
 	Path string
 	URL  string
+}
+
+// miseRepositoryInventory lets resources share one provider answer without
+// teaching those resources how Mise stores or parses its declarations.
+type miseRepositoryInventory struct {
+	paths  Paths
+	runner Runner
+	once   sync.Once
+	repos  []miseRepository
+	err    error
+}
+
+func newMiseRepositoryInventory(paths Paths, runner Runner) *miseRepositoryInventory {
+	return &miseRepositoryInventory{paths: paths, runner: runner}
+}
+
+func (i *miseRepositoryInventory) Repositories() ([]miseRepository, error) {
+	i.once.Do(func() { i.repos, i.err = miseRepositories(i.paths, i.runner) })
+	return i.repos, i.err
 }
 
 // miseRepositories asks mise which checkouts it declares. Config never reads
