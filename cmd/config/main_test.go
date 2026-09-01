@@ -31,11 +31,21 @@ func buildConfigVersion(t *testing.T, version string) string {
 	return binary
 }
 
-// fixtureHome is a machine with a valid document and no mise, so exactly one
-// check fails and the report is the same on every machine that runs this.
+// fixtureHome is a machine with a valid document and an empty, readable Dock,
+// so the report is the same on every platform that runs this.
 func fixtureHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defaults := `#!/bin/sh
+printf '%s\n' '<?xml version="1.0"?><plist version="1.0"><dict><key>persistent-apps</key><array/></dict></plist>'
+`
+	if err := os.WriteFile(filepath.Join(bin, "defaults"), []byte(defaults), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -60,7 +70,16 @@ url = "https://github.com/example/machine.git"
 func runConfig(t *testing.T, binary, home string, args ...string) (string, int) {
 	t.Helper()
 	command := exec.Command(binary, args...)
-	command.Env = append(os.Environ(), "HOME="+home)
+	for _, value := range os.Environ() {
+		name, _, _ := strings.Cut(value, "=")
+		if name != "HOME" && name != "PATH" {
+			command.Env = append(command.Env, value)
+		}
+	}
+	command.Env = append(command.Env,
+		"HOME="+home,
+		"PATH="+filepath.Join(home, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
 	output, err := command.CombinedOutput()
 	code := 0
 	var exit *exec.ExitError
