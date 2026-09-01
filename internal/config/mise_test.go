@@ -100,14 +100,26 @@ func (*miseStubRunner) Exists(string) bool { return true }
 // version Config now requires the moment the tested version moves.
 func unsupportedMiseVersions() []string {
 	fields := strings.Split(testedMiseVersion, ".")
-	last, err := strconv.Atoi(fields[len(fields)-1])
-	if err != nil || last == 0 {
-		panic("tested mise version does not end in a number: " + testedMiseVersion)
+	numbers := make([]int, len(fields))
+	for index, field := range fields {
+		number, err := strconv.Atoi(field)
+		if err != nil {
+			panic("tested mise version is not numeric: " + testedMiseVersion)
+		}
+		numbers[index] = number
 	}
+	// The first release of a month ends in zero, so the older neighbor
+	// borrows from the rightmost field that has something to give up.
 	older := slices.Clone(fields)
-	older[len(older)-1] = strconv.Itoa(last - 1)
+	for index := len(numbers) - 1; index >= 0; index-- {
+		if numbers[index] > 0 {
+			older[index] = strconv.Itoa(numbers[index] - 1)
+			break
+		}
+	}
 	newer := slices.Clone(fields)
-	newer[len(newer)-1] = strconv.Itoa(last + 1)
+	last := len(numbers) - 1
+	newer[last] = strconv.Itoa(numbers[last] + 1)
 	return []string{strings.Join(older, "."), strings.Join(newer, ".")}
 }
 

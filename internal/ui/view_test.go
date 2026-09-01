@@ -110,14 +110,14 @@ func TestCleanupPreviewBoundsLongPlans(t *testing.T) {
 func TestInventoryShowsCombinedConcreteEvidence(t *testing.T) {
 	m := Model{
 		report: config.Report{Resources: []config.Resource{
-			{ID: "mise", Name: "Mise", State: config.Current, Summary: "12 checks current", Checks: []config.Check{{Label: "mise 2026.8.16", OK: true}, {Label: "mise bootstrap state", OK: true}}},
+			{ID: "mise", Name: "Mise", State: config.Current, Summary: "12 checks current", Checks: []config.Check{{Label: "mise 2026.9.0", OK: true}, {Label: "mise bootstrap state", OK: true}}},
 			{ID: "example-app", Name: "Example App", State: config.Current, Summary: "this Mac matches the saved settings", Bidirectional: true},
 			{ID: "dock", Name: "Dock", State: config.Current, Summary: "this Mac matches the saved layout", Bidirectional: true},
 		}},
 		width: 100, height: 30,
 	}
 	view := m.renderInventory()
-	for _, present := range []string{"3 resources", "Mise", "mise 2026.8.16", "mise bootstrap state", "Example App", "Dock"} {
+	for _, present := range []string{"3 resources", "Mise", "mise 2026.9.0", "mise bootstrap state", "Example App", "Dock"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("inventory missing %q:\n%s", present, view)
 		}

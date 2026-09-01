@@ -92,7 +92,7 @@ Mise resource; without it Config neither inspects nor installs Mise. Mise keeps
 its native syntax under `mise/`:
 
 ```toml
-min_version = "2026.8.16"
+min_version = "2026.9.0"
 
 [tools]
 node = "24"
