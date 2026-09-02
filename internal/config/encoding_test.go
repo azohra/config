@@ -17,7 +17,7 @@ func TestTrackedArtifactsAreDecodedStrictly(t *testing.T) {
 		"unknown field": `{"schema":1,"apps":[],"extra":true}`,
 		"truncated":     `{"schema":1,"apps":[`,
 	} {
-		if err := atomicWrite(chromePWASnapshotPath(paths), []byte(body), 0o600); err != nil {
+		if err := AtomicWrite(chromePWASnapshotPath(paths), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		bidir := testBidirectional(paths, dockRunner{})
@@ -39,7 +39,7 @@ func TestEveryTrackedArtifactDecoderIsTheStrictOne(t *testing.T) {
 	paths := testPaths(t)
 	trailing := func(document string) []byte { return []byte(document + "\n" + document + "\n") }
 
-	if err := atomicWrite(finderFavoritesSnapshotPath(paths),
+	if err := AtomicWrite(finderFavoritesSnapshotPath(paths),
 		trailing(`{"schema":1,"favorites":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestEveryTrackedArtifactDecoderIsTheStrictOne(t *testing.T) {
 		t.Error("a saved Finder Favorites snapshot with trailing data was accepted")
 	}
 
-	if err := atomicWrite(restoreStatePath(paths, "0123456789abcdef"),
+	if err := AtomicWrite(restoreStatePath(paths, "0123456789abcdef"),
 		trailing(`{"schema":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

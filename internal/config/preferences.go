@@ -75,7 +75,7 @@ func (p PreferenceBackup) Backup(paths Paths, runner Runner) error {
 	if len(values) == 0 {
 		return fmt.Errorf("export %s: %s holds no settings", p.Name, p.Domain)
 	}
-	return atomicWrite(p.snapshotPath(paths), data, 0o600)
+	return AtomicWrite(p.snapshotPath(paths), data, 0o600)
 }
 
 func preferenceIsRunning(runner Runner, preference PreferenceBackup) (bool, error) {

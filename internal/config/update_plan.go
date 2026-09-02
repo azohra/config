@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,10 +43,11 @@ type UpdateGroup struct {
 // cannot safely cross Config's release boundary; pending groups remain
 // runnable because their provider can only answer while applying.
 type UpdatePlan struct {
-	Scope     UpdateScope
-	CheckedAt time.Time
-	Groups    []UpdateGroup
-	Blocked   bool
+	Scope           UpdateScope
+	CheckedAt       time.Time
+	Groups          []UpdateGroup
+	Blocked         bool
+	ResolvedVersion string
 }
 
 func (p UpdatePlan) GroupsFor(scope UpdateScope) []UpdateGroup {
@@ -74,19 +78,58 @@ func (p UpdatePlan) HasWork() bool {
 	if p.Blocked {
 		return false
 	}
-	available, pending, unavailable := p.Counts(p.Scope)
-	return available+pending+unavailable > 0
+	available, pending, _ := p.Counts(p.Scope)
+	return available+pending > 0
+}
+
+func (p UpdatePlan) HasDeferredWork() bool {
+	_, pending, _ := p.Counts(p.Scope)
+	return pending > 0
+}
+
+func (p UpdatePlan) validate(version string) error {
+	if !p.Scope.valid() {
+		return errors.New("invalid update scope")
+	}
+	if p.Blocked {
+		return errors.New("Config update is unavailable")
+	}
+	if len(p.Groups) == 0 || p.Groups[0].Name != "Config" || p.Groups[0].Scope != UpdateAll {
+		return errors.New("confirmed update plan is incomplete")
+	}
+	if version != "dev" && !stableConfigVersion(p.ResolvedVersion) {
+		return errors.New("confirmed plan has no resolved Config release")
+	}
+	return nil
+}
+
+// Fingerprint binds an update confirmation to the exact discovered work while
+// leaving the wall-clock check time out of its identity.
+func (p UpdatePlan) Fingerprint() string {
+	identity := struct {
+		Scope           UpdateScope
+		Groups          []UpdateGroup
+		Blocked         bool
+		ResolvedVersion string
+	}{p.Scope, p.Groups, p.Blocked, p.ResolvedVersion}
+	data, _ := json.Marshal(identity)
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
 
 // Plan discovers everything the current Config release can prove without
 // changing declared machine state. Its own private release adapter may be
 // prepared so Config can answer whether a newer Config exists.
 func (u Updater) Plan(scope UpdateScope) (UpdatePlan, error) {
+	return u.PlanContext(context.Background(), scope)
+}
+
+func (u Updater) PlanContext(ctx context.Context, scope UpdateScope) (UpdatePlan, error) {
 	if !scope.valid() {
 		return UpdatePlan{}, fmt.Errorf("invalid update scope")
 	}
 	plan := UpdatePlan{Scope: scope, CheckedAt: time.Now()}
-	configGroup, currentRelease := u.planConfigRelease()
+	configGroup, currentRelease, resolvedVersion := u.planConfigRelease(ctx)
+	plan.ResolvedVersion = resolvedVersion
 	plan.Groups = append(plan.Groups, configGroup)
 	if configGroup.State == UpdateUnavailable {
 		plan.Blocked = true
@@ -105,14 +148,14 @@ func (u Updater) Plan(scope UpdateScope) (UpdatePlan, error) {
 		return UpdatePlan{}, err
 	}
 	if machine.Mise {
-		miseGroup, ready := u.planMise()
+		miseGroup, ready := u.planMise(ctx)
 		plan.Groups = append(plan.Groups, miseGroup)
 		if ready {
 			if scope == UpdateAll || scope == UpdateSoftware {
-				plan.Groups = append(plan.Groups, u.planTools())
+				plan.Groups = append(plan.Groups, u.planTools(ctx))
 			}
 			if scope == UpdateAll || scope == UpdateRepositories {
-				plan.Groups = append(plan.Groups, u.planRepositories())
+				plan.Groups = append(plan.Groups, u.planRepositories(ctx))
 			}
 		} else {
 			if scope == UpdateAll || scope == UpdateSoftware {
@@ -129,7 +172,7 @@ func (u Updater) Plan(scope UpdateScope) (UpdatePlan, error) {
 			}
 		}
 		if scope == UpdateAll || scope == UpdateSoftware {
-			plan.Groups = append(plan.Groups, u.planPackages())
+			plan.Groups = append(plan.Groups, u.planPackages(ctx))
 		}
 	}
 	if machine.AgentSkills != nil && (scope == UpdateAll || scope == UpdateSoftware) {
@@ -142,58 +185,58 @@ func (u Updater) Plan(scope UpdateScope) (UpdatePlan, error) {
 	return plan, nil
 }
 
-func (u Updater) planConfigRelease() (UpdateGroup, bool) {
+func (u Updater) planConfigRelease(ctx context.Context) (UpdateGroup, bool, string) {
 	group := UpdateGroup{Name: "Config", Scope: UpdateAll}
 	if resumedVersion, resumed := os.LookupEnv(updateReexecEnv); resumed {
 		if resumedVersion != u.Version {
 			group.State = UpdateUnavailable
 			group.Summary = fmt.Sprintf("release handoff expects %s, but this is %s", resumedVersion, u.Version)
-			return group, false
+			return group, false, ""
 		}
 		group.State = UpdateCurrent
 		group.Summary = u.Version + " installed for this update"
-		return group, true
+		return group, true, u.Version
 	}
 	if u.Version == "dev" {
 		group.State = UpdateSkipped
 		group.Summary = "development build; release discovery skipped"
-		return group, true
+		return group, true, ""
 	}
 	if !stableConfigVersion(u.Version) {
 		group.State = UpdateUnavailable
 		group.Summary = fmt.Sprintf("build version %q cannot update itself", u.Version)
-		return group, false
+		return group, false, ""
 	}
-	if err := ensureTestedMise(u.ReleaseMiseProbe, u.InstallReleaseMise); err != nil {
+	if err := ensureTestedMiseContext(ctx, u.ReleaseMiseProbe, u.InstallReleaseMise); err != nil {
 		group.State = UpdateUnavailable
 		group.Summary = "release discovery unavailable: " + err.Error()
-		return group, false
+		return group, false, ""
 	}
-	resolved, err := u.resolveRelease()
+	resolved, err := u.resolveReleaseContext(ctx)
 	if err != nil {
 		group.State = UpdateUnavailable
 		group.Summary = "release discovery unavailable: " + err.Error()
-		return group, false
+		return group, false, ""
 	}
 	comparison := compareConfigVersions(resolved, u.Version)
 	switch {
 	case comparison < 0:
 		group.State = UpdateUnavailable
 		group.Summary = fmt.Sprintf("latest release %s is older than installed %s", resolved, u.Version)
-		return group, false
+		return group, false, resolved
 	case comparison > 0:
 		group.State = UpdateAvailable
 		group.Count = 1
 		group.Summary = u.Version + " → " + resolved
-		return group, false
+		return group, false, resolved
 	default:
 		group.State = UpdateCurrent
 		group.Summary = u.Version + " is current"
-		return group, true
+		return group, true, resolved
 	}
 }
 
-func (u Updater) planMise() (UpdateGroup, bool) {
+func (u Updater) planMise(ctx context.Context) (UpdateGroup, bool) {
 	group := UpdateGroup{Name: miseName, Scope: UpdateAll}
 	if !u.MachineMiseProbe.Exists("mise") {
 		group.State = UpdateAvailable
@@ -201,7 +244,7 @@ func (u Updater) planMise() (UpdateGroup, bool) {
 		group.Summary = "not installed → " + testedMiseVersion
 		return group, false
 	}
-	version, err := currentMiseVersion(u.MachineMiseProbe)
+	version, err := currentMiseVersionContext(ctx, u.MachineMiseProbe)
 	if err != nil {
 		group.State = UpdateAvailable
 		group.Count = 1
@@ -219,9 +262,9 @@ func (u Updater) planMise() (UpdateGroup, bool) {
 	return group, true
 }
 
-func (u Updater) planTools() UpdateGroup {
+func (u Updater) planTools(ctx context.Context) UpdateGroup {
 	group := UpdateGroup{Name: "Tools", Scope: UpdateSoftware}
-	result := run(u.MachineMisePlan, "mise", "outdated", "--json")
+	result := runContext(ctx, u.MachineMisePlan, "mise", "outdated", "--json")
 	if result.Err != nil {
 		group.State = UpdateUnavailable
 		group.Summary = result.Failure().Error()
@@ -261,9 +304,9 @@ func (u Updater) planTools() UpdateGroup {
 	return group
 }
 
-func (u Updater) planPackages() UpdateGroup {
+func (u Updater) planPackages(ctx context.Context) UpdateGroup {
 	group := UpdateGroup{Name: "Packages", Scope: UpdateSoftware}
-	result := run(u.MachineMisePlan, "mise", "bootstrap", "packages", "status", "--json")
+	result := runContext(ctx, u.MachineMisePlan, "mise", "bootstrap", "packages", "status", "--json")
 	if result.Err != nil {
 		group.State = UpdateUnavailable
 		group.Summary = result.Failure().Error()
@@ -293,9 +336,9 @@ func (u Updater) planPackages() UpdateGroup {
 	return group
 }
 
-func (u Updater) planRepositories() UpdateGroup {
+func (u Updater) planRepositories(ctx context.Context) UpdateGroup {
 	group := UpdateGroup{Name: "Repositories", Scope: UpdateRepositories}
-	result := run(u.MachineMisePlan, "mise", "bootstrap", "repos", "status", "--json")
+	result := runContext(ctx, u.MachineMisePlan, "mise", "bootstrap", "repos", "status", "--json")
 	if result.Err != nil {
 		group.State = UpdateUnavailable
 		group.Summary = result.Failure().Error()
@@ -368,6 +411,8 @@ func WriteUpdatePlan(out io.Writer, plan UpdatePlan) {
 	}
 	if plan.Blocked {
 		fmt.Fprintln(out, "\nUpdate is unavailable until Config release discovery succeeds.")
+	} else if _, _, unavailable := plan.Counts(plan.Scope); !plan.HasWork() && unavailable > 0 {
+		fmt.Fprintln(out, "\nNo runnable updates were found; some checks are unavailable.")
 	} else if !plan.HasWork() {
 		fmt.Fprintln(out, "\nEverything checked is current.")
 	}

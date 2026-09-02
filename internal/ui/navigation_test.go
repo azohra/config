@@ -102,33 +102,46 @@ func TestUpdateRunsOnlyWhenSelected(t *testing.T) {
 		t.Fatal("Update did not start discovery")
 	}
 	plan := config.UpdatePlan{Scope: config.UpdateSoftware, Groups: []config.UpdateGroup{{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending}}}
-	next, _ = planning.Update(updatePlanMsg{plan: plan, scope: config.UpdateSoftware, preview: true})
+	next, _ = planning.Update(updatePlanMsg{request: planning.planRequest, plan: plan, scope: config.UpdateSoftware})
 	preview := next.(Model)
 	next, cmd = preview.updateUpdate(press(tea.KeyEnter))
 	running := next.(Model)
 	if running.screen != screenRunning || running.operation.label != "Software update" || cmd == nil {
 		t.Fatalf("screen=%v label=%q command=%v, want running software update", running.screen, running.operation.label, cmd)
 	}
-	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "software", "--yes"}) {
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"--run-update", "software", plan.Fingerprint()}) {
 		t.Fatalf("software update command = %q %q", running.operation.name, running.operation.args)
 	}
 }
 
 func TestUpdatePreviewReusesAnInFlightDashboardCheck(t *testing.T) {
-	m := Model{screen: screenDashboard, checkingOverview: true}
+	m := Model{screen: screenDashboard, checkingOverview: true, planScope: config.UpdateSoftware, planRequest: 1, planCancel: func() {}}
 	next, cmd := m.beginUpdate(config.UpdateSoftware)
 	planning := next.(Model)
 	if planning.screen != screenUpdate || !planning.checkingUpdate || cmd == nil {
 		t.Fatalf("in-flight check was not reused: screen=%v checking=%v command=%v", planning.screen, planning.checkingUpdate, cmd)
 	}
 	overview := config.UpdatePlan{
-		Scope:  config.UpdateAll,
+		Scope:  config.UpdateSoftware,
 		Groups: []config.UpdateGroup{{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending}},
 	}
-	next, _ = planning.Update(updatePlanMsg{plan: overview, scope: config.UpdateAll})
+	next, _ = planning.Update(updatePlanMsg{request: planning.planRequest, plan: overview, scope: config.UpdateSoftware})
 	preview := next.(Model)
 	if preview.checkingUpdate || preview.updatePreview.Scope != config.UpdateSoftware || !preview.updatePreview.HasWork() {
 		t.Fatalf("dashboard check did not become the scoped preview: %+v", preview.updatePreview)
+	}
+}
+
+func TestUpdatePreviewReusesACompletedScopedCheck(t *testing.T) {
+	plan := config.UpdatePlan{
+		Scope:  config.UpdateSoftware,
+		Groups: []config.UpdateGroup{{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending}},
+	}
+	m := Model{screen: screenDashboard, overviewReady: true, updateOverview: plan}
+	next, cmd := m.beginUpdate(config.UpdateSoftware)
+	preview := next.(Model)
+	if cmd != nil || preview.checkingUpdate || preview.updatePreview.Fingerprint() != plan.Fingerprint() {
+		t.Fatalf("completed check was not reused: command=%v checking=%v preview=%+v", cmd, preview.checkingUpdate, preview.updatePreview)
 	}
 }
 
@@ -139,9 +152,29 @@ func TestLeavingAnUpdateCheckDoesNotReopenItsPreview(t *testing.T) {
 	next, _ = planning.updateUpdate(press(tea.KeyEscape))
 	dashboard := next.(Model)
 	plan := config.UpdatePlan{Scope: config.UpdateSoftware, Groups: []config.UpdateGroup{{State: config.UpdatePending}}}
-	next, _ = dashboard.Update(updatePlanMsg{plan: plan, scope: config.UpdateSoftware, preview: true})
+	next, _ = dashboard.Update(updatePlanMsg{request: planning.planRequest, plan: plan, scope: config.UpdateSoftware})
 	if got := next.(Model); got.screen != screenDashboard {
 		t.Fatalf("stale preview reopened screen %v", got.screen)
+	}
+}
+
+func TestAStaleSameScopeCheckCannotReplaceANewerRequest(t *testing.T) {
+	m := Model{screen: screenDashboard}
+	first, _ := m.beginUpdate(config.UpdateSoftware)
+	planning := first.(Model)
+	staleRequest := planning.planRequest
+
+	left, _ := planning.updateUpdate(press(tea.KeyEscape))
+	second, _ := left.(Model).beginUpdate(config.UpdateSoftware)
+	planning = second.(Model)
+	if planning.planRequest == staleRequest {
+		t.Fatal("a new check reused the cancelled request identity")
+	}
+	stale := config.UpdatePlan{Scope: config.UpdateSoftware, Groups: []config.UpdateGroup{{State: config.UpdateAvailable}}}
+	next, _ := planning.Update(updatePlanMsg{request: staleRequest, plan: stale, scope: config.UpdateSoftware})
+	got := next.(Model)
+	if !got.checkingUpdate || len(got.updatePreview.Groups) != 0 {
+		t.Fatalf("stale request replaced the active check: checking=%v preview=%+v", got.checkingUpdate, got.updatePreview)
 	}
 }
 
@@ -172,14 +205,14 @@ func TestRepositoryUpdateIsSeparateFromSoftwareUpdate(t *testing.T) {
 		t.Fatalf("screen=%v checking=%v command=%v", planning.screen, planning.checkingUpdate, cmd)
 	}
 	plan := config.UpdatePlan{Scope: config.UpdateRepositories, Groups: []config.UpdateGroup{{Name: "Repositories", Scope: config.UpdateRepositories, State: config.UpdatePending}}}
-	next, _ = planning.Update(updatePlanMsg{plan: plan, scope: config.UpdateRepositories, preview: true})
+	next, _ = planning.Update(updatePlanMsg{request: planning.planRequest, plan: plan, scope: config.UpdateRepositories})
 	preview := next.(Model)
 	next, cmd = preview.updateUpdate(press(tea.KeyEnter))
 	running := next.(Model)
 	if cmd == nil || running.screen != screenRunning || running.operation.label != "Repository update" {
 		t.Fatalf("screen=%v label=%q command=%v", running.screen, running.operation.label, cmd)
 	}
-	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "repositories", "--yes"}) {
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"--run-update", "repositories", plan.Fingerprint()}) {
 		t.Fatalf("repository update command = %q %q", running.operation.name, running.operation.args)
 	}
 }

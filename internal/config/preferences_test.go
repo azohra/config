@@ -37,7 +37,7 @@ func TestPreferenceInspectionOnlyRequiresAValidBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(preference.snapshotPath(paths), data, 0o600); err != nil {
+	if err := AtomicWrite(preference.snapshotPath(paths), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	current := preference.Inspect(paths)
@@ -99,7 +99,7 @@ func TestPreferenceBackupRefusesADomainThatHoldsNothing(t *testing.T) {
 
 	// An artifact already committed with nothing in it reports the way a
 	// missing one does, so Capture stays on offer.
-	if err := atomicWrite(preference.snapshotPath(paths), empty, 0o600); err != nil {
+	if err := AtomicWrite(preference.snapshotPath(paths), empty, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resource := preference.Inspect(paths)
@@ -113,7 +113,7 @@ func TestPreferenceThatCannotBeReadCanStillBeRecaptured(t *testing.T) {
 	// offers no way to replace the artifact it cannot read.
 	paths := testPaths(t)
 	preference := testMachine().Preferences[0]
-	if err := atomicWrite(preference.snapshotPath(paths), []byte("not a property list"), 0o600); err != nil {
+	if err := AtomicWrite(preference.snapshotPath(paths), []byte("not a property list"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	resource := preference.Inspect(paths)

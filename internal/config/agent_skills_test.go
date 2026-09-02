@@ -24,6 +24,7 @@ type fakeAgentSkillsRuntime struct {
 	available bool
 	skills    map[string]fakeAgentSkill
 	commands  []string
+	probes    []string
 	updates   int
 }
 
@@ -49,25 +50,40 @@ func (r *fakeAgentSkillsRuntime) Run(_ context.Context, name string, arguments .
 	if err != nil {
 		return Result{Err: err}
 	}
+	r.probes = append(r.probes, strings.Join(command, " "))
 	if len(command) == 1 && command[0] == "--version" {
 		return Result{Stdout: testedAgentSkillsVersion + "\n"}
 	}
 	if len(command) < 3 || command[0] != "list" || command[1] != "-g" {
 		return Result{Err: fmt.Errorf("unexpected probe: %v", command)}
 	}
-	agent := ""
-	if len(command) == 5 && command[2] == "-a" && command[4] == "--json" {
-		agent = command[3]
+	var requested []string
+	if len(command) >= 5 && command[2] == "--agent" && command[len(command)-1] == "--json" {
+		requested = command[3 : len(command)-1]
 	} else if len(command) != 3 || command[2] != "--json" {
 		return Result{Err: fmt.Errorf("unexpected list: %v", command)}
 	}
 	var listing []agentSkillListing
 	for name, skill := range r.skills {
-		if agent != "" && !slices.Contains(skill.Agents, agent) {
-			continue
+		agents := slices.Clone(skill.Agents)
+		if len(requested) > 0 {
+			agents = slices.DeleteFunc(agents, func(agent string) bool { return !slices.Contains(requested, agent) })
+			if len(agents) == 0 {
+				continue
+			}
+		}
+		for index, agent := range agents {
+			switch agent {
+			case "bob":
+				agents[index] = "IBM Bob"
+			case "claude-code":
+				agents[index] = "Claude Code"
+			case "codex":
+				agents[index] = "Codex"
+			}
 		}
 		listing = append(listing, agentSkillListing{
-			Name: name, Path: skill.Path, Scope: "global", SourceURL: skill.Source,
+			Name: name, Path: skill.Path, Scope: "global", SourceURL: skill.Source, Agents: agents,
 		})
 	}
 	slices.SortFunc(listing, func(left, right agentSkillListing) int {
@@ -357,7 +373,7 @@ func TestAgentSkillsReconcilePreservesASourceChange(t *testing.T) {
 	foreign.Sources[0].Skills = []string{"orca-cli"}
 	runtime.skills["orca-cli"] = fakeAgentSkill{
 		Source: "https://github.com/example/another.git", Path: runtime.skills["orca-cli"].Path,
-		Agents: []string{"claude-code", "codex"},
+		Agents: []string{"bob"},
 	}
 	manager.Skills = foreign
 	runtime.commands = nil
@@ -388,6 +404,75 @@ func TestAgentSkillsUpdateRefreshesOnlyDeclaredOwnership(t *testing.T) {
 	digest, err := agentSkillDirectoryDigest(runtime.skills["orca-cli"].Path)
 	if err != nil || manifest.Skills["orca-cli"].Digest != digest {
 		t.Fatalf("updated ownership digest = %q, want %q (%v)", manifest.Skills["orca-cli"].Digest, digest, err)
+	}
+}
+
+func TestAgentSkillsUpdateUsesOneCombinedInventoryPerSide(t *testing.T) {
+	paths := testAgentSkillPaths(t)
+	contract := testAgentSkills()
+	runtime := newFakeAgentSkillsRuntime(paths)
+	manager := agentSkillManager{Paths: paths, Skills: contract, Probe: runtime, Live: runtime, Log: Logger{Out: &bytes.Buffer{}}}
+	if err := manager.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	runtime.probes = nil
+	runtime.commands = nil
+	if err := manager.Update(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"--version",
+		"list -g --json",
+		"list -g --json",
+	}
+	if !slices.Equal(runtime.probes, want) {
+		t.Fatalf("probes = %v, want %v", runtime.probes, want)
+	}
+	if len(runtime.commands) != 1 || !strings.Contains(runtime.commands[0], "skills update") {
+		t.Fatalf("mutations = %v, want one update", runtime.commands)
+	}
+}
+
+func TestAgentSkillInventoryFallsBackForExceptionalDisplayNames(t *testing.T) {
+	paths := testAgentSkillPaths(t)
+	runtime := newFakeAgentSkillsRuntime(paths)
+	declaration := agentSkillDeclaration{Name: "orca-cli", Source: "https://github.com/stablyai/orca.git", Agents: []string{"bob"}}
+	runtime.install(t, declaration)
+
+	inventory, err := listAgentSkillInventory(runtime, declaration.Agents, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := inventory.Agents["bob"][declaration.Name]; !found {
+		t.Fatal("exceptional display name did not resolve through the scoped fallback")
+	}
+	want := []string{"list -g --json", "list -g --agent bob --json"}
+	if !slices.Equal(runtime.probes, want) {
+		t.Fatalf("probes = %v, want %v", runtime.probes, want)
+	}
+}
+
+func TestCurrentAgentSkillsDoNotRewriteTheirOwnershipManifest(t *testing.T) {
+	paths := testAgentSkillPaths(t)
+	contract := testAgentSkills()
+	runtime := newFakeAgentSkillsRuntime(paths)
+	manager := agentSkillManager{Paths: paths, Skills: contract, Probe: runtime, Live: runtime, Log: Logger{Out: &bytes.Buffer{}}}
+	if err := manager.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(agentSkillManifestPath(paths))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(agentSkillManifestPath(paths))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("current ownership manifest was replaced")
 	}
 }
 
@@ -477,7 +562,7 @@ func TestAgentSkillsUpdateRunsWithoutTheMiseResource(t *testing.T) {
 			return Machine{AgentSkills: &contract}, nil
 		},
 	}
-	if err := updater.Update(UpdateSoftware); err != nil {
+	if err := updater.Apply(testUpdatePlan(UpdateSoftware, "")); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.updates != 1 || !strings.Contains(output.String(), "declared agent skills updated") {

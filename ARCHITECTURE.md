@@ -54,6 +54,30 @@ release-age delay because this explicit operation promises the latest release;
 an exact resolved version, provenance verification, and downgrade refusal still
 gate replacement.
 
+Update planning has one domain contract for the CLI and terminal interface.
+The plan records the exact resolved Config release and has a stable fingerprint
+that excludes only its check time. The CLI applies the plan it prints. The
+terminal interface passes the fingerprint to a locked child command, which
+recomputes that scope once and refuses changed work before applying the newly
+validated plan. Applying an accepted plan never repeats release discovery; it
+acquires the recorded release exactly.
+
+The terminal interface starts only the software check in the background. A
+software selection reuses the completed plan or promotes that exact in-flight
+request, while a different selection cancels it through the provider
+subprocess context. Every request has a generation, so a late result cannot
+replace a newer same-scope check. Completed operations invalidate cached update
+status without starting another hidden
+scan; only the ordinary machine report refreshes, without covering the result
+screen.
+
+Child operations use a Config-owned JSON event stream. Logger sections and
+statuses carry explicit kinds, while provider bytes remain output events. The
+terminal output model incrementally handles UTF-8, ANSI sequences, carriage
+returns, and backspaces across write boundaries, and persists the final typed
+spans. A successful self-update emits the installed version; the parent
+interface then re-executes that command and reopens the persisted result.
+
 The scoped child configuration is not a separate Mise installation. Mise's
 tool store and tracked-configuration ledger remain user-wide. The machine
 repository is the Mac's baseline authority, while a loadable repository-local
@@ -155,15 +179,23 @@ missing or incompatible, then delegates machine convergence with:
 mise bootstrap --yes --skip-dirty
 ```
 
-Applying agent skills asks the pinned npx adapter for global and per-agent
-inventories. An existing skill from the declared source is adopted without a
-reinstall; missing skills or agent placements are reconciled by source. Config
+Applying agent skills asks the pinned npx adapter for one global inventory that
+includes every installed agent placement. An existing skill from the declared
+source is adopted without a reinstall; missing skills or agent placements are
+reconciled by source. Config
 records the canonical path and a digest of each adopted tree under Application
 Support. A compatible same-source tree changed by another skills CLI is drift
 that Apply can adopt without rewriting it. Explicit update and prune refuse
 unadopted content, while a different source remains a conflict. Inspection is
 offline and uses Config's own npm cache; apply and explicit software updates may
 fetch the pinned package and declared skill repositories.
+
+Reconciliation validates the adapter once and refreshes that inventory only
+after a mutation. The adapter reports display names for agent placements, so
+Config normalizes those names and falls back to a scoped query only for an
+exceptional name. Explicit updates reuse the preflight inventory and each tree's
+digest, then perform one post-update inventory and digest pass. Config writes
+the ownership manifest only when its canonical bytes changed.
 
 When repository hooks are declared, Config prepares their clone template before
 Mise runs and supplies that template only to Mise's child Git processes. It
@@ -293,10 +325,11 @@ revalidates every file it removes immediately before the operation.
 ## Packages
 
 `internal/config` owns the domain model, machine contract, subprocess boundary,
-inspection, apply, baselines, repository lifecycle, snapshot, and update flow.
-`internal/ui` renders the report, gathers explicit choices, previews cleanup,
-and launches scoped operations in child processes. `cmd/config` owns argument
-parsing and selects the CLI or terminal interface.
+typed operation events, inspection, apply, baselines, repository lifecycle,
+snapshot, and update coordinator. `internal/ui` renders those contracts,
+gathers explicit choices, previews cleanup, and launches locked operations in
+child processes. `cmd/config` owns argument parsing and selects the CLI or
+terminal interface.
 
 The release contains a single static binary for each supported macOS
 architecture. GitHub Releases is Config's distribution channel. The caller

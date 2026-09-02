@@ -340,5 +340,5 @@ func (p restoreProgress) save() error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(restoreStatePath(p.paths, p.record.Checkout), append(data, '\n'), 0o600)
+	return AtomicWrite(restoreStatePath(p.paths, p.record.Checkout), append(data, '\n'), 0o600)
 }

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -22,12 +23,12 @@ func TestRunOperationStreamsOutput(t *testing.T) {
 	done := make(chan tea.Msg, 1)
 	dir := t.TempDir()
 	go func() {
-		done <- runOperation(context.Background(), dir, "/bin/sh", []string{"-c", "printf 'one\\ntwo\\n'"}, events)()
+		done <- runOperation(context.Background(), dir, "/bin/sh", []string{"-c", "printf 'one\\ntwo\\n'"}, events, false)()
 	}()
 	var output string
 	var final operationEvent
 	for event := range events {
-		output += event.output
+		output += event.event.Text
 		if event.done {
 			final = event
 		}
@@ -49,10 +50,10 @@ func TestRunOperationCancelsProcessGroup(t *testing.T) {
 	pidfile := filepath.Join(dir, "descendant.pid")
 	script := "/bin/sh -c 'echo $$ > " + pidfile + "; sleep 30' & printf ready; wait"
 	go func() {
-		done <- runOperation(ctx, dir, "/bin/sh", []string{"-c", script}, events)()
+		done <- runOperation(ctx, dir, "/bin/sh", []string{"-c", script}, events, false)()
 	}()
 	first := <-events
-	if first.output != "ready" {
+	if first.event.Text != "ready" {
 		t.Fatalf("first event = %#v", first)
 	}
 	descendant := 0
@@ -101,21 +102,51 @@ func TestRefreshPreservesOperationFailure(t *testing.T) {
 }
 
 func TestAppendOutputNormalizesAndBounds(t *testing.T) {
-	got := appendOutput("one\r", "two\r\n")
+	output := outputFromString("one\r")
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: "two\r\n"})
+	got := output.String()
 	if got != "two\n" {
 		t.Fatalf("appendOutput() = %q", got)
 	}
-	got = appendOutput("", "\x1b[32mready\x1b[0m\rworking\rfinished\n")
+	output = terminalOutput{}
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: "\x1b[32mready\x1b[0m\rworking\rfinished\n"})
+	got = output.String()
 	if got != "finished\n" {
 		t.Fatalf("appendOutput() kept terminal animation: %q", got)
 	}
-	got = appendOutput("", "wait..\b\b  \b\bdone\a\n")
+	output = terminalOutput{}
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: "wait..\b\b  \b\bdone\a\n"})
+	got = output.String()
 	if got != "waitdone\n" {
 		t.Fatalf("appendOutput() kept cursor controls: %q", got)
 	}
-	got = appendOutput("", strings.Repeat("x", maxOperationOutput+10)+"\nlast\n")
+	output = terminalOutput{}
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: strings.Repeat("x", maxOperationOutput+10) + "\nlast\n"})
+	got = output.String()
 	if len(got) > maxOperationOutput || !strings.HasSuffix(got, "last\n") {
 		t.Fatalf("bounded output length=%d suffix=%q", len(got), got[len(got)-5:])
+	}
+}
+
+func TestTerminalOutputPreservesSplitUTF8AndANSI(t *testing.T) {
+	var output terminalOutput
+	check := []byte("✓")
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: string(check[:1])})
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: string(check[1:]) + " \x1b[3"})
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: "2mready\x1b[0m\n"})
+	if got := output.String(); got != "✓ ready\n" || !utf8.ValidString(got) {
+		t.Fatalf("split stream = %q", got)
+	}
+}
+
+func BenchmarkTerminalOutput(b *testing.B) {
+	chunk := config.OperationEvent{Kind: config.OperationOutput, Text: "\x1b[32mchecking\x1b[0m ✓ package\rready\n"}
+	for b.Loop() {
+		var output terminalOutput
+		for range 256 {
+			output.Append(chunk)
+		}
+		_ = output.String()
 	}
 }
 
@@ -123,15 +154,20 @@ func TestAppendOutputNormalizesAndBounds(t *testing.T) {
 // it ends, asking for a fresh inspection because it changed the machine.
 func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	events := make(chan operationEvent, 1)
-	m := Model{screen: screenRunning, operation: operation{label: "Apply", events: events}}
+	root := t.TempDir()
+	paths := config.Paths{Root: root, Home: root, StateDir: filepath.Join(root, "state")}
+	m := New(paths, config.Machine{}, "/bin/true", "dev")
+	m.screen = screenRunning
+	m.loading = false
+	m.operation = operation{label: "Apply", events: events}
 
-	next, cmd := m.updateOperation(operationEventMsg{output: "  ✓ layout already current\n"})
+	next, cmd := m.updateOperation(operationEventMsg{event: config.OperationEvent{Kind: config.OperationOK, Text: "layout already current"}})
 	running := next.(Model)
 	if running.screen != screenRunning {
 		t.Fatalf("output moved off the running screen: %v", running.screen)
 	}
-	if !strings.Contains(running.operation.output, "layout already current") {
-		t.Fatalf("output was not kept: %q", running.operation.output)
+	if !strings.Contains(running.operation.output.String(), "layout already current") {
+		t.Fatalf("output was not kept: %q", running.operation.output.String())
 	}
 	if cmd == nil {
 		t.Fatal("the interface stopped waiting for the rest of the operation")
@@ -142,10 +178,10 @@ func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	if result.screen != screenResult {
 		t.Fatalf("a finished operation left screen %v", result.screen)
 	}
-	if !result.loading {
-		t.Fatal("a finished operation did not refresh the report it invalidated")
+	if result.loading {
+		t.Fatal("a finished operation hid its result behind a refresh")
 	}
-	if result.last.label != "Apply" || !strings.Contains(result.last.output, "layout already current") {
+	if result.last.label != "Apply" || !strings.Contains(result.last.output.String(), "layout already current") {
 		t.Fatalf("the result was not carried to the result screen: %+v", result.last)
 	}
 	if result.operation.events != nil {
@@ -154,7 +190,11 @@ func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("no refresh was scheduled")
 	}
-	refreshed, _ := result.Update(reportMsg{report: config.Report{}})
+	refresh, ok := cmd().(reportMsg)
+	if !ok || !refresh.passive {
+		t.Fatalf("operation refresh = %#v, want passive report", refresh)
+	}
+	refreshed, _ := result.Update(refresh)
 	if got := refreshed.(Model); got.screen != screenResult || got.loading {
 		t.Fatalf("refresh hid the completed result: screen=%v loading=%v", got.screen, got.loading)
 	}
@@ -201,5 +241,24 @@ func TestResultBannerDistinguishesCancelledFromFailed(t *testing.T) {
 	done := Model{width: 80, height: 24, last: operationResult{label: "Apply"}}
 	if banner := ansi.Strip(done.resultBanner()); !strings.Contains(banner, "Apply complete") {
 		t.Fatalf("complete banner = %q", banner)
+	}
+}
+
+func TestConfigVersionEventRestartsTheParentAndReopensItsResult(t *testing.T) {
+	paths := config.Paths{StateDir: filepath.Join(t.TempDir(), "state")}
+	events := make(chan operationEvent, 1)
+	m := Model{
+		paths: paths, version: "v0.13.0", screen: screenRunning,
+		operation: operation{label: "Software update", events: events},
+	}
+	next, _ := m.updateOperation(operationEventMsg{event: config.OperationEvent{Kind: config.OperationVersion, Text: "v0.14.0"}})
+	finished, cmd := next.(Model).updateOperation(operationEventMsg{done: true})
+	result := finished.(Model)
+	if !result.RestartRequested() || result.screen != screenResult || cmd == nil {
+		t.Fatalf("version handoff = restart %v screen %v command %v", result.RestartRequested(), result.screen, cmd)
+	}
+	reopened := New(paths, config.Machine{}, "/tmp/config", "v0.14.0", true)
+	if reopened.screen != screenResult || reopened.loading || reopened.last.label != "Software update" {
+		t.Fatalf("reopened result = screen %v loading %v last %+v", reopened.screen, reopened.loading, reopened.last)
 	}
 }

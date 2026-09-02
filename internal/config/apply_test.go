@@ -201,7 +201,7 @@ func TestApplyDockWritesTheKeyThenRestartsOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(first+"\n"+second+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(first+"\n"+second+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runner := &sequencedDockRunner{listings: []string{dockDocument(second, first), dockDocument(first, second)}}
@@ -322,7 +322,7 @@ func TestApplyDockRestoresTheOriginalKeyWhenVerificationFails(t *testing.T) {
 	if err := os.MkdirAll(desired, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	original := dockState{Present: true, Tiles: []any{
@@ -352,7 +352,7 @@ func TestApplyDockRestoresTheOriginalKeyWhenAnOpaqueTileChanges(t *testing.T) {
 	if err := os.MkdirAll(desired, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	original := dockState{Present: true, Tiles: []any{
@@ -382,7 +382,7 @@ func TestApplyDockReportsARestartFailure(t *testing.T) {
 	if err := os.MkdirAll(desired, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	original := dockState{}
@@ -411,7 +411,7 @@ func TestRestorePreferenceImportsOnlyWhenTheAppIsInstalled(t *testing.T) {
 	machine := testMachine()
 	preference := machine.Preferences[0]
 	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
-	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+	if err := AtomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
@@ -506,7 +506,7 @@ func TestApplyReportsAFailedStepOnce(t *testing.T) {
 	if err := os.MkdirAll(first, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(first+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(first+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runner := &sequencedDockRunner{listings: []string{dockDocument()}}
@@ -600,7 +600,7 @@ func TestRestorePreferenceQuitsAndRelaunchesARunningApp(t *testing.T) {
 	machine := testMachine()
 	preference := machine.Preferences[0]
 	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
-	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+	if err := AtomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
@@ -633,7 +633,7 @@ func TestRestorePreferenceRefusesAnApplicationThatWillNotQuit(t *testing.T) {
 	machine := testMachine()
 	preference := machine.Preferences[0]
 	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
-	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+	if err := AtomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commands := fakeTools(t, fakeTool{name: "defaults"}, fakeTool{name: "open"}, fakeTool{name: "osascript"})
@@ -661,7 +661,7 @@ func TestDockRestartSurvivesAKillBetweenTheWriteAndTheRestart(t *testing.T) {
 	if err := os.MkdirAll(first, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte("~/Applications/First.app\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte("~/Applications/First.app\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := setMarker(paths, dockRestartMarker); err != nil {
@@ -693,7 +693,7 @@ func TestPreferenceRelaunchSurvivesAKillAfterTheQuit(t *testing.T) {
 	machine := testMachine()
 	preference := machine.Preferences[0]
 	plist := []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><true/></dict></plist>`)
-	if err := atomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
+	if err := AtomicWrite(preference.snapshotPath(paths), plist, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := setMarker(paths, relaunchMarker(preference.Bundle)); err != nil {

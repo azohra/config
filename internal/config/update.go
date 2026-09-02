@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -61,6 +62,7 @@ type Updater struct {
 	CurrentExecutable  func() (string, error)
 	LoadMachine        func() (Machine, error)
 	Reexec             func(string, []string, []string) error
+	OperationEvents    bool
 }
 
 func NewUpdater(paths Paths, out io.Writer, version string) Updater {
@@ -78,6 +80,10 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 	machineLive.Environment = append(machineLive.Environment, "NO_COLOR=1")
 	skillsLive := newAgentSkillsLiveRunner(paths)
 	skillsLive.Environment = append(skillsLive.Environment, "NO_COLOR=1")
+	live.Stdout, live.Stderr = out, out
+	machineLive.Stdout, machineLive.Stderr = out, out
+	skillsLive.Stdout, skillsLive.Stderr = out, out
+	_, operationEvents := out.(*OperationEventWriter)
 	return Updater{
 		Paths:        paths,
 		Version:      version,
@@ -110,6 +116,7 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 		CurrentExecutable:  os.Executable,
 		LoadMachine:        func() (Machine, error) { return LoadMachine(paths) },
 		Reexec:             syscall.Exec,
+		OperationEvents:    operationEvents,
 	}
 }
 
@@ -121,9 +128,15 @@ func releaseMisePath(paths Paths) string {
 	return filepath.Join(configReleaseRoot(paths), "mise")
 }
 
-func (u Updater) Update(scope UpdateScope) error {
-	if !scope.valid() {
-		return errors.New("invalid update scope")
+// Apply executes the immutable plan the caller displayed. Config release
+// discovery is not repeated; a newer release is acquired by its exact version.
+func (u Updater) Apply(plan UpdatePlan) error {
+	scope := plan.Scope
+	if err := plan.validate(u.Version); err != nil {
+		return err
+	}
+	if !plan.HasWork() {
+		return nil
 	}
 	if u.Version == "dev" {
 		// Say it. Otherwise a machine whose canonical command is a local build
@@ -155,17 +168,8 @@ func (u Updater) Update(scope UpdateScope) error {
 		return u.updateMachine(scope, machine)
 	}
 
-	// Release acquisition owns its private adapter. The machine Mise resource
-	// is not read or changed until the installed Config resumes machine work.
-	if err := u.prepareReleaseMise(); err != nil {
-		return err
-	}
 	u.Log.Section("Config")
-	resolvedVersion, err := u.resolveRelease()
-	if err != nil {
-		u.Log.Error(err.Error())
-		return fmt.Errorf("Config: %w", err)
-	}
+	resolvedVersion := plan.ResolvedVersion
 	if compareConfigVersions(resolvedVersion, u.Version) < 0 {
 		err := fmt.Errorf("refusing to replace Config %s with older release %s", u.Version, resolvedVersion)
 		u.Log.Error(err.Error())
@@ -178,6 +182,11 @@ func (u Updater) Update(scope UpdateScope) error {
 			return err
 		}
 		return u.updateMachine(scope, machine)
+	}
+	// Release acquisition owns its private adapter. The machine Mise resource
+	// is not read or changed until the installed Config resumes machine work.
+	if err := u.prepareReleaseMise(); err != nil {
+		return err
 	}
 	if err := u.installRelease(resolvedVersion); err != nil {
 		u.Log.Error(err.Error())
@@ -194,8 +203,13 @@ func (u Updater) Update(scope UpdateScope) error {
 		return fmt.Errorf("Config: %w", err)
 	}
 	u.Log.OK("Config " + installedVersion + " installed")
+	u.Log.Version(installedVersion)
 
-	environment := childEnvironment([]string{updateReexecEnv + "=" + installedVersion}, nil)
+	overrides := []string{updateReexecEnv + "=" + installedVersion}
+	if u.OperationEvents {
+		overrides = append(overrides, OperationEventsEnv+"=1")
+	}
+	environment := childEnvironment(overrides, nil)
 	arguments := append([]string{u.Config, "update"}, scope.arguments()...)
 	arguments = append(arguments, "--yes")
 	if err := u.Reexec(u.Config, arguments, environment); err != nil {
@@ -288,15 +302,15 @@ func (u Updater) installedVersion() (string, error) {
 	return version, nil
 }
 
-func (u Updater) resolveRelease() (string, error) {
+func (u Updater) resolveReleaseContext(ctx context.Context) (string, error) {
 	if u.ReleaseCache == "" || !filepath.IsAbs(u.ReleaseCache) ||
 		u.ReleaseState == "" || !filepath.IsAbs(u.ReleaseState) {
 		return "", errors.New("Config release cache paths are invalid")
 	}
-	if _, err := u.releaseOutput("mise", "--no-config", "cache", "clear"); err != nil {
+	if _, err := u.releaseOutputContext(ctx, "mise", "--no-config", "cache", "clear"); err != nil {
 		return "", fmt.Errorf("refresh Config release metadata: %w", err)
 	}
-	output, err := u.releaseOutput("mise", "--no-config", "latest", configReleaseBackend)
+	output, err := u.releaseOutputContext(ctx, "mise", "--no-config", "latest", configReleaseBackend)
 	if err != nil {
 		return "", fmt.Errorf("resolve latest Config release: %w", err)
 	}
@@ -351,12 +365,16 @@ func (u Updater) installRelease(version string) error {
 }
 
 func (u Updater) releaseOutput(name string, args ...string) (string, error) {
+	return u.releaseOutputContext(context.Background(), name, args...)
+}
+
+func (u Updater) releaseOutputContext(ctx context.Context, name string, args ...string) (string, error) {
 	var output, diagnostics strings.Builder
 	releaseRunner := u.releaseRunner()
 	releaseRunner.Stdout = &output
 	releaseRunner.Stderr = &diagnostics
 	releaseRunner.Stdin = nil
-	if err := releaseRunner.Command(name, args...); err != nil {
+	if err := releaseRunner.CommandContext(ctx, name, args...); err != nil {
 		if detail := strings.TrimSpace(diagnostics.String()); detail != "" {
 			return "", fmt.Errorf("%s: %w", detail, err)
 		}

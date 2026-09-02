@@ -379,7 +379,7 @@ func (b Bidirectional) CaptureChromePWAs() error {
 		if readErr != nil {
 			return readErr
 		}
-		if err := atomicWrite(chromePWAIconPath(b.Paths, app.ID), icon, 0o644); err != nil {
+		if err := AtomicWrite(chromePWAIconPath(b.Paths, app.ID), icon, 0o644); err != nil {
 			return err
 		}
 		apps[index] = app.chromePWA
@@ -393,7 +393,7 @@ func (b Bidirectional) CaptureChromePWAs() error {
 		return err
 	}
 	manifest = append(manifest, '\n')
-	if err := atomicWrite(chromePWASnapshotPath(b.Paths), manifest, 0o644); err != nil {
+	if err := AtomicWrite(chromePWASnapshotPath(b.Paths), manifest, 0o644); err != nil {
 		return err
 	}
 	keep := make(map[string]bool, len(normalized))
@@ -472,7 +472,7 @@ func writeChromePWABundle(paths Paths, destination string, app chromePWA, templa
 		{filepath.Join(contents, "Resources", "app.icns"), icon, 0o644},
 		{filepath.Join(contents, "Resources", "en.lproj", "InfoPlist.strings"), stringsFile, 0o644},
 	} {
-		if err := atomicWrite(file.path, file.data, file.mode); err != nil {
+		if err := AtomicWrite(file.path, file.data, file.mode); err != nil {
 			return err
 		}
 	}

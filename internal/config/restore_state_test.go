@@ -86,7 +86,7 @@ func TestPendingRestoreRefusesChangedCheckoutState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := atomicWrite(statePath, append(data, '\n'), 0o600); err != nil {
+		if err := AtomicWrite(statePath, append(data, '\n'), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := pendingRestore(paths, machine, io.Discard); err == nil || !strings.Contains(err.Error(), "restore plan changed") {

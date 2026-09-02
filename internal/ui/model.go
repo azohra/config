@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 
@@ -25,7 +26,8 @@ const (
 )
 
 type reportMsg struct {
-	report config.Report
+	report  config.Report
+	passive bool
 }
 
 type prunePlanMsg struct {
@@ -35,15 +37,18 @@ type prunePlanMsg struct {
 }
 
 type updatePlanMsg struct {
+	request uint64
 	plan    config.UpdatePlan
 	scope   config.UpdateScope
-	preview bool
 	err     error
 }
 
 type Model struct {
 	paths            config.Paths
 	executable       string
+	version          string
+	restart          bool
+	reopenResult     bool
 	inspector        config.Inspector
 	pruner           config.Pruner
 	updater          config.Updater
@@ -64,8 +69,12 @@ type Model struct {
 	updateScope      config.UpdateScope
 	checkingOverview bool
 	checkingUpdate   bool
-	awaitingUpdate   bool
 	updateError      error
+	planRequest      uint64
+	planScope        config.UpdateScope
+	planPreview      bool
+	planContext      context.Context
+	planCancel       context.CancelFunc
 	spinner          spinner.Model
 	width            int
 	height           int
@@ -73,12 +82,14 @@ type Model struct {
 	last             operationResult
 }
 
-func New(paths config.Paths, machine config.Machine, executable, version string) Model {
+func New(paths config.Paths, machine config.Machine, executable, version string, reopen ...bool) Model {
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
 	spin.Style = accent
-	return Model{
+	ctx, cancel := context.WithCancel(context.Background())
+	m := Model{
 		paths:            paths,
 		executable:       executable,
+		version:          version,
 		inspector:        config.NewInspector(paths, machine, config.NewMachineRunner(paths)),
 		pruner:           config.NewPruner(paths, machine, io.Discard),
 		updater:          config.NewUpdater(paths, io.Discard, version),
@@ -89,26 +100,43 @@ func New(paths config.Paths, machine config.Machine, executable, version string)
 		width:            80,
 		height:           24,
 		checkingOverview: true,
+		planRequest:      1,
+		planScope:        config.UpdateSoftware,
+		planContext:      ctx,
+		planCancel:       cancel,
 		last:             loadOperationResult(paths),
 	}
+	if len(reopen) > 0 && reopen[0] && m.last.label != "" {
+		m.planCancel()
+		m.planCancel = nil
+		m.planRequest++
+		m.checkingOverview = false
+		m.loading = false
+		m.screen = screenResult
+		m.reopenResult = true
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.inspectCmd(), m.updatePlanCmd(config.UpdateAll, false), m.spinner.Tick)
+	if m.reopenResult {
+		return m.inspectCmd(true)
+	}
+	return tea.Batch(m.inspectCmd(), m.updatePlanCmd(m.planContext, m.planRequest, m.planScope), m.spinner.Tick)
 }
 
-func (m Model) updatePlanCmd(scope config.UpdateScope, preview bool) tea.Cmd {
+func (m Model) updatePlanCmd(ctx context.Context, request uint64, scope config.UpdateScope) tea.Cmd {
 	planner := m.updater
 	return func() tea.Msg {
-		plan, err := planner.Plan(scope)
-		return updatePlanMsg{plan: plan, scope: scope, preview: preview, err: err}
+		plan, err := planner.PlanContext(ctx, scope)
+		return updatePlanMsg{request: request, plan: plan, scope: scope, err: err}
 	}
 }
 
-func (m Model) inspectCmd() tea.Cmd {
+func (m Model) inspectCmd(passive ...bool) tea.Cmd {
 	inspector := m.inspector
 	return func() tea.Msg {
-		return reportMsg{report: inspector.Inspect()}
+		return reportMsg{report: inspector.Inspect(), passive: len(passive) > 0 && passive[0]}
 	}
 }
 
@@ -141,6 +169,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 	case reportMsg:
 		m.report = msg.report
+		if msg.passive {
+			break
+		}
 		m.loading = false
 		m.scroll = 0
 		switch m.afterInspect {
@@ -158,8 +189,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.screen = screenDashboard
 			}
-		case screenResult:
-			m.screen = screenResult
 		default:
 			m.screen = screenDashboard
 		}
@@ -175,14 +204,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pruneHasWork = msg.hasWork
 		m.screen = screenPrune
 	case updatePlanMsg:
-		if msg.preview {
-			if !m.awaitingUpdate || m.screen != screenUpdate || msg.scope != m.updateScope {
+		if msg.request != m.planRequest || msg.scope != m.planScope {
+			break
+		}
+		if m.planCancel != nil {
+			m.planCancel()
+			m.planCancel = nil
+		}
+		if m.planPreview {
+			if m.screen != screenUpdate || msg.scope != m.updateScope {
 				break
 			}
 			m.checkingUpdate = false
-			m.awaitingUpdate = false
 			m.updateError = msg.err
 			m.updatePreview = msg.plan
+			m.overviewReady = msg.err == nil
+			m.overviewError = msg.err
+			m.updateOverview = msg.plan
 			m.updateScope = msg.scope
 			m.scroll = 0
 			m.screen = screenUpdate
@@ -191,14 +229,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overviewError = msg.err
 			m.updateOverview = msg.plan
 			m.checkingOverview = false
-			if m.screen == screenUpdate && m.checkingUpdate && m.awaitingUpdate {
-				m.checkingUpdate = false
-				m.updateError = msg.err
-				m.updatePreview = msg.plan
-				m.updatePreview.Scope = m.updateScope
-				m.scroll = 0
-				m.awaitingUpdate = false
-			}
 		}
 	case operationEventMsg:
 		return m.updateOperation(msg)
@@ -208,6 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelOperation()
 				return m, tea.Batch(commands...)
 			}
+			m.cancelUpdatePlanning()
 			return m, tea.Quit
 		}
 		if m.loading || m.screen == screenRunning {
@@ -237,3 +268,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.scroll = min(max(0, m.scroll), m.scrollBound())
 	return m, tea.Batch(commands...)
 }
+
+func (m *Model) cancelUpdatePlanning() {
+	if m.planCancel != nil {
+		m.planCancel()
+		m.planCancel = nil
+	}
+	m.planRequest++
+	m.checkingOverview = false
+	m.checkingUpdate = false
+}
+
+func (m Model) RestartRequested() bool { return m.restart }

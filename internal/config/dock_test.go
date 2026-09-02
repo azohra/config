@@ -223,7 +223,7 @@ func TestDockInitialCaptureCanTrackAnEmptyLayout(t *testing.T) {
 
 func TestDockCaptureCanAcceptAnUnavailableSavedApp(t *testing.T) {
 	paths := testPaths(t)
-	if err := atomicWrite(dockSnapshotPath(paths), []byte("/Applications/Missing.app\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte("/Applications/Missing.app\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	app := paths.InHome("Applications", "Example.app")
@@ -303,7 +303,7 @@ func TestDockDoesNotWedgeWhenASavedAppLeavesTheDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	const deleted = "/Applications/Deleted.app"
-	if err := atomicWrite(dockSnapshotPath(paths),
+	if err := AtomicWrite(dockSnapshotPath(paths),
 		[]byte("~/Applications/Present.app\n"+deleted+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

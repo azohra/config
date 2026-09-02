@@ -97,7 +97,7 @@ func TestAtomicWriteIsTheWriteAnInterruptWaitsFor(t *testing.T) {
 	// The behaviour, not the call sites: a write in progress holds the
 	// interrupt, and the count is balanced when it returns.
 	path := filepath.Join(t.TempDir(), "artifact")
-	if err := atomicWrite(path, []byte("state\n"), 0o600); err != nil {
+	if err := AtomicWrite(path, []byte("state\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	idle := make(chan struct{})
@@ -211,7 +211,7 @@ func TestAtomicWriteIsRefusedOnceStopping(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "artifact")
 	stopNewWrites()
 	done := make(chan error, 1)
-	go func() { done <- atomicWrite(path, []byte("state\n"), 0o600) }()
+	go func() { done <- AtomicWrite(path, []byte("state\n"), 0o600) }()
 	select {
 	case <-done:
 		t.Fatal("atomicWrite started a file after the process began stopping")

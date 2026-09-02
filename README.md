@@ -210,10 +210,19 @@ runs. A released build updates Config first when necessary and continues from
 the installed binary; a development build skips that release transition. When
 Mise is not declared, the machine portion has no Mise work to perform.
 
-The terminal interface checks update availability in the background, refreshes
-the selected scope before confirmation, and keeps the completed output open
-until it is dismissed. The last operation is also stored in Config's private
-state and can be reopened from the dashboard.
+The terminal interface checks the software scope in the background without
+starting the slower repository scan. Selecting software reuses a completed
+check or promotes the same in-flight request to the review screen; selecting
+another scope cancels it and starts only the requested check. Before applying,
+the child command recomputes the selected plan and refuses to continue if its
+identity changed.
+
+Operations stream typed Config progress and separately framed provider output,
+so terminal control sequences and split UTF-8 cannot change the meaning of a
+status line. A completed result stays open while machine status refreshes. If
+Config replaces itself, the parent interface restarts from the installed
+binary and reopens that persisted result. Results remain in Config's private
+state until a later operation replaces them.
 
 `config prune` previews Mise's shared inventory decisions alongside Config's
 own stale state. A declared but unavailable Mise is reported and its state

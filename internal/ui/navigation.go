@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"slices"
 
 	tea "charm.land/bubbletea/v2"
@@ -68,6 +69,7 @@ func unsettledResources(report config.Report) []config.Resource {
 }
 
 func (m Model) refreshInto(destination screen) (tea.Model, tea.Cmd) {
+	m.cancelUpdatePlanning()
 	m.afterInspect = destination
 	m.loading = true
 	return m, tea.Batch(m.inspectCmd(), m.spinner.Tick)
@@ -77,6 +79,7 @@ func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	actions := m.dashboardActions()
 	switch key.String() {
 	case "q", "esc":
+		m.cancelUpdatePlanning()
 		return m, tea.Quit
 	case "up", "k":
 		m.dashboardCursor = max(0, m.dashboardCursor-1)
@@ -104,6 +107,7 @@ func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case dashboardCleanup:
 			return m.beginPrune()
 		case dashboardQuit:
+			m.cancelUpdatePlanning()
 			return m, tea.Quit
 		}
 	}
@@ -115,23 +119,44 @@ func (m Model) beginUpdate(scope config.UpdateScope) (tea.Model, tea.Cmd) {
 	m.updateScope = scope
 	m.updatePreview = config.UpdatePlan{}
 	m.updateError = nil
-	m.awaitingUpdate = true
 	m.checkingUpdate = true
-	// Reuse an in-flight dashboard check instead of racing two release-cache
-	// refreshes. Once it arrives it is still the freshest available preview.
-	if m.checkingOverview && !m.overviewReady {
+	if m.overviewReady && m.overviewError == nil && m.updateOverview.Scope == scope {
+		m.updatePreview = m.updateOverview
+		m.checkingUpdate = false
+		m.scroll = 0
+		return m, nil
+	}
+	// The dashboard checks software only. Selecting that same scope promotes
+	// the exact in-flight request; selecting repositories cancels it.
+	if m.planCancel != nil && m.checkingOverview && m.planScope == scope {
+		m.planPreview = true
+		m.checkingOverview = false
 		m.scroll = 0
 		return m, m.spinner.Tick
 	}
 	m.scroll = 0
-	return m, tea.Batch(m.updatePlanCmd(scope, true), m.spinner.Tick)
+	cmd := m.startUpdatePlanning(scope, true)
+	return m, tea.Batch(cmd, m.spinner.Tick)
+}
+
+func (m *Model) startUpdatePlanning(scope config.UpdateScope, preview bool) tea.Cmd {
+	m.cancelUpdatePlanning()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.planCancel = cancel
+	m.planScope = scope
+	m.planPreview = preview
+	if preview {
+		m.checkingUpdate = true
+	} else {
+		m.checkingOverview = true
+	}
+	return m.updatePlanCmd(ctx, m.planRequest, scope)
 }
 
 func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc", "q":
-		m.awaitingUpdate = false
-		m.checkingUpdate = false
+		m.cancelUpdatePlanning()
 		m.screen = screenDashboard
 		return m, nil
 	case "r":
@@ -139,9 +164,8 @@ func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.checkingUpdate = true
-		m.awaitingUpdate = true
 		m.updateError = nil
-		return m, tea.Batch(m.updatePlanCmd(m.updateScope, true), m.spinner.Tick)
+		return m, tea.Batch(m.startUpdatePlanning(m.updateScope, true), m.spinner.Tick)
 	case "up", "k":
 		m.scroll = max(0, m.scroll-1)
 	case "down", "j":
@@ -158,12 +182,11 @@ func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenDashboard
 			return m, nil
 		}
-		m.awaitingUpdate = false
 		label, scope := "Software update", "software"
 		if m.updateScope == config.UpdateRepositories {
 			label, scope = "Repository update", "repositories"
 		}
-		return m.startOperation(label, m.executable, "update", scope, "--yes")
+		return m.startOperation(label, m.executable, "--run-update", scope, m.updatePreview.Fingerprint())
 	}
 	return m, nil
 }
@@ -298,6 +321,7 @@ func (m Model) updateSnapshot(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) beginPrune() (tea.Model, tea.Cmd) {
+	m.cancelUpdatePlanning()
 	m.screen = screenPrune
 	m.loading = true
 	m.scroll = 0

@@ -355,7 +355,7 @@ func (b Bidirectional) CaptureFinderFavorites(store finderFavoritesStore) error 
 	if err != nil {
 		return fmt.Errorf("encode Finder Favorites: %w", err)
 	}
-	return atomicWrite(finderFavoritesSnapshotPath(b.Paths), append(data, '\n'), 0o644)
+	return AtomicWrite(finderFavoritesSnapshotPath(b.Paths), append(data, '\n'), 0o644)
 }
 
 func (b Bidirectional) MarkFinderFavoritesIfCurrent(store finderFavoritesStore) error {

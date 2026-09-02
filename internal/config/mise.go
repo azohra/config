@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,10 +49,14 @@ func miseVersion(output string) (string, bool) {
 }
 
 func currentMiseVersion(runner Runner) (string, error) {
+	return currentMiseVersionContext(context.Background(), runner)
+}
+
+func currentMiseVersionContext(ctx context.Context, runner Runner) (string, error) {
 	if !runner.Exists("mise") {
 		return "", errors.New("mise is unavailable")
 	}
-	result := run(runner, "mise", "--version")
+	result := runContext(ctx, runner, "mise", "--version")
 	version, parsed := miseVersion(result.Stdout)
 	if result.Err != nil || !parsed {
 		return "", errors.New("mise version is unreadable")

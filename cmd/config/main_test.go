@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -455,6 +456,38 @@ func TestApplyRefusesAPlanTheCurrentStateDoesNotAllow(t *testing.T) {
 	garbage, code := runConfig(t, binary, home, "--apply", "not-a-plan")
 	if code != 1 {
 		t.Fatalf("config --apply accepted an undecodable plan (exit %d):\n%s", code, garbage)
+	}
+}
+
+func TestOperationEventModeFramesCommandErrors(t *testing.T) {
+	binary, home := buildConfig(t), fixtureHome(t)
+	t.Setenv(config.OperationEventsEnv, "1")
+	output, code := runConfig(t, binary, home, "--apply", "not-a-plan")
+	if code != 1 {
+		t.Fatalf("event operation exited %d:\n%s", code, output)
+	}
+	decoder := json.NewDecoder(strings.NewReader(output))
+	var events []config.OperationEvent
+	for decoder.More() {
+		var event config.OperationEvent
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatalf("decode event stream: %v\n%s", err, output)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 1 || events[0].Kind != config.OperationError || !strings.Contains(events[0].Text, "invalid character") {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestInternalUpdateRefusesAChangedPlanBeforeApply(t *testing.T) {
+	binary, home := buildConfig(t), fixtureHome(t)
+	output, code := runConfig(t, binary, home, "--run-update", "software", "sha256:stale")
+	if code != 1 || !strings.Contains(output, "update plan changed") {
+		t.Fatalf("changed update plan exited %d:\n%s", code, output)
+	}
+	if strings.Contains(output, "development build") {
+		t.Fatalf("changed update plan reached apply:\n%s", output)
 	}
 }
 

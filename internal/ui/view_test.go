@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"slices"
 	"strings"
@@ -27,9 +26,9 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 		"Configuration matches",
 		"cleanup runs on demand",
 		"Update software",
-		"Config, mise, tools, packages, skills",
+		"select to check software",
 		"Update repositories",
-		"Config and clean checkouts",
+		"select to check repositories",
 		"Clean up",
 		"unused tools and Config state",
 		"Inspect configuration",
@@ -90,10 +89,23 @@ func TestUpdatePreviewMakesTheMutationExplicit(t *testing.T) {
 		width: 80, height: 24,
 	}
 	view := ansi.Strip(m.renderUpdate())
-	for _, want := range []string{"Review first", "Packages", "checked when run", "Run software update", "enter run"} {
+	for _, want := range []string{"Review first", "Packages", "checked when run", "Check and update software", "enter run"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("update preview missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestSoftwareOverviewDoesNotClaimRepositoryFreshness(t *testing.T) {
+	m := Model{
+		overviewReady: true,
+		updateOverview: config.UpdatePlan{
+			Scope:  config.UpdateSoftware,
+			Groups: []config.UpdateGroup{{Name: "Config", Scope: config.UpdateAll, State: config.UpdateCurrent}},
+		},
+	}
+	if summary := m.updateActionSummary(config.UpdateRepositories, "select to check repositories"); summary != "select to check repositories" {
+		t.Fatalf("repository summary = %q", summary)
 	}
 }
 
@@ -217,17 +229,22 @@ func TestDashboardPresentsOperationResultAsBanner(t *testing.T) {
 // Coloring never alters the text it paints, and the command output sampled here
 // keeps every byte.
 func TestOperationTailColorsStepLines(t *testing.T) {
-	var narration bytes.Buffer
-	log := config.Logger{Out: &narration}
-	log.Info("checking machine state")
-	log.OK("machine state valid")
-	log.Warn("commit remains local")
-	log.Error("push rejected")
-	steps := strings.Split(strings.TrimRight(narration.String(), "\n"), "\n")
+	events := []config.OperationEvent{
+		{Kind: config.OperationInfo, Text: "checking machine state"},
+		{Kind: config.OperationOK, Text: "machine state valid"},
+		{Kind: config.OperationWarn, Text: "commit remains local"},
+		{Kind: config.OperationError, Text: "push rejected"},
+	}
+	steps := []string{"  → checking machine state", "  ✓ machine state valid", "  ! commit remains local", "  ✗ push rejected"}
 	untouched := []string{"[check] ~/.gitconfig  symlink  applied", " 1 file changed, 1 insertion(+)", "  1 file changed", "Snapshot"}
+	var output terminalOutput
+	for _, event := range events {
+		output.Append(event)
+	}
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: strings.Join(untouched, "\n")})
 
 	m := Model{width: 94}
-	lines := strings.Split(m.operationTail(strings.Join(append(steps, untouched...), "\n"), 20), "\n")
+	lines := strings.Split(m.operationTail(output, 20), "\n")
 	if len(lines) != len(steps)+len(untouched) {
 		t.Fatalf("operationTail returned %d lines for %d", len(lines), len(steps)+len(untouched))
 	}

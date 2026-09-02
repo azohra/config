@@ -216,9 +216,9 @@ func (m Model) dashboardActionText(action dashboardAction) (string, string) {
 	case dashboardInspect:
 		return "Inspect configuration", config.FormatCount(len(m.report.Resources), "resource", "resources")
 	case dashboardUpdateSoftware:
-		return "Update software", m.updateActionSummary(config.UpdateSoftware, "Config, mise, tools, packages, skills")
+		return "Update software", m.updateActionSummary(config.UpdateSoftware, "select to check software")
 	case dashboardUpdateRepositories:
-		return "Update repositories", m.updateActionSummary(config.UpdateRepositories, "Config and clean checkouts")
+		return "Update repositories", m.updateActionSummary(config.UpdateRepositories, "select to check repositories")
 	case dashboardLastResult:
 		detail := m.last.label
 		if !m.last.finishedAt.IsZero() {
@@ -239,7 +239,7 @@ func (m Model) updateActionSummary(scope config.UpdateScope, fallback string) st
 	if m.overviewError != nil {
 		return "update check unavailable"
 	}
-	if !m.overviewReady {
+	if !m.overviewReady || (m.updateOverview.Scope != config.UpdateAll && m.updateOverview.Scope != scope) {
 		return fallback
 	}
 	available, pending, unavailable := m.updateOverview.Counts(scope)
@@ -479,6 +479,12 @@ func (m Model) renderUpdate() string {
 		if m.updateScope == config.UpdateRepositories {
 			action = "Run repository update"
 		}
+		if m.updatePreview.HasDeferredWork() {
+			action = "Check and update software"
+			if m.updateScope == config.UpdateRepositories {
+				action = "Check and update repositories"
+			}
+		}
 		hints[0] = "enter run"
 	}
 	if scrollable {
@@ -511,7 +517,7 @@ func (m Model) renderRunning() string {
 }
 
 func (m Model) resultLines() []string {
-	output := strings.Trim(ansi.Hardwrap(m.last.output, panelContentWidth(m.width), true), "\n")
+	output := strings.Trim(ansi.Hardwrap(m.last.output.Styled(), panelContentWidth(m.width), true), "\n")
 	if m.last.err != nil && !strings.Contains(output, m.last.err.Error()) {
 		if output != "" {
 			output += "\n\n"
@@ -578,23 +584,8 @@ func outputTail(output string, available int) string {
 	return strings.Join(lines, "\n")
 }
 
-// An operation narrates itself in step lines; color those glyphs the way the
-// dashboard colors the same ones, and leave the rest of the pane — a driven
-// command's own output, and the operation's section headings — untouched.
-//
-// Shape is all this has to go on, so a command's own line in the Logger's exact
-// shape gets colored too, and a colored line whose style opened above the
-// retained tail loses that style after the glyph. Both are cosmetic. The way
-// up is provenance the pane cannot lose: operation events carrying their own
-// kind, rather than a wrapped and tailed string parsed back into steps.
-func (m Model) operationTail(output string, available int) string {
-	lines := strings.Split(outputTail(ansi.Hardwrap(output, panelContentWidth(m.width), true), available), "\n")
-	for index, line := range lines {
-		if glyph, step := config.StepGlyph(line); step {
-			lines[index] = strings.Replace(line, glyph, styledSymbol(glyph), 1)
-		}
-	}
-	return strings.Join(lines, "\n")
+func (m Model) operationTail(output terminalOutput, available int) string {
+	return output.Tail(panelContentWidth(m.width), available)
 }
 
 // scrollBound is the largest offset the rendered screen can actually use.

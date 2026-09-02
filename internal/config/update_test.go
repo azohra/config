@@ -36,7 +36,7 @@ fi
 	updater := newUpdateTestUpdater(paths, &output, "dev")
 	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, ""))
 	if err == nil || !strings.Contains(err.Error(), "Tools") {
 		t.Fatalf("Update() error = %v, want Tools failure", err)
 	}
@@ -99,7 +99,7 @@ fi
 `)
 
 			updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev")
-			if err := updater.Update(test.scope); err != nil {
+			if err := updater.Apply(testUpdatePlan(test.scope, "")); err != nil {
 				t.Fatal(err)
 			}
 			commands, err := os.ReadFile(logPath)
@@ -135,12 +135,29 @@ func TestUpdaterRejectsAnUnknownScopeBeforeMutation(t *testing.T) {
 	t.Setenv("UPDATE_TEST_LOG", logPath)
 	writeUpdateExecutable(t, misePath(paths), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$UPDATE_TEST_LOG\"\n")
 
-	err := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev").Update(UpdateScope(99))
+	err := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev").Apply(testUpdatePlan(UpdateScope(99), ""))
 	if err == nil || !strings.Contains(err.Error(), "invalid update scope") {
 		t.Fatalf("Update() error = %v, want invalid scope", err)
 	}
 	if commands, readErr := os.ReadFile(logPath); !os.IsNotExist(readErr) || len(commands) != 0 {
 		t.Fatalf("invalid scope ran commands %q: %v", commands, readErr)
+	}
+}
+
+func TestUpdaterDoesNotApplyAPlanWithoutWork(t *testing.T) {
+	updater := Updater{
+		Version: "dev",
+		LoadMachine: func() (Machine, error) {
+			t.Fatal("an empty update plan reached machine mutation")
+			return Machine{}, nil
+		},
+	}
+	plan := UpdatePlan{
+		Scope:  UpdateSoftware,
+		Groups: []UpdateGroup{{Name: "Config", Scope: UpdateAll, State: UpdateSkipped}},
+	}
+	if err := updater.Apply(plan); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -168,7 +185,7 @@ fi
 	updater.InstallMachineMise = nil
 	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, ""))
 	if err == nil || !strings.Contains(err.Error(), unsupported+" is unsupported") {
 		t.Fatalf("Update() error = %v, want unsupported mise version", err)
 	}
@@ -203,7 +220,7 @@ exit 23
 	updater.InstallMachineMise = func() error { return errors.New("install failed") }
 	updater.ReleaseMise.Stdout, updater.ReleaseMise.Stderr = &output, &output
 	updater.MachineMise.Stdout, updater.MachineMise.Stderr = &output, &output
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, ""))
 	if err == nil || !strings.Contains(err.Error(), "mise") {
 		t.Fatalf("Update() error = %v, want mise failure", err)
 	}
@@ -221,7 +238,7 @@ func TestUpdaterRequiresCanonicalMise(t *testing.T) {
 	paths := testPaths(t)
 	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "dev")
 	updater.InstallMachineMise = nil
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, ""))
 	if err == nil || !strings.Contains(err.Error(), "mise is unavailable") {
 		t.Fatalf("Update() error = %v, want unavailable Mise", err)
 	}
@@ -240,7 +257,7 @@ fi
 `)
 		return nil
 	}
-	if err := updater.Update(UpdateSoftware); err != nil {
+	if err := updater.Apply(testUpdatePlan(UpdateSoftware, "")); err != nil {
 		t.Fatal(err)
 	}
 	if installed != 1 {
@@ -256,7 +273,7 @@ func TestUpdaterLeavesMachineMiseUntouchedWhenUndeclared(t *testing.T) {
 		t.Fatal("an undeclared Mise resource was installed")
 		return nil
 	}
-	if err := updater.Update(UpdateAll); err != nil {
+	if err := updater.Apply(testUpdatePlan(UpdateAll, "")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(misePath(paths)); !os.IsNotExist(err) {
@@ -298,6 +315,7 @@ fi
 
 	var output bytes.Buffer
 	updater := newUpdateTestUpdater(paths, &output, "v0.4.0")
+	updater.OperationEvents = true
 	updater.LoadMachine = func() (Machine, error) {
 		t.Fatal("fresh released update parsed the machine before re-exec")
 		return Machine{}, nil
@@ -312,7 +330,7 @@ fi
 		reexecEnvironment = slices.Clone(environment)
 		return nil
 	}
-	if err := updater.Update(UpdateSoftware); err != nil {
+	if err := updater.Apply(testUpdatePlan(UpdateSoftware, "v0.5.0")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -322,8 +340,6 @@ fi
 	}
 	want := strings.Join([]string{
 		"--version||0|1|||||",
-		"--no-config cache clear||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
-		"--no-config latest " + configReleaseBackend + "||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
 		"--no-config install github:azohra/config@0.5.0||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
 		"--no-config where github:azohra/config@0.5.0||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
 		"candidate --version||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
@@ -341,6 +357,9 @@ fi
 	}
 	if environmentValue(reexecEnvironment, updateReexecEnv) != "v0.5.0" {
 		t.Fatalf("re-exec environment does not bind %s to the installed release", updateReexecEnv)
+	}
+	if environmentValue(reexecEnvironment, OperationEventsEnv) != "1" {
+		t.Fatal("re-exec did not preserve the operation event stream")
 	}
 	if !strings.Contains(output.String(), "Config v0.5.0 installed") {
 		t.Fatalf("output missing installed release:\n%s", output.String())
@@ -366,15 +385,12 @@ if [ "$2" = latest ]; then printf '0.5.0\n'; fi
 		t.Fatal("current canonical Config attempted to re-exec")
 		return nil
 	}
-	if err := updater.Update(UpdateSoftware); err != nil {
+	if err := updater.Apply(testUpdatePlan(UpdateSoftware, "v0.5.0")); err != nil {
 		t.Fatal(err)
 	}
 	commands, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(commands), " install ") || strings.Contains(string(commands), " where ") {
-		t.Fatalf("current Config was reacquired:\n%s", commands)
+	if !os.IsNotExist(err) || len(commands) != 0 {
+		t.Fatalf("current Config ran release commands %q: %v", commands, err)
 	}
 	if !strings.Contains(output.String(), "Config v0.5.0 is current") {
 		t.Fatalf("current result was not narrated:\n%s", output.String())
@@ -402,9 +418,9 @@ fi
 		t.Fatal("failed acquisition attempted to re-exec")
 		return nil
 	}
-	err := updater.Update(UpdateAll)
-	if err == nil || !strings.Contains(err.Error(), "Config") {
-		t.Fatalf("Update() error = %v, want release acquisition failure", err)
+	plan, err := updater.Plan(UpdateAll)
+	if err != nil || !plan.Blocked || !strings.Contains(plan.Groups[0].Summary, "release discovery unavailable") {
+		t.Fatalf("Plan() = %+v, %v, want blocked release discovery", plan, err)
 	}
 	commands, readErr := os.ReadFile(logPath)
 	if readErr != nil {
@@ -441,7 +457,7 @@ fi
 		t.Fatal("unverified build attempted to re-exec")
 		return nil
 	}
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, "v0.4.0"))
 	if err == nil || !strings.Contains(err.Error(), "installed Config version is unreadable") {
 		t.Fatalf("Update() error = %v, want installed version failure", err)
 	}
@@ -472,7 +488,7 @@ fi
 		t.Fatal("mismatched installed release attempted to re-exec")
 		return nil
 	}
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, "v0.5.0"))
 	if err == nil || !strings.Contains(err.Error(), "installed Config is v0.4.0, want resolved release v0.5.0") {
 		t.Fatalf("Update() error = %v, want exact installed release failure", err)
 	}
@@ -509,7 +525,7 @@ fi
 		t.Fatal("mismatched release executable attempted to re-exec")
 		return nil
 	}
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, "v0.5.0"))
 	if err == nil || !strings.Contains(err.Error(), "release executable is v0.4.0, want resolved release v0.5.0") {
 		t.Fatalf("Update() error = %v, want acquired executable version failure", err)
 	}
@@ -543,17 +559,13 @@ fi
 		t.Fatal("downgrade attempted to re-exec")
 		return nil
 	}
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, "v0.3.0"))
 	if err == nil || !strings.Contains(err.Error(), "older release v0.3.0") {
 		t.Fatalf("Update() error = %v, want downgrade refusal", err)
 	}
 	commands, readErr := os.ReadFile(logPath)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	want := "--version\n--no-config cache clear\n--no-config latest " + configReleaseBackend + "\n"
-	if string(commands) != want || strings.Contains(string(commands), "config install") {
-		t.Fatalf("downgrade commands = %q, want no install after resolution", commands)
+	if !os.IsNotExist(readErr) || len(commands) != 0 {
+		t.Fatalf("downgrade plan ran commands %q: %v", commands, readErr)
 	}
 }
 
@@ -580,7 +592,7 @@ fi
 		t.Fatal("resumed update attempted to re-exec")
 		return nil
 	}
-	if err := updater.Update(UpdateAll); err != nil {
+	if err := updater.Apply(testUpdatePlan(UpdateAll, "v0.5.0")); err != nil {
 		t.Fatal(err)
 	}
 	commands, err := os.ReadFile(logPath)
@@ -612,7 +624,7 @@ func TestReexecutedUpdaterRequiresTheCanonicalCommand(t *testing.T) {
 
 	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "v0.5.0")
 	updater.CurrentExecutable = func() (string, error) { return other, nil }
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, "v0.5.0"))
 	if err == nil || !strings.Contains(err.Error(), "outside the canonical command") {
 		t.Fatalf("Update() error = %v, want canonical command failure", err)
 	}
@@ -625,7 +637,7 @@ func TestReexecutedUpdaterRequiresItsVersionBoundMarker(t *testing.T) {
 	writeUpdateExecutable(t, configCommandPath(paths), "#!/bin/sh\nexit 0\n")
 
 	updater := newUpdateTestUpdater(paths, &bytes.Buffer{}, "v0.5.0")
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, "v0.5.0"))
 	if err == nil || !strings.Contains(err.Error(), `resumed with version "v0.4.0", but this is v0.5.0`) {
 		t.Fatalf("Update() error = %v, want marker version failure", err)
 	}
@@ -638,7 +650,7 @@ func TestDevelopmentUpdaterValidatesTheMachineBeforeMutation(t *testing.T) {
 	writeUpdateExecutable(t, misePath(paths), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$UPDATE_TEST_LOG\"\n")
 
 	updater := NewUpdater(paths, &bytes.Buffer{}, "dev")
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, ""))
 	if err == nil {
 		t.Fatal("development update accepted a missing machine document")
 	}
@@ -658,7 +670,7 @@ func TestReexecutedUpdaterValidatesTheMachineBeforeMutation(t *testing.T) {
 
 	updater := NewUpdater(paths, &bytes.Buffer{}, "v0.5.0")
 	updater.CurrentExecutable = func() (string, error) { return canonicalConfig, nil }
-	err := updater.Update(UpdateAll)
+	err := updater.Apply(testUpdatePlan(UpdateAll, "v0.5.0"))
 	if err == nil {
 		t.Fatal("resumed update accepted a missing machine document")
 	}
@@ -702,6 +714,20 @@ func newUpdateTestUpdater(paths Paths, out *bytes.Buffer, version string) Update
 	updater := NewUpdater(paths, out, version)
 	updater.LoadMachine = func() (Machine, error) { return Machine{Mise: true}, nil }
 	return updater
+}
+
+func testUpdatePlan(scope UpdateScope, resolvedVersion string) UpdatePlan {
+	state := UpdateCurrent
+	if resolvedVersion == "" {
+		state = UpdateSkipped
+	}
+	return UpdatePlan{
+		Scope: scope, ResolvedVersion: resolvedVersion,
+		Groups: []UpdateGroup{
+			{Name: "Config", Scope: UpdateAll, State: state},
+			{Name: "Machine update", Scope: scope, State: UpdatePending},
+		},
+	}
 }
 
 func environmentValue(environment []string, name string) string {

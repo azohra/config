@@ -187,7 +187,7 @@ func TestRepositoryHooksRefreshOnlyCopiesConfigStillOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	updated := []byte("#!/bin/sh\nprintf updated\n")
-	if err := atomicWrite(fixture.source, updated, 0o755); err != nil {
+	if err := AtomicWrite(fixture.source, updated, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil); resource.State != Drift || !resource.Allows(Apply) {
@@ -202,7 +202,7 @@ func TestRepositoryHooksRefreshOnlyCopiesConfigStillOwns(t *testing.T) {
 	}
 
 	foreign := []byte("#!/bin/sh\nexec ./repository-owned\n")
-	if err := atomicWrite(repoHook, foreign, 0o755); err != nil {
+	if err := AtomicWrite(repoHook, foreign, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	resource := inspectRepositoryHooks(fixture.paths, fixture.machine, fixture.runner, fixture.inventory(), nil)

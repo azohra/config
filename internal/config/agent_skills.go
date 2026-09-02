@@ -111,11 +111,12 @@ func sortedAgentSkillNames(skills map[string]agentSkillDeclaration) []string {
 }
 
 type agentSkillListing struct {
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Scope     string `json:"scope"`
-	Source    string `json:"source"`
-	SourceURL string `json:"sourceUrl"`
+	Name      string   `json:"name"`
+	Path      string   `json:"path"`
+	Scope     string   `json:"scope"`
+	Source    string   `json:"source"`
+	SourceURL string   `json:"sourceUrl"`
+	Agents    []string `json:"agents"`
 }
 
 func (s agentSkillListing) locator() string {
@@ -263,7 +264,11 @@ func writeAgentSkillManifest(paths Paths, manifest agentSkillManifest) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(agentSkillManifestPath(paths), append(data, '\n'), 0o600)
+	data = append(data, '\n')
+	if current, readErr := os.ReadFile(agentSkillManifestPath(paths)); readErr == nil && slices.Equal(current, data) {
+		return nil
+	}
+	return AtomicWrite(agentSkillManifestPath(paths), data, 0o600)
 }
 
 func agentSkillsArguments(offline bool, arguments ...string) []string {
@@ -324,27 +329,62 @@ func loadAgentSkillInventory(paths Paths, runner Runner, agents []string, offlin
 	if err := requireAgentSkillsAdapter(runner, offline); err != nil {
 		return agentSkillInventory{}, err
 	}
-	globalResult := runAgentSkills(runner, offline, "list", "-g", "--json")
-	if globalResult.Err != nil {
-		return agentSkillInventory{}, fmt.Errorf("list global skills: %w", globalResult.Failure())
+	return listAgentSkillInventory(runner, agents, offline)
+}
+
+func listAgentSkillInventory(runner Runner, agents []string, offline bool) (agentSkillInventory, error) {
+	result := runAgentSkills(runner, offline, "list", "-g", "--json")
+	if result.Err != nil {
+		return agentSkillInventory{}, fmt.Errorf("list global agent skills: %w", result.Failure())
 	}
-	global, err := parseAgentSkillListing(globalResult.Stdout)
+	global, err := parseAgentSkillListing(result.Stdout)
 	if err != nil {
-		return agentSkillInventory{}, fmt.Errorf("read global skills: %w", err)
+		return agentSkillInventory{}, fmt.Errorf("read global agent skills: %w", err)
 	}
 	inventory := agentSkillInventory{Global: global, Agents: make(map[string]map[string]agentSkillListing, len(agents))}
 	for _, agent := range agents {
-		result := runAgentSkills(runner, offline, "list", "-g", "-a", agent, "--json")
-		if result.Err != nil {
-			return agentSkillInventory{}, fmt.Errorf("list %s skills: %w", agent, result.Failure())
+		inventory.Agents[agent] = map[string]agentSkillListing{}
+	}
+	for name, skill := range global {
+		for _, displayName := range skill.Agents {
+			for _, agent := range agents {
+				if normalizedAgentName(displayName) == normalizedAgentName(agent) {
+					inventory.Agents[agent][name] = skill
+				}
+			}
 		}
-		listing, err := parseAgentSkillListing(result.Stdout)
-		if err != nil {
-			return agentSkillInventory{}, fmt.Errorf("read %s skills: %w", agent, err)
+	}
+	// JSON uses display names rather than CLI identifiers. Most differ only in
+	// punctuation and case. Ask separately only when that normalization cannot
+	// identify an existing placement; this preserves support for exceptional
+	// names without making every inventory N+1 commands.
+	if len(global) > 0 {
+		for _, agent := range agents {
+			if len(inventory.Agents[agent]) > 0 {
+				continue
+			}
+			result := runAgentSkills(runner, offline, "list", "-g", "--agent", agent, "--json")
+			if result.Err != nil {
+				return agentSkillInventory{}, fmt.Errorf("list %s agent skills: %w", agent, result.Failure())
+			}
+			listing, err := parseAgentSkillListing(result.Stdout)
+			if err != nil {
+				return agentSkillInventory{}, fmt.Errorf("read %s agent skills: %w", agent, err)
+			}
+			inventory.Agents[agent] = listing
 		}
-		inventory.Agents[agent] = listing
 	}
 	return inventory, nil
+}
+
+func normalizedAgentName(name string) string {
+	var normalized strings.Builder
+	for _, character := range strings.ToLower(name) {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			normalized.WriteRune(character)
+		}
+	}
+	return normalized.String()
 }
 
 func sameAgentSkillSource(left, right string) bool {
@@ -524,25 +564,36 @@ func (m agentSkillManager) command(arguments ...string) error {
 }
 
 func (m agentSkillManager) Reconcile() error {
-	return m.reconcile(true)
+	state, err := m.prepare(true)
+	if err == nil {
+		m.Log.OK(FormatCount(len(state.desired), "agent skill current", "agent skills current"))
+	}
+	return err
 }
 
-func (m agentSkillManager) reconcile(adoptChanges bool) error {
+type agentSkillState struct {
+	manifest agentSkillManifest
+	desired  map[string]agentSkillDeclaration
+	digests  map[string]string
+}
+
+func (m agentSkillManager) prepare(adoptChanges bool) (agentSkillState, error) {
 	manifest, _, err := readAgentSkillManifest(m.Paths)
 	if err != nil {
-		return fmt.Errorf("read agent skill ownership: %w", err)
+		return agentSkillState{}, fmt.Errorf("read agent skill ownership: %w", err)
 	}
 	if err := validateAgentSkillsLock(m.Paths); err != nil {
-		return err
+		return agentSkillState{}, err
 	}
 	if err := requireAgentSkillsAdapter(m.Probe, false); err != nil {
-		return err
+		return agentSkillState{}, err
 	}
-	inventory, err := loadAgentSkillInventory(m.Paths, m.Probe, m.Skills.Agents, true)
+	inventory, err := listAgentSkillInventory(m.Probe, m.Skills.Agents, true)
 	if err != nil {
-		return err
+		return agentSkillState{}, err
 	}
 	desired := m.Skills.desired()
+	digests := make(map[string]string, len(desired))
 	installBySource := map[string][]string{}
 	var failures []error
 	for _, name := range sortedAgentSkillNames(desired) {
@@ -560,14 +611,15 @@ func (m agentSkillManager) reconcile(adoptChanges bool) error {
 			continue
 		}
 		ownedStateChanged := false
-		if found && owned {
+		if found {
 			digest, digestErr := agentSkillDirectoryDigest(live.Path)
 			if digestErr != nil {
 				failures = append(failures, fmt.Errorf("%s is unreadable; left untouched", name))
 				delete(desired, name)
 				continue
 			}
-			ownedStateChanged = ownership.Path != live.Path || digest != ownership.Digest
+			digests[name] = digest
+			ownedStateChanged = owned && (ownership.Path != live.Path || digest != ownership.Digest)
 			if ownedStateChanged && !adoptChanges {
 				failures = append(failures, fmt.Errorf("%s changed since Config recorded it; left untouched", name))
 				delete(desired, name)
@@ -598,6 +650,7 @@ func (m agentSkillManager) reconcile(adoptChanges bool) error {
 		sources = append(sources, source)
 	}
 	slices.Sort(sources)
+	mutated := false
 	for _, source := range sources {
 		names := installBySource[source]
 		slices.Sort(names)
@@ -606,6 +659,7 @@ func (m agentSkillManager) reconcile(adoptChanges bool) error {
 		arguments = append(arguments, "--agent")
 		arguments = append(arguments, m.Skills.Agents...)
 		arguments = append(arguments, "-y")
+		mutated = true
 		if err := m.command(arguments...); err != nil {
 			failures = append(failures, fmt.Errorf("install %s: %w", strings.Join(names, ", "), err))
 			for _, name := range names {
@@ -614,30 +668,39 @@ func (m agentSkillManager) reconcile(adoptChanges bool) error {
 		}
 	}
 
-	refreshed, refreshErr := loadAgentSkillInventory(m.Paths, m.Probe, m.Skills.Agents, true)
-	if refreshErr != nil {
-		failures = append(failures, refreshErr)
-	} else {
+	if mutated {
+		inventory, err = listAgentSkillInventory(m.Probe, m.Skills.Agents, true)
+		if err != nil {
+			failures = append(failures, err)
+		} else {
+			digests = make(map[string]string, len(desired))
+		}
+	}
+	if err == nil {
 		for _, name := range sortedAgentSkillNames(desired) {
 			declaration := desired[name]
-			live, found := refreshed.Global[name]
+			live, found := inventory.Global[name]
 			if !found || !sameAgentSkillSource(live.locator(), declaration.Source) {
 				failures = append(failures, fmt.Errorf("%s did not reconcile", name))
 				continue
 			}
 			current := true
 			for _, agent := range declaration.Agents {
-				installed, present := refreshed.Agents[agent][name]
+				installed, present := inventory.Agents[agent][name]
 				current = current && present && sameAgentSkillSource(installed.locator(), declaration.Source)
 			}
 			if !current {
 				failures = append(failures, fmt.Errorf("%s agent links did not reconcile", name))
 				continue
 			}
-			digest, err := agentSkillDirectoryDigest(live.Path)
-			if err != nil {
-				failures = append(failures, fmt.Errorf("record %s: %w", name, err))
-				continue
+			digest := digests[name]
+			if digest == "" {
+				digest, err = agentSkillDirectoryDigest(live.Path)
+				if err != nil {
+					failures = append(failures, fmt.Errorf("record %s: %w", name, err))
+					continue
+				}
+				digests[name] = digest
 			}
 			agents := append([]string(nil), declaration.Agents...)
 			if previous, exists := manifest.Skills[name]; exists && sameAgentSkillSource(previous.Source, declaration.Source) {
@@ -652,29 +715,21 @@ func (m agentSkillManager) reconcile(adoptChanges bool) error {
 	if err := writeAgentSkillManifest(m.Paths, manifest); err != nil {
 		failures = append(failures, fmt.Errorf("record agent skill ownership: %w", err))
 	}
-	if len(failures) == 0 {
-		m.Log.OK(FormatCount(len(desired), "agent skill current", "agent skills current"))
-	}
-	return errors.Join(failures...)
+	return agentSkillState{manifest: manifest, desired: desired, digests: digests}, errors.Join(failures...)
 }
 
 func (m agentSkillManager) Update() error {
-	if err := m.reconcile(false); err != nil {
-		return err
-	}
-	manifest, _, err := readAgentSkillManifest(m.Paths)
+	state, err := m.prepare(false)
 	if err != nil {
 		return err
 	}
-	desired := m.Skills.desired()
-	names := sortedAgentSkillNames(desired)
+	names := sortedAgentSkillNames(state.desired)
 	for _, name := range names {
-		ownership, owned := manifest.Skills[name]
-		if !owned || !sameAgentSkillSource(ownership.Source, desired[name].Source) {
+		ownership, owned := state.manifest.Skills[name]
+		if !owned || !sameAgentSkillSource(ownership.Source, state.desired[name].Source) {
 			return fmt.Errorf("%s has no current Config ownership", name)
 		}
-		digest, digestErr := agentSkillDirectoryDigest(ownership.Path)
-		if digestErr != nil || digest != ownership.Digest {
+		if state.digests[name] != ownership.Digest {
 			return fmt.Errorf("%s changed since Config recorded it; left untouched", name)
 		}
 	}
@@ -683,25 +738,25 @@ func (m agentSkillManager) Update() error {
 	if err := m.command(arguments...); err != nil {
 		return err
 	}
-	inventory, err := loadAgentSkillInventory(m.Paths, m.Probe, m.Skills.Agents, true)
+	inventory, err := listAgentSkillInventory(m.Probe, m.Skills.Agents, true)
 	if err != nil {
 		return err
 	}
 	for _, name := range names {
 		live, found := inventory.Global[name]
-		if !found || !sameAgentSkillSource(live.locator(), desired[name].Source) {
+		if !found || !sameAgentSkillSource(live.locator(), state.desired[name].Source) {
 			return fmt.Errorf("%s did not remain current after update", name)
 		}
 		digest, err := agentSkillDirectoryDigest(live.Path)
 		if err != nil {
 			return err
 		}
-		ownership := manifest.Skills[name]
+		ownership := state.manifest.Skills[name]
 		ownership.Path = live.Path
 		ownership.Digest = digest
-		manifest.Skills[name] = ownership
+		state.manifest.Skills[name] = ownership
 	}
-	if err := writeAgentSkillManifest(m.Paths, manifest); err != nil {
+	if err := writeAgentSkillManifest(m.Paths, state.manifest); err != nil {
 		return err
 	}
 	m.Log.OK("declared agent skills updated")

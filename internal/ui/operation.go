@@ -1,14 +1,18 @@
 package ui
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/azohra/config/internal/config"
 )
@@ -19,24 +23,25 @@ type operation struct {
 	label     string
 	name      string
 	args      []string
-	output    string
+	output    terminalOutput
 	events    <-chan operationEvent
 	cancel    context.CancelFunc
 	cancelled bool
+	version   string
 }
 
 type operationResult struct {
 	label      string
-	output     string
+	output     terminalOutput
 	err        error
 	cancelled  bool
 	finishedAt time.Time
 }
 
 type operationEvent struct {
-	output string
-	err    error
-	done   bool
+	event config.OperationEvent
+	err   error
+	done  bool
 }
 
 type operationEventMsg operationEvent
@@ -47,9 +52,9 @@ type eventWriter struct {
 }
 
 func (w eventWriter) Write(data []byte) (int, error) {
-	chunk := string(append([]byte(nil), data...))
+	event := config.OperationEvent{Kind: config.OperationOutput, Text: string(append([]byte(nil), data...))}
 	select {
-	case w.events <- operationEvent{output: chunk}:
+	case w.events <- operationEvent{event: event}:
 		return len(data), nil
 	case <-w.ctx.Done():
 		return 0, w.ctx.Err()
@@ -57,33 +62,95 @@ func (w eventWriter) Write(data []byte) (int, error) {
 }
 
 func (m Model) startOperation(label, name string, args ...string) (tea.Model, tea.Cmd) {
+	m.cancelUpdatePlanning()
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan operationEvent)
 	m.operation = operation{label: label, name: name, args: append([]string(nil), args...), events: events, cancel: cancel}
 	m.screen = screenRunning
 	return m, tea.Batch(
 		m.spinner.Tick,
-		runOperation(ctx, m.paths.Root, name, args, events),
+		runOperation(ctx, m.paths.Root, name, args, events, true),
 		waitOperation(events),
 	)
 }
 
-func runOperation(ctx context.Context, dir, name string, args []string, events chan<- operationEvent) tea.Cmd {
+func runOperation(ctx context.Context, dir, name string, args []string, events chan<- operationEvent, structured bool) tea.Cmd {
 	return func() tea.Msg {
 		defer close(events)
 		command := exec.CommandContext(ctx, name, args...)
 		command.Dir = dir
 		settle := config.InterruptGroup(command, config.CommandWaitDelay)
 		writer := eventWriter{ctx: ctx, events: events}
-		command.Stdout = writer
 		command.Stderr = writer
-		err := command.Run()
+		var err error
+		if structured {
+			command.Env = operationEnvironment()
+			stdout, pipeErr := command.StdoutPipe()
+			if pipeErr != nil {
+				err = pipeErr
+			} else if startErr := command.Start(); startErr != nil {
+				err = startErr
+			} else {
+				decodeErr := decodeOperationEvents(ctx, stdout, events)
+				waitErr := command.Wait()
+				err = errors.Join(waitErr, decodeErr)
+			}
+		} else {
+			command.Stdout = writer
+			err = command.Run()
+		}
 		settle(err)
 		// A successful operation whose descendant still holds the output pipes
 		// ends in ErrWaitDelay. Reporting that as a failed Apply, Save, or
 		// Update reports a machine that did not converge when it did.
 		events <- operationEvent{err: config.CommandFailure(command, err), done: true}
 		return nil
+	}
+}
+
+func operationEnvironment() []string {
+	prefix := config.OperationEventsEnv + "="
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, prefix) {
+			environment = append(environment, entry)
+		}
+	}
+	return append(environment, prefix+"1")
+}
+
+func decodeOperationEvents(ctx context.Context, stream io.Reader, events chan<- operationEvent) error {
+	reader := bufio.NewReader(stream)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) == 0 && errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		var event config.OperationEvent
+		if err := json.Unmarshal(line, &event); err != nil || !knownOperationEvent(event.Kind) {
+			event = config.OperationEvent{Kind: config.OperationOutput, Text: string(line)}
+		}
+		select {
+		case events <- operationEvent{event: event}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("read Config operation event: %w", readErr)
+		}
+	}
+}
+
+func knownOperationEvent(kind config.OperationEventKind) bool {
+	switch kind {
+	case config.OperationOutput, config.OperationSection, config.OperationOK, config.OperationInfo,
+		config.OperationWarn, config.OperationError, config.OperationVersion:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -98,8 +165,12 @@ func waitOperation(events <-chan operationEvent) tea.Cmd {
 }
 
 func (m Model) updateOperation(msg operationEventMsg) (tea.Model, tea.Cmd) {
-	if msg.output != "" {
-		m.operation.output = appendOutput(m.operation.output, msg.output)
+	if msg.event.Kind != "" {
+		if msg.event.Kind == config.OperationVersion {
+			m.operation.version = msg.event.Text
+		} else {
+			m.operation.output.Append(msg.event)
+		}
 		return m, waitOperation(m.operation.events)
 	}
 	if !msg.done {
@@ -115,17 +186,22 @@ func (m Model) updateOperation(msg operationEventMsg) (tea.Model, tea.Cmd) {
 		cancelled:  m.operation.cancelled,
 		finishedAt: time.Now(),
 	}
+	installedVersion := m.operation.version
 	if err := saveOperationResult(m.paths, result); err != nil {
-		result.output = appendOutput(result.output, "\n  ! Last result was not saved: "+err.Error()+"\n")
+		result.output.Append(config.OperationEvent{Kind: config.OperationWarn, Text: "Last result was not saved: " + err.Error()})
 	}
 	m.last = result
 	m.operation = operation{}
 	m.screen = screenResult
-	m.afterInspect = screenResult
-	m.loading = true
-	m.checkingOverview = true
+	m.cancelUpdatePlanning()
+	m.checkingOverview = false
 	m.overviewReady = false
-	return m, tea.Batch(m.inspectCmd(), m.updatePlanCmd(config.UpdateAll, false), m.spinner.Tick)
+	m.overviewError = nil
+	if msg.err == nil && installedVersion != "" && installedVersion != m.version {
+		m.restart = true
+		return m, tea.Quit
+	}
+	return m, m.inspectCmd(true)
 }
 
 func (m *Model) cancelOperation() {
@@ -133,49 +209,4 @@ func (m *Model) cancelOperation() {
 		m.operation.cancelled = true
 		m.operation.cancel()
 	}
-}
-
-func appendOutput(current, chunk string) string {
-	if strings.ContainsRune(current, '\x1b') {
-		current = ansi.Strip(current)
-	}
-	if strings.ContainsRune(current, '\r') {
-		current = applyTerminalOutput("", current)
-	}
-	current = applyTerminalOutput(current, ansi.Strip(chunk))
-	if len(current) <= maxOperationOutput {
-		return current
-	}
-	current = current[len(current)-maxOperationOutput:]
-	if newline := strings.IndexByte(current, '\n'); newline >= 0 {
-		current = current[newline+1:]
-	}
-	return current
-}
-
-func applyTerminalOutput(current, stream string) string {
-	for index := 0; index < len(stream); index++ {
-		switch stream[index] {
-		case '\r':
-			if index+1 < len(stream) && stream[index+1] == '\n' {
-				continue
-			}
-			if newline := strings.LastIndexByte(current, '\n'); newline >= 0 {
-				current = current[:newline+1]
-			} else {
-				current = ""
-			}
-		case '\b':
-			lineStart := strings.LastIndexByte(current, '\n') + 1
-			if len(current) > lineStart {
-				_, size := utf8.DecodeLastRuneInString(current)
-				current = current[:len(current)-size]
-			}
-		default:
-			if stream[index] == '\n' || stream[index] == '\t' || (stream[index] >= ' ' && stream[index] != 0x7f) {
-				current += string(stream[index])
-			}
-		}
-	}
-	return current
 }

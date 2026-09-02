@@ -3,9 +3,11 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 type updatePlanRunner struct {
@@ -144,5 +146,60 @@ func TestBlockedUpdatePlanCannotRun(t *testing.T) {
 	WriteUpdatePlan(&output, plan)
 	if !strings.Contains(output.String(), "Update is unavailable") {
 		t.Fatalf("blocked preview = %q", output.String())
+	}
+}
+
+func TestUpdatePlanFingerprintTracksWorkNotCheckTime(t *testing.T) {
+	left := UpdatePlan{
+		Scope: UpdateSoftware, CheckedAt: time.Unix(1, 0), ResolvedVersion: "v1.2.3",
+		Groups: []UpdateGroup{{Name: "Config", Scope: UpdateAll, State: UpdateCurrent, Summary: "v1.2.3 is current"}},
+	}
+	right := left
+	right.CheckedAt = time.Unix(2, 0)
+	if left.Fingerprint() != right.Fingerprint() {
+		t.Fatal("check time changed update plan identity")
+	}
+	right.Groups = []UpdateGroup{{Name: "Config", Scope: UpdateAll, State: UpdateAvailable, Summary: "v1.2.3 → v1.2.4"}}
+	if left.Fingerprint() == right.Fingerprint() {
+		t.Fatal("changed update work kept the same identity")
+	}
+}
+
+func TestUnavailableChecksAreNotRunnableWork(t *testing.T) {
+	plan := UpdatePlan{
+		Scope:  UpdateSoftware,
+		Groups: []UpdateGroup{{Name: "Tools", Scope: UpdateSoftware, State: UpdateUnavailable, Summary: "network unavailable"}},
+	}
+	if plan.HasWork() {
+		t.Fatal("an unavailable check was presented as runnable work")
+	}
+	var output bytes.Buffer
+	WriteUpdatePlan(&output, plan)
+	if !strings.Contains(output.String(), "No runnable updates") || strings.Contains(output.String(), "Everything checked is current") {
+		t.Fatalf("unavailable-only preview = %q", output.String())
+	}
+}
+
+type cancelledUpdatePlanRunner struct{ sawCancellation bool }
+
+func (r *cancelledUpdatePlanRunner) Exists(string) bool { return true }
+func (r *cancelledUpdatePlanRunner) Run(ctx context.Context, _ string, _ ...string) Result {
+	r.sawCancellation = errors.Is(ctx.Err(), context.Canceled)
+	return Result{Err: ctx.Err()}
+}
+
+func TestUpdatePlanningCarriesCancellationToProviderCommands(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runner := &cancelledUpdatePlanRunner{}
+	updater := Updater{
+		Version: "dev", MachineMiseProbe: runner, MachineMisePlan: runner,
+		LoadMachine: func() (Machine, error) { return Machine{Mise: true}, nil },
+	}
+	if _, err := updater.PlanContext(ctx, UpdateSoftware); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.sawCancellation {
+		t.Fatal("provider command did not receive the cancelled planning context")
 	}
 }

@@ -108,7 +108,7 @@ func writeFinderFavoritesSnapshot(t *testing.T, paths Paths, favorites []finderF
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(finderFavoritesSnapshotPath(paths), data, 0o644); err != nil {
+	if err := AtomicWrite(finderFavoritesSnapshotPath(paths), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -362,7 +362,7 @@ func TestFinderFavoritesRejectInvalidSnapshotsAndLiveDuplicates(t *testing.T) {
 		`{"schema":1,"favorites":[{"name":"Target","target":"unknown"}]}`,
 		`{"schema":1,"favorites":[{"name":"Target","path":"/tmp","extra":true}]}`,
 	} {
-		if err := atomicWrite(finderFavoritesSnapshotPath(paths), []byte(invalid), 0o644); err != nil {
+		if err := AtomicWrite(finderFavoritesSnapshotPath(paths), []byte(invalid), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if resource := bidir.InspectFinderFavorites(&fakeFinderFavorites{}); resource.State != Unavailable {

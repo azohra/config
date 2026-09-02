@@ -437,12 +437,12 @@ func (e Applier) applyRepositoryHookTargets(includeRepositories bool) (int, erro
 			if err != nil {
 				return changed, err
 			}
-			if err := atomicWrite(filepath.Join(target.Dir, repositoryHookManifestName), append(data, '\n'), 0o644); err != nil {
+			if err := AtomicWrite(filepath.Join(target.Dir, repositoryHookManifestName), append(data, '\n'), 0o644); err != nil {
 				return changed, fmt.Errorf("write hook ownership for %s: %w", target.Name, err)
 			}
 		}
 		for _, hook := range pending {
-			if err := atomicWrite(filepath.Join(target.Dir, hook.Name), hook.Body, hook.Mode); err != nil {
+			if err := AtomicWrite(filepath.Join(target.Dir, hook.Name), hook.Body, hook.Mode); err != nil {
 				return changed, fmt.Errorf("write %s hook %s: %w", target.Name, hook.Name, err)
 			}
 			changed++

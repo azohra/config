@@ -125,7 +125,11 @@ func (r OSRunner) executable(name string) string {
 }
 
 func run(r Runner, name string, args ...string) Result {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	return runContext(context.Background(), r, name, args...)
+}
+
+func runContext(parent context.Context, r Runner, name string, args ...string) Result {
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	return r.Run(ctx, name, args...)
 }
@@ -204,16 +208,23 @@ func newMiseLiveRunner(paths Paths) LiveRunner {
 }
 
 func (r LiveRunner) Command(name string, args ...string) error {
+	return r.CommandContext(context.Background(), name, args...)
+}
+
+func (r LiveRunner) CommandContext(ctx context.Context, name string, args ...string) error {
 	if executable := r.Executables[name]; executable != "" {
 		name = executable
 	}
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = r.Dir
 	cmd.Env = childEnvironment(r.Environment, r.Unset)
 	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
-	if err := cmd.Run(); err != nil {
+	settle := InterruptGroup(cmd, CommandWaitDelay)
+	err := cmd.Run()
+	settle(err)
+	if err = CommandFailure(cmd, err); err != nil {
 		return fmt.Errorf("%s: %w", strings.Join(append([]string{name}, args...), " "), err)
 	}
 	return nil

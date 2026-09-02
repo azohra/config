@@ -18,7 +18,7 @@ func markerPath(paths Paths, name string) string {
 }
 
 func setMarker(paths Paths, name string) error {
-	return atomicWrite(markerPath(paths, name), []byte(name+"\n"), 0o600)
+	return AtomicWrite(markerPath(paths, name), []byte(name+"\n"), 0o600)
 }
 
 func markerSet(paths Paths, name string) bool {

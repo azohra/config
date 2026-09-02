@@ -20,7 +20,9 @@ func samePath(left, right string) bool {
 	return filepath.Clean(left) == filepath.Clean(right)
 }
 
-func atomicWrite(path string, data []byte, mode os.FileMode) error {
+// AtomicWrite publishes complete bytes durably and defers interruption until
+// the replacement and its directory entry are both synced.
+func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 	defer holdInterrupt()()
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

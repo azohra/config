@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
@@ -48,23 +49,40 @@ again.`
 var version = "dev"
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+	out := io.Writer(os.Stdout)
+	var events *config.OperationEventWriter
+	if os.Getenv(config.OperationEventsEnv) == "1" {
+		events = config.NewOperationEventWriter(os.Stdout)
+		out = events
+		_ = os.Unsetenv(config.OperationEventsEnv)
+	}
+	if err := run(out); err != nil {
+		if events != nil {
+			_ = events.OperationEvent(config.OperationEvent{Kind: config.OperationError, Text: "error: " + err.Error()})
+			_ = events.Close()
+		} else {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		}
 		os.Exit(1)
+	}
+	if events != nil {
+		_ = events.Close()
 	}
 }
 
-func run() error {
+const reopenResultEnv = "AZOHRA_CONFIG_REOPEN_RESULT"
+
+func run(out io.Writer) error {
 	args := os.Args[1:]
 	if len(args) == 1 && args[0] == "--version" {
-		fmt.Println("config", version)
+		fmt.Fprintln(out, "config", version)
 		return nil
 	}
 	if len(args) > 0 && slices.Contains([]string{"-h", "--help", "help"}, args[0]) {
 		if len(args) != 1 {
 			return errors.New("help takes no arguments")
 		}
-		fmt.Println(usage)
+		fmt.Fprintln(out, usage)
 		return nil
 	}
 	paths, err := config.NewPaths("", "")
@@ -86,7 +104,7 @@ func run() error {
 	// install as a child, so contending here would deadlock the update
 	// against itself.
 	if len(args) > 0 && slices.Contains(
-		[]string{"update", "bootstrap", "prune", "--apply", "--snapshot"}, args[0]) {
+		[]string{"update", "bootstrap", "prune", "--apply", "--snapshot", "--run-update"}, args[0]) {
 		release, lockErr := config.LockCheckout(paths)
 		if lockErr != nil {
 			return lockErr
@@ -94,21 +112,24 @@ func run() error {
 		defer release()
 	}
 	if len(args) > 0 && args[0] == "path" {
-		fmt.Println(paths.Root)
+		fmt.Fprintln(out, paths.Root)
 		return nil
 	}
 	if len(args) > 0 && args[0] == "install" {
-		return config.InstallCurrent(paths, version, os.Stdout)
+		return config.InstallCurrent(paths, version, out)
 	}
 	if len(args) > 0 && args[0] == "update" {
-		return update(paths, args[1:])
+		return update(paths, args[1:], out)
+	}
+	if len(args) > 0 && args[0] == "--run-update" {
+		return runConfirmedUpdate(paths, args[1:], out)
 	}
 	var machine config.Machine
 	restorePending := false
 	if len(args) > 0 && args[0] == "bootstrap" {
-		machine, restorePending, err = config.MaterializeRepository(paths, args[1], os.Stdout, os.Stderr)
+		machine, restorePending, err = config.MaterializeRepository(paths, args[1], out, out)
 		if err == nil {
-			err = config.InstallCurrent(paths, version, os.Stdout)
+			err = config.InstallCurrent(paths, version, out)
 		}
 		args = nil
 	} else {
@@ -119,14 +140,14 @@ func run() error {
 	}
 	runner := config.NewMachineRunner(paths)
 	if restorePending {
-		return config.RestorePending(paths, machine, os.Stdout)
+		return config.RestorePending(paths, machine, out)
 	}
 	if len(args) > 0 {
 		switch args[0] {
 		case "prune":
-			return prune(paths, machine, args[1:])
+			return prune(paths, machine, args[1:], out)
 		case "--status":
-			return status(paths, machine, runner)
+			return status(paths, machine, runner, out)
 		case "--apply":
 			selections, err := config.DecodeSelections(args[1])
 			if err != nil {
@@ -136,20 +157,42 @@ func run() error {
 			if err := config.ValidateSelections(report, selections); err != nil {
 				return err
 			}
-			return config.NewApplier(paths, machine, os.Stdout).Apply(selections)
+			return config.NewApplier(paths, machine, out).Apply(selections)
 		case "--snapshot":
-			return config.NewSnapshotter(paths, machine, os.Stdout).Save()
+			return config.NewSnapshotter(paths, machine, out).Save()
 		}
 	}
 	if !terminal(os.Stdin) || !terminal(os.Stdout) {
-		return status(paths, machine, runner)
+		return status(paths, machine, runner, out)
 	}
 	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	_, err = tea.NewProgram(ui.New(paths, machine, executable, version)).Run()
-	return err
+	reopenResult := os.Getenv(reopenResultEnv) == "1"
+	_ = os.Unsetenv(reopenResultEnv)
+	final, err := tea.NewProgram(ui.New(paths, machine, executable, version, reopenResult)).Run()
+	if err != nil {
+		return err
+	}
+	model, ok := final.(ui.Model)
+	if !ok || !model.RestartRequested() {
+		return nil
+	}
+	environment := appendWithoutEnvironment(os.Environ(), reopenResultEnv)
+	environment = append(environment, reopenResultEnv+"=1")
+	return syscall.Exec(executable, []string{executable}, environment)
+}
+
+func appendWithoutEnvironment(environment []string, name string) []string {
+	prefix := name + "="
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 type updateOptions struct {
@@ -193,17 +236,17 @@ func parseUpdateOptions(args []string) (updateOptions, error) {
 	return options, nil
 }
 
-func update(paths config.Paths, args []string) error {
+func update(paths config.Paths, args []string, out io.Writer) error {
 	options, err := parseUpdateOptions(args)
 	if err != nil {
 		return err
 	}
-	updater := config.NewUpdater(paths, os.Stdout, version)
+	updater := config.NewUpdater(paths, out, version)
 	plan, err := updater.Plan(options.scope)
 	if err != nil {
 		return err
 	}
-	config.WriteUpdatePlan(os.Stdout, plan)
+	config.WriteUpdatePlan(out, plan)
 	if plan.Blocked {
 		return errors.New("Config: update is unavailable")
 	}
@@ -219,19 +262,38 @@ func update(paths config.Paths, args []string) error {
 			case config.UpdateRepositories:
 				command += " repositories"
 			}
-			fmt.Fprintf(os.Stdout, "\nNo changes made; run %s --yes to apply this plan.\n", command)
+			fmt.Fprintf(out, "\nNo changes made; run %s --yes to apply this plan.\n", command)
 			return nil
 		}
-		confirmed, err := confirm(os.Stdin, os.Stdout, "Run this update?")
+		confirmed, err := confirm(os.Stdin, out, "Run this update?")
 		if err != nil {
 			return err
 		}
 		if !confirmed {
-			fmt.Fprintln(os.Stdout, "No changes made.")
+			fmt.Fprintln(out, "No changes made.")
 			return nil
 		}
 	}
-	return updater.Update(options.scope)
+	return updater.Apply(plan)
+}
+
+func runConfirmedUpdate(paths config.Paths, args []string, out io.Writer) error {
+	if len(args) != 2 {
+		return errors.New("invalid internal update request")
+	}
+	options, err := parseUpdateOptions([]string{args[0]})
+	if err != nil || options.scope == config.UpdateAll {
+		return errors.New("invalid internal update scope")
+	}
+	updater := config.NewUpdater(paths, out, version)
+	plan, err := updater.Plan(options.scope)
+	if err != nil {
+		return err
+	}
+	if plan.Fingerprint() != args[1] {
+		return errors.New("update plan changed; return to the review screen and check again")
+	}
+	return updater.Apply(plan)
 }
 
 type pruneOptions struct {
@@ -263,31 +325,31 @@ func parsePruneOptions(args []string) (pruneOptions, error) {
 	return options, nil
 }
 
-func prune(paths config.Paths, machine config.Machine, args []string) error {
+func prune(paths config.Paths, machine config.Machine, args []string, out io.Writer) error {
 	options, err := parsePruneOptions(args)
 	if err != nil {
 		return err
 	}
-	pruner := config.NewPruner(paths, machine, os.Stdout)
+	pruner := config.NewPruner(paths, machine, out)
 	plan, err := pruner.Plan()
 	if err != nil {
 		return err
 	}
-	config.WritePrunePlan(os.Stdout, plan)
+	config.WritePrunePlan(out, plan)
 	if plan.Empty() || options.dryRun {
 		return nil
 	}
 	if !options.yes {
 		if !terminal(os.Stdin) || !terminal(os.Stdout) {
-			fmt.Fprintln(os.Stdout, "\nNo changes made; run config prune --yes to apply this plan.")
+			fmt.Fprintln(out, "\nNo changes made; run config prune --yes to apply this plan.")
 			return nil
 		}
-		confirmed, err := confirmPrune(os.Stdin, os.Stdout)
+		confirmed, err := confirmPrune(os.Stdin, out)
 		if err != nil {
 			return err
 		}
 		if !confirmed {
-			fmt.Fprintln(os.Stdout, "No changes made.")
+			fmt.Fprintln(out, "No changes made.")
 			return nil
 		}
 	}
@@ -315,9 +377,9 @@ func confirm(in io.Reader, out io.Writer, prompt string) (bool, error) {
 // status is the one status surface. Without a terminal Config prints the same
 // report it prints for --status, so it owes the same answer about whether the
 // machine needs attention.
-func status(paths config.Paths, machine config.Machine, runner config.Runner) error {
+func status(paths config.Paths, machine config.Machine, runner config.Runner, out io.Writer) error {
 	report := config.NewInspector(paths, machine, runner).Inspect()
-	config.WriteStatus(os.Stdout, report)
+	config.WriteStatus(out, report)
 	if report.NeedsAttention() {
 		return errors.New("configuration needs attention")
 	}
@@ -352,6 +414,10 @@ func checkArguments(args []string) error {
 	case "--apply":
 		if len(args) != 2 {
 			return errors.New("usage: config --apply <plan>")
+		}
+	case "--run-update":
+		if len(args) != 3 {
+			return errors.New("invalid internal update request")
 		}
 	case "prune":
 		// prune reads its own flags.

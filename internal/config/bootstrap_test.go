@@ -21,7 +21,7 @@ func testRestoreProgress(t *testing.T, paths Paths, machine Machine) *restorePro
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(paths.InRoot("config.toml"), declaration, 0o600); err != nil {
+	if err := AtomicWrite(paths.InRoot("config.toml"), declaration, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gitTest(t, paths.Root, "add", "-A")
@@ -82,7 +82,7 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	machine.Preferences = nil
 
 	// A PWA manifest Config cannot read.
-	if err := atomicWrite(chromePWASnapshotPath(paths), []byte("{not a manifest"), 0o644); err != nil {
+	if err := AtomicWrite(chromePWASnapshotPath(paths), []byte("{not a manifest"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// A Dock layout it can.
@@ -90,7 +90,7 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	if err := os.MkdirAll(app, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(app+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(app+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,7 +161,7 @@ func TestPendingRestoreDoesNotCompleteDockWhenRestartFails(t *testing.T) {
 	if err := os.MkdirAll(desired, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	progress := testRestoreProgress(t, paths, machine)
@@ -197,7 +197,7 @@ func TestPendingRestoreRetriesADockWhoseAppWasInitiallyUnavailable(t *testing.T)
 	machine.ChromePWAs = false
 	machine.Preferences = nil
 	desired := paths.InHome("Applications", "Later.app")
-	if err := atomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
+	if err := AtomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	progress := testRestoreProgress(t, paths, machine)

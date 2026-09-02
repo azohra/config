@@ -374,7 +374,7 @@ func (b Bidirectional) CaptureDock() error {
 		}
 		lines = append(lines, app)
 	}
-	return atomicWrite(dockSnapshotPath(b.Paths), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	return AtomicWrite(dockSnapshotPath(b.Paths), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
 func (b Bidirectional) MarkDockIfCurrent() error {

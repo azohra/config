@@ -30,14 +30,38 @@ type Logger struct {
 }
 
 func (l Logger) line(symbol, message string) {
+	if sink, ok := l.Out.(operationEventSink); ok {
+		kind := OperationInfo
+		switch symbol {
+		case GlyphOK:
+			kind = OperationOK
+		case GlyphWarn:
+			kind = OperationWarn
+		case GlyphError:
+			kind = OperationError
+		}
+		_ = sink.OperationEvent(OperationEvent{Kind: kind, Text: message})
+		return
+	}
 	fmt.Fprintf(l.Out, "%s%s %s\n", stepIndent, symbol, message)
 }
 
-func (l Logger) Section(name string)  { fmt.Fprintf(l.Out, "\n%s\n", name) }
+func (l Logger) Section(name string) {
+	if sink, ok := l.Out.(operationEventSink); ok {
+		_ = sink.OperationEvent(OperationEvent{Kind: OperationSection, Text: name})
+		return
+	}
+	fmt.Fprintf(l.Out, "\n%s\n", name)
+}
 func (l Logger) OK(message string)    { l.line(GlyphOK, message) }
 func (l Logger) Info(message string)  { l.line(GlyphInfo, message) }
 func (l Logger) Warn(message string)  { l.line(GlyphWarn, message) }
 func (l Logger) Error(message string) { l.line(GlyphError, message) }
+func (l Logger) Version(version string) {
+	if sink, ok := l.Out.(operationEventSink); ok {
+		_ = sink.OperationEvent(OperationEvent{Kind: OperationVersion, Text: version})
+	}
+}
 
 // StepGlyph reports the glyph of a Logger step line, and accepts only the
 // glyphs a Logger writes. A reader that presents this package's output — the
@@ -87,15 +111,21 @@ const (
 func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 	runner := NewMachineRunner(paths)
 	installer := testedMiseInstaller(paths)
+	live := newMachineLiveRunner(paths)
+	live.Stdout, live.Stderr = out, out
+	miseLive := newMiseLiveRunner(paths)
+	miseLive.Stdout, miseLive.Stderr = out, out
+	skillsLive := newAgentSkillsLiveRunner(paths)
+	skillsLive.Stdout, skillsLive.Stderr = out, out
 	return Applier{
 		Paths:           paths,
 		Machine:         machine,
 		Runner:          runner,
-		Live:            newMachineLiveRunner(paths),
+		Live:            live,
 		Mise:            NewMiseRunner(paths),
-		MiseLive:        newMiseLiveRunner(paths),
+		MiseLive:        miseLive,
 		Skills:          newAgentSkillsRunner(paths),
-		SkillsLive:      newAgentSkillsLiveRunner(paths),
+		SkillsLive:      skillsLive,
 		InstallMise:     installer.Install,
 		FinderFavorites: newFinderFavoritesStore(),
 		Log:             Logger{Out: out},

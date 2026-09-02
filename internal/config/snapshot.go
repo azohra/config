@@ -23,11 +23,13 @@ type Snapshotter struct {
 func NewSnapshotter(paths Paths, machine Machine, out io.Writer) Snapshotter {
 	runner := NewMachineRunner(paths)
 	inspector := NewInspector(paths, machine, runner)
+	live := newMachineLiveRunner(paths)
+	live.Stdout, live.Stderr = out, out
 	return Snapshotter{
 		Paths:   paths,
 		Machine: machine,
 		Runner:  runner,
-		Live:    newMachineLiveRunner(paths),
+		Live:    live,
 		Log:     Logger{Out: out},
 		Validate: func() error {
 			return inspector.InspectSnapshot().PreflightError()

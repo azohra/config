@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -121,7 +122,11 @@ func (i miseInstaller) Install() error {
 }
 
 func ensureTestedMise(runner Runner, install func() error) error {
-	version, err := currentMiseVersion(runner)
+	return ensureTestedMiseContext(context.Background(), runner, install)
+}
+
+func ensureTestedMiseContext(ctx context.Context, runner Runner, install func() error) error {
+	version, err := currentMiseVersionContext(ctx, runner)
 	if err == nil && supportsTestedMise(version) {
 		return nil
 	}
@@ -131,8 +136,18 @@ func ensureTestedMise(runner Runner, install func() error) error {
 		}
 		return fmt.Errorf("mise %s is unsupported; install mise %s", version, testedMiseVersion)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := install(); err != nil {
 		return err
 	}
-	return requireTestedMise(runner)
+	version, err = currentMiseVersionContext(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if !supportsTestedMise(version) {
+		return fmt.Errorf("mise %s is unsupported; install mise %s", version, testedMiseVersion)
+	}
+	return nil
 }

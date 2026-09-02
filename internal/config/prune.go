@@ -109,14 +109,18 @@ type Pruner struct {
 }
 
 func NewPruner(paths Paths, machine Machine, out io.Writer) Pruner {
+	miseLive := newMiseLiveRunner(paths)
+	miseLive.Stdout, miseLive.Stderr = out, out
+	skillsLive := newAgentSkillsLiveRunner(paths)
+	skillsLive.Stdout, skillsLive.Stderr = out, out
 	return Pruner{
 		Paths:      paths,
 		Machine:    machine,
 		Runner:     NewMachineRunner(paths),
 		Mise:       NewMiseRunner(paths),
-		MiseLive:   newMiseLiveRunner(paths),
+		MiseLive:   miseLive,
 		Skills:     newAgentSkillsRunner(paths),
-		SkillsLive: newAgentSkillsLiveRunner(paths),
+		SkillsLive: skillsLive,
 		Log:        Logger{Out: out},
 	}
 }
@@ -923,7 +927,7 @@ func applyPruneHooks(target pruneHookTarget) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(manifestPath, append(encoded, '\n'), 0o644)
+	return AtomicWrite(manifestPath, append(encoded, '\n'), 0o644)
 }
 
 func applyPruneFile(file pruneFile) error {

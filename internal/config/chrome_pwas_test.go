@@ -314,11 +314,11 @@ func writeTestBundle(t *testing.T, paths Paths, name string, info map[string]any
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicWrite(filepath.Join(contents, "Info.plist"), data, 0o644); err != nil {
+	if err := AtomicWrite(filepath.Join(contents, "Info.plist"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if icon != nil {
-		if err := atomicWrite(filepath.Join(contents, "Resources", "app.icns"), icon, 0o644); err != nil {
+		if err := AtomicWrite(filepath.Join(contents, "Resources", "app.icns"), icon, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -394,7 +394,7 @@ func TestChromePWAsNameADamagedBundleWithoutLosingTheRest(t *testing.T) {
 	// Capture would write a manifest without the damaged app and delete the
 	// icon saved for it, so it must refuse while the collection is incomplete.
 	saved := chromePWAIconPath(paths, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	if err := atomicWrite(saved, icon, 0o644); err != nil {
+	if err := AtomicWrite(saved, icon, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := bidir.CaptureChromePWAs(); err == nil {
@@ -497,7 +497,7 @@ func TestChromePWARestoreTrashesABundleTheReplacementWillNotOverwrite(t *testing
 		t.Fatalf("saved snapshot does not name the PWA as expected: %s", snapshot)
 	}
 	renamedSnapshot := bytes.ReplaceAll(snapshot, []byte(`"name": "Gmail"`), []byte(`"name": "Mail"`))
-	if err := atomicWrite(chromePWASnapshotPath(paths), renamedSnapshot, 0o600); err != nil {
+	if err := AtomicWrite(chromePWASnapshotPath(paths), renamedSnapshot, 0o600); err != nil {
 		t.Fatal(err)
 	}
 

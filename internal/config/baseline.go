@@ -59,7 +59,7 @@ func (b Baselines) Save(resource string, content json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(filepath.Join(b.Dir, resource+".json"), append(data, '\n'), 0o600)
+	return AtomicWrite(filepath.Join(b.Dir, resource+".json"), append(data, '\n'), 0o600)
 }
 
 func classify(saved, live json.RawMessage, baseline Baseline, hasBaseline bool) State {
