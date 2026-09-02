@@ -222,7 +222,11 @@ type Paths struct {
 	StateDir string
 }
 
-func NewPaths(root, home string) (Paths, error) {
+// NewPaths derives every path Config owns from one home directory. Config's
+// own state is deliberately not XDG-relocatable: the advisory lock lives in
+// StateDir, so a cache directory the caller could move independently would
+// give two Configs converging one checkout two different locks.
+func NewPaths(home string) (Paths, error) {
 	if home == "" {
 		var err error
 		home, err = os.UserHomeDir()
@@ -230,19 +234,17 @@ func NewPaths(root, home string) (Paths, error) {
 			return Paths{}, err
 		}
 	}
-	if root == "" {
-		root = filepath.Join(home, defaultConfigDir)
-	}
-	root, err := filepath.Abs(root)
+	root, err := filepath.Abs(filepath.Join(home, defaultConfigDir))
 	if err != nil {
 		return Paths{}, err
 	}
-	cache := os.Getenv("XDG_CACHE_HOME")
-	if cache == "" {
-		cache = filepath.Join(home, ".cache")
-	}
-	cache = filepath.Join(cache, "config")
-	return Paths{Root: root, Home: home, StateDir: filepath.Join(cache, "state")}, nil
+	return Paths{Root: root, Home: home, StateDir: stateDir(home)}, nil
+}
+
+// stateDir is Config's private state: baselines, pending markers, restore
+// records, the checkout lock, and the release adapter's root beside it.
+func stateDir(home string) string {
+	return filepath.Join(home, ".cache", "config", "state")
 }
 
 func FormatCount(n int, singular, plural string) string {

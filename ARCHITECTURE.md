@@ -254,8 +254,12 @@ identifier. Config writes only the `persistent-apps` key, rereads its app paths,
 and restores the original key when verification fails. The Dock restarts once,
 after a verified change.
 
-Baselines live outside the repository under `~/.cache/config/state`. They are
-written only when saved and live state agree. Captures use atomic writes;
+Baselines live outside the repository under `~/.cache/config/state`, and are
+written only when saved and live state agree. That path comes from the home
+directory alone. Config's own state is deliberately not relocatable by the
+caller's environment, because the checkout lock lives beside the baselines: a
+cache directory that could move on its own would give two Configs converging one
+Mac two different locks. Captures use atomic writes;
 Finder snapshots validate names, portable targets, and unique absolute paths,
 while PWA snapshots validate identifiers, URLs, schemes, icon digests, and
 plist input before replacing saved state.

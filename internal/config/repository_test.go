@@ -29,7 +29,7 @@ func managedTestPaths(t *testing.T) Paths {
 
 func TestMaterializeRepositoryOwnsTheCanonicalCheckout(t *testing.T) {
 	home := t.TempDir()
-	paths, err := NewPaths("", home)
+	paths, err := NewPaths(home)
 	if err != nil {
 		t.Fatal(err)
 	}

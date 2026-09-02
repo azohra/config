@@ -85,7 +85,7 @@ func run(out io.Writer) error {
 		fmt.Fprintln(out, usage)
 		return nil
 	}
-	paths, err := config.NewPaths("", "")
+	paths, err := config.NewPaths("")
 	if err != nil {
 		return err
 	}

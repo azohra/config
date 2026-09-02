@@ -38,6 +38,37 @@ func TestCheckoutLockAdmitsOneWriter(t *testing.T) {
 	elsewhere()
 }
 
+// One checkout is one lock however the caller's environment is set. Config
+// derives its state directory from the home directory alone, so an exported
+// XDG_CACHE_HOME cannot move the lock without moving the checkout it guards —
+// which would let two Configs converge the same Mac at once.
+func TestTheCheckoutLockIgnoresTheCallersCacheLocation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	paths, err := NewPaths(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := stateDir(home); paths.StateDir != want {
+		t.Fatalf("state directory = %s, want %s", paths.StateDir, want)
+	}
+	release, err := LockCheckout(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	elsewhere, err := NewPaths(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := LockCheckout(elsewhere); err == nil {
+		second()
+		t.Fatal("a relocated cache gave one checkout a second lock")
+	}
+}
+
 func TestAnInterruptWaitsForTheWritesInFlight(t *testing.T) {
 	release := holdInterrupt()
 	idle := make(chan struct{})

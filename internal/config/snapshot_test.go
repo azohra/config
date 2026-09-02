@@ -35,10 +35,8 @@ func snapshotFixture(t *testing.T) (Snapshotter, string, string) {
 	gitTest(t, t.TempDir(), "init", "--quiet", "--bare", remote)
 	gitTest(t, root, "remote", "add", "origin", remote)
 
-	paths, err := NewPaths(root, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	home := t.TempDir()
+	paths := Paths{Root: root, Home: home, StateDir: stateDir(home)}
 	files := map[string]string{
 		"settings": "initial\n",
 	}

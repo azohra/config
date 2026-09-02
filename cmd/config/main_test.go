@@ -497,7 +497,7 @@ func TestInstallDoesNotContendForTheCheckoutLock(t *testing.T) {
 	// checkout, so contending for that lock deadlocks an update against
 	// itself and no release can ever install its successor.
 	binary, home := buildConfig(t), t.TempDir()
-	paths, err := config.NewPaths("", home)
+	paths, err := config.NewPaths(home)
 	if err != nil {
 		t.Fatal(err)
 	}
