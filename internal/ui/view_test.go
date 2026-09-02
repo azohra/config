@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -26,9 +27,9 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 		"Configuration matches",
 		"cleanup runs on demand",
 		"Update software",
-		"Config, mise, tools, and packages",
+		"Config, mise, tools, packages, skills",
 		"Update repositories",
-		"fetch and fast-forward clean checkouts",
+		"Config and clean checkouts",
 		"Clean up",
 		"unused tools and Config state",
 		"Inspect configuration",
@@ -51,6 +52,47 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 	for _, present := range []string{"Review changes", "Save snapshot", "Mise", "1 changed file"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("changed dashboard missing %q:\n%s", present, view)
+		}
+	}
+}
+
+func TestDashboardSummarizesBackgroundUpdateDiscovery(t *testing.T) {
+	m := Model{
+		report:        config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}},
+		overviewReady: true,
+		updateOverview: config.UpdatePlan{
+			Scope: config.UpdateAll, CheckedAt: time.Date(2026, 9, 2, 15, 4, 0, 0, time.Local),
+			Groups: []config.UpdateGroup{
+				{Name: "Config", Scope: config.UpdateAll, State: config.UpdateCurrent},
+				{Name: "Tools", Scope: config.UpdateSoftware, State: config.UpdateAvailable},
+				{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending},
+				{Name: "Repositories", Scope: config.UpdateRepositories, State: config.UpdatePending},
+			},
+		},
+		width: 100, height: 24,
+	}
+	view := ansi.Strip(m.renderDashboard())
+	for _, want := range []string{"1 available update · 1 checked when run · 3:04 PM", "1 checked when run · 3:04 PM"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("dashboard missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestUpdatePreviewMakesTheMutationExplicit(t *testing.T) {
+	m := Model{
+		screen:      screenUpdate,
+		updateScope: config.UpdateSoftware,
+		updatePreview: config.UpdatePlan{
+			Scope:  config.UpdateSoftware,
+			Groups: []config.UpdateGroup{{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending, Summary: "checked when run"}},
+		},
+		width: 80, height: 24,
+	}
+	view := ansi.Strip(m.renderUpdate())
+	for _, want := range []string{"Review first", "Packages", "checked when run", "Run software update", "enter run"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("update preview missing %q:\n%s", want, view)
 		}
 	}
 }

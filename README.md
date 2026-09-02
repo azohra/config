@@ -192,20 +192,28 @@ Useful non-interactive commands:
 ```bash
 config --status
 config path
-config update software
-config update repositories
-config update
+config update software --dry-run
+config update repositories --yes
+config update --yes
 config prune --dry-run
 config prune --yes
 config --version
 ```
 
-`config update software` updates declared tools, packages, and agent skills
-without checking repository remotes. `config update repositories` fast-forwards
-clean declared repositories. The unqualified command runs both scopes. A
-released build first updates Config itself and continues from the installed
-binary; a development build skips that release transition. When Mise is not
-declared, the machine portion has no Mise work to perform.
+`config update software` previews declared tool, package, and agent-skill
+updates without checking repository remotes. `config update repositories`
+previews clean declared repositories. The unqualified command covers both
+scopes. A terminal asks before running the plan; redirected output remains
+preview-only unless `--yes` is explicit. Config shows exact versions where a
+provider exposes them and labels checks that can only happen while the provider
+runs. A released build updates Config first when necessary and continues from
+the installed binary; a development build skips that release transition. When
+Mise is not declared, the machine portion has no Mise work to perform.
+
+The terminal interface checks update availability in the background, refreshes
+the selected scope before confirmation, and keeps the completed output open
+until it is dismissed. The last operation is also stored in Config's private
+state and can be reopened from the dashboard.
 
 `config prune` previews Mise's shared inventory decisions alongside Config's
 own stale state. A declared but unavailable Mise is reported and its state

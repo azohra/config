@@ -102,8 +102,16 @@ func TestRefreshPreservesOperationFailure(t *testing.T) {
 
 func TestAppendOutputNormalizesAndBounds(t *testing.T) {
 	got := appendOutput("one\r", "two\r\n")
-	if got != "one\ntwo\n" {
+	if got != "two\n" {
 		t.Fatalf("appendOutput() = %q", got)
+	}
+	got = appendOutput("", "\x1b[32mready\x1b[0m\rworking\rfinished\n")
+	if got != "finished\n" {
+		t.Fatalf("appendOutput() kept terminal animation: %q", got)
+	}
+	got = appendOutput("", "wait..\b\b  \b\bdone\a\n")
+	if got != "waitdone\n" {
+		t.Fatalf("appendOutput() kept cursor controls: %q", got)
 	}
 	got = appendOutput("", strings.Repeat("x", maxOperationOutput+10)+"\nlast\n")
 	if len(got) > maxOperationOutput || !strings.HasSuffix(got, "last\n") {
@@ -111,9 +119,8 @@ func TestAppendOutputNormalizesAndBounds(t *testing.T) {
 	}
 }
 
-// An operation streams output while it runs and hands the interface back to
-// the dashboard when it ends, asking for a fresh inspection because the
-// operation just changed the machine it was describing.
+// An operation streams output while it runs and keeps its result visible when
+// it ends, asking for a fresh inspection because it changed the machine.
 func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	events := make(chan operationEvent, 1)
 	m := Model{screen: screenRunning, operation: operation{label: "Apply", events: events}}
@@ -131,21 +138,25 @@ func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	}
 
 	finished, cmd := running.updateOperation(operationEventMsg{done: true})
-	dashboard := finished.(Model)
-	if dashboard.screen != screenDashboard {
-		t.Fatalf("a finished operation left screen %v", dashboard.screen)
+	result := finished.(Model)
+	if result.screen != screenResult {
+		t.Fatalf("a finished operation left screen %v", result.screen)
 	}
-	if !dashboard.loading {
+	if !result.loading {
 		t.Fatal("a finished operation did not refresh the report it invalidated")
 	}
-	if dashboard.last.label != "Apply" || !strings.Contains(dashboard.last.output, "layout already current") {
-		t.Fatalf("the result was not carried to the dashboard: %+v", dashboard.last)
+	if result.last.label != "Apply" || !strings.Contains(result.last.output, "layout already current") {
+		t.Fatalf("the result was not carried to the result screen: %+v", result.last)
 	}
-	if dashboard.operation.events != nil {
+	if result.operation.events != nil {
 		t.Fatal("the finished operation was not cleared")
 	}
 	if cmd == nil {
 		t.Fatal("no refresh was scheduled")
+	}
+	refreshed, _ := result.Update(reportMsg{report: config.Report{}})
+	if got := refreshed.(Model); got.screen != screenResult || got.loading {
+		t.Fatalf("refresh hid the completed result: screen=%v loading=%v", got.screen, got.loading)
 	}
 }
 

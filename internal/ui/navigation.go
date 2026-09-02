@@ -22,6 +22,7 @@ const (
 	dashboardInspect
 	dashboardUpdateSoftware
 	dashboardUpdateRepositories
+	dashboardLastResult
 	dashboardCleanup
 	dashboardQuit
 )
@@ -45,9 +46,11 @@ func (m Model) dashboardActions() []dashboardAction {
 		dashboardInspect,
 		dashboardUpdateSoftware,
 		dashboardUpdateRepositories,
-		dashboardCleanup,
-		dashboardQuit,
 	)
+	if m.last.label != "" {
+		actions = append(actions, dashboardLastResult)
+	}
+	actions = append(actions, dashboardCleanup, dashboardQuit)
 	return actions
 }
 
@@ -92,14 +95,91 @@ func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 			m.screen = screenInventory
 		case dashboardUpdateSoftware:
-			return m.startOperation("Software update", m.executable, "update", "software")
+			return m.beginUpdate(config.UpdateSoftware)
 		case dashboardUpdateRepositories:
-			return m.startOperation("Repository update", m.executable, "update", "repositories")
+			return m.beginUpdate(config.UpdateRepositories)
+		case dashboardLastResult:
+			m.scroll = 0
+			m.screen = screenResult
 		case dashboardCleanup:
 			return m.beginPrune()
 		case dashboardQuit:
 			return m, tea.Quit
 		}
+	}
+	return m, nil
+}
+
+func (m Model) beginUpdate(scope config.UpdateScope) (tea.Model, tea.Cmd) {
+	m.screen = screenUpdate
+	m.updateScope = scope
+	m.updatePreview = config.UpdatePlan{}
+	m.updateError = nil
+	m.awaitingUpdate = true
+	m.checkingUpdate = true
+	// Reuse an in-flight dashboard check instead of racing two release-cache
+	// refreshes. Once it arrives it is still the freshest available preview.
+	if m.checkingOverview && !m.overviewReady {
+		m.scroll = 0
+		return m, m.spinner.Tick
+	}
+	m.scroll = 0
+	return m, tea.Batch(m.updatePlanCmd(scope, true), m.spinner.Tick)
+}
+
+func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc", "q":
+		m.awaitingUpdate = false
+		m.checkingUpdate = false
+		m.screen = screenDashboard
+		return m, nil
+	case "r":
+		if m.checkingUpdate {
+			return m, nil
+		}
+		m.checkingUpdate = true
+		m.awaitingUpdate = true
+		m.updateError = nil
+		return m, tea.Batch(m.updatePlanCmd(m.updateScope, true), m.spinner.Tick)
+	case "up", "k":
+		m.scroll = max(0, m.scroll-1)
+	case "down", "j":
+		m.scroll = min(m.scroll+1, m.scrollBound())
+	case "pgup":
+		m.scroll = max(0, m.scroll-10)
+	case "pgdown":
+		m.scroll = min(m.scroll+10, m.scrollBound())
+	case "enter":
+		if m.checkingUpdate {
+			return m, nil
+		}
+		if m.updateError != nil || !m.updatePreview.HasWork() {
+			m.screen = screenDashboard
+			return m, nil
+		}
+		m.awaitingUpdate = false
+		label, scope := "Software update", "software"
+		if m.updateScope == config.UpdateRepositories {
+			label, scope = "Repository update", "repositories"
+		}
+		return m.startOperation(label, m.executable, "update", scope, "--yes")
+	}
+	return m, nil
+}
+
+func (m Model) updateResult(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc", "q", "enter":
+		m.screen = screenDashboard
+	case "up", "k":
+		m.scroll = max(0, m.scroll-1)
+	case "down", "j":
+		m.scroll = min(m.scroll+1, m.scrollBound())
+	case "pgup":
+		m.scroll = max(0, m.scroll-10)
+	case "pgdown":
+		m.scroll = min(m.scroll+10, m.scrollBound())
 	}
 	return m, nil
 }

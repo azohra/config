@@ -336,7 +336,7 @@ fi
 	if _, err := os.Lstat(misePath(paths)); !os.IsNotExist(err) {
 		t.Fatalf("release acquisition changed the machine Mise resource: %v", err)
 	}
-	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "software"}) {
+	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "software", "--yes"}) {
 		t.Fatalf("re-exec = %q %q", reexecPath, reexecArgs)
 	}
 	if environmentValue(reexecEnvironment, updateReexecEnv) != "v0.5.0" {
@@ -344,6 +344,40 @@ fi
 	}
 	if !strings.Contains(output.String(), "Config v0.5.0 installed") {
 		t.Fatalf("output missing installed release:\n%s", output.String())
+	}
+}
+
+func TestReleasedUpdaterDoesNotReinstallTheCurrentCanonicalCommand(t *testing.T) {
+	paths := testPaths(t)
+	canonical := configCommandPath(paths)
+	logPath := filepath.Join(t.TempDir(), "commands")
+	t.Setenv("UPDATE_TEST_LOG", logPath)
+	writeUpdateExecutable(t, canonical, "#!/bin/sh\nprintf 'config v0.5.0\\n'\n")
+	writeUpdateExecutable(t, releaseMisePath(paths), `#!/bin/sh
+printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
+if [ "$1" = --version ]; then printf '`+testedMiseVersion+`\n'; fi
+if [ "$2" = latest ]; then printf '0.5.0\n'; fi
+`)
+	var output bytes.Buffer
+	updater := newUpdateTestUpdater(paths, &output, "v0.5.0")
+	updater.LoadMachine = func() (Machine, error) { return Machine{}, nil }
+	updater.CurrentExecutable = func() (string, error) { return canonical, nil }
+	updater.Reexec = func(string, []string, []string) error {
+		t.Fatal("current canonical Config attempted to re-exec")
+		return nil
+	}
+	if err := updater.Update(UpdateSoftware); err != nil {
+		t.Fatal(err)
+	}
+	commands, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(commands), " install ") || strings.Contains(string(commands), " where ") {
+		t.Fatalf("current Config was reacquired:\n%s", commands)
+	}
+	if !strings.Contains(output.String(), "Config v0.5.0 is current") {
+		t.Fatalf("current result was not narrated:\n%s", output.String())
 	}
 }
 

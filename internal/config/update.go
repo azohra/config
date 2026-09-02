@@ -49,6 +49,7 @@ type Updater struct {
 	ReleaseState       string
 	ReleaseMiseProbe   Runner
 	MachineMiseProbe   Runner
+	MachineMisePlan    Runner
 	Installed          Runner
 	ReleaseMise        LiveRunner
 	MachineMise        LiveRunner
@@ -66,13 +67,17 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 	command := configCommandPath(paths)
 	releaseRoot := configReleaseRoot(paths)
 	releaseMise := releaseMisePath(paths)
-	releaseEnvironment := []string{"MISE_AUTO_UPDATE=0", "MISE_NO_CONFIG=1"}
+	releaseEnvironment := []string{"MISE_AUTO_UPDATE=0", "MISE_NO_CONFIG=1", "NO_COLOR=1"}
 	live := newLiveRunner(paths.Home)
 	live.Environment = releaseEnvironment
 	live.Unset = append(live.Unset, miseLocalEnvironment...)
 	live.Executables = map[string]string{"mise": releaseMise}
 	releaseInstaller := testedMiseInstallerAt(releaseMise)
 	machineInstaller := testedMiseInstaller(paths)
+	machineLive := newMiseLiveRunner(paths)
+	machineLive.Environment = append(machineLive.Environment, "NO_COLOR=1")
+	skillsLive := newAgentSkillsLiveRunner(paths)
+	skillsLive.Environment = append(skillsLive.Environment, "NO_COLOR=1")
 	return Updater{
 		Paths:        paths,
 		Version:      version,
@@ -91,13 +96,14 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 			Unset:       miseLocalEnvironment,
 			Executables: map[string]string{"mise": misePath(paths)},
 		},
+		MachineMisePlan: NewMiseRunner(paths),
 		Installed: OSRunner{Dir: paths.Home, Executables: map[string]string{
 			"config": command,
 		}},
 		ReleaseMise:        live,
-		MachineMise:        newMiseLiveRunner(paths),
+		MachineMise:        machineLive,
 		SkillsProbe:        newAgentSkillsRunner(paths),
-		SkillsLive:         newAgentSkillsLiveRunner(paths),
+		SkillsLive:         skillsLive,
 		InstallReleaseMise: releaseInstaller.Install,
 		InstallMachineMise: machineInstaller.Install,
 		Log:                Logger{Out: out},
@@ -165,6 +171,14 @@ func (u Updater) Update(scope UpdateScope) error {
 		u.Log.Error(err.Error())
 		return fmt.Errorf("Config: %w", err)
 	}
+	if resolvedVersion == u.Version && u.requireCanonicalExecutable() == nil {
+		u.Log.OK("Config " + u.Version + " is current")
+		machine, err := u.LoadMachine()
+		if err != nil {
+			return err
+		}
+		return u.updateMachine(scope, machine)
+	}
 	if err := u.installRelease(resolvedVersion); err != nil {
 		u.Log.Error(err.Error())
 		return fmt.Errorf("Config: %w", err)
@@ -183,6 +197,7 @@ func (u Updater) Update(scope UpdateScope) error {
 
 	environment := childEnvironment([]string{updateReexecEnv + "=" + installedVersion}, nil)
 	arguments := append([]string{u.Config, "update"}, scope.arguments()...)
+	arguments = append(arguments, "--yes")
 	if err := u.Reexec(u.Config, arguments, environment); err != nil {
 		return fmt.Errorf("re-exec Config %s: %w", installedVersion, err)
 	}
@@ -336,10 +351,15 @@ func (u Updater) installRelease(version string) error {
 }
 
 func (u Updater) releaseOutput(name string, args ...string) (string, error) {
-	var output strings.Builder
+	var output, diagnostics strings.Builder
 	releaseRunner := u.releaseRunner()
 	releaseRunner.Stdout = &output
+	releaseRunner.Stderr = &diagnostics
+	releaseRunner.Stdin = nil
 	if err := releaseRunner.Command(name, args...); err != nil {
+		if detail := strings.TrimSpace(diagnostics.String()); detail != "" {
+			return "", fmt.Errorf("%s: %w", detail, err)
+		}
 		return "", err
 	}
 	return output.String(), nil

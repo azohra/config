@@ -4,8 +4,11 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/azohra/config/internal/config"
 )
@@ -23,10 +26,11 @@ type operation struct {
 }
 
 type operationResult struct {
-	label     string
-	output    string
-	err       error
-	cancelled bool
+	label      string
+	output     string
+	err        error
+	cancelled  bool
+	finishedAt time.Time
 }
 
 type operationEvent struct {
@@ -104,17 +108,24 @@ func (m Model) updateOperation(msg operationEventMsg) (tea.Model, tea.Cmd) {
 	if m.operation.cancel != nil {
 		m.operation.cancel()
 	}
-	m.last = operationResult{
-		label:     m.operation.label,
-		output:    m.operation.output,
-		err:       msg.err,
-		cancelled: m.operation.cancelled,
+	result := operationResult{
+		label:      m.operation.label,
+		output:     m.operation.output,
+		err:        msg.err,
+		cancelled:  m.operation.cancelled,
+		finishedAt: time.Now(),
 	}
+	if err := saveOperationResult(m.paths, result); err != nil {
+		result.output = appendOutput(result.output, "\n  ! Last result was not saved: "+err.Error()+"\n")
+	}
+	m.last = result
 	m.operation = operation{}
-	m.screen = screenDashboard
-	m.afterInspect = screenDashboard
+	m.screen = screenResult
+	m.afterInspect = screenResult
 	m.loading = true
-	return m, tea.Batch(m.inspectCmd(), m.spinner.Tick)
+	m.checkingOverview = true
+	m.overviewReady = false
+	return m, tea.Batch(m.inspectCmd(), m.updatePlanCmd(config.UpdateAll, false), m.spinner.Tick)
 }
 
 func (m *Model) cancelOperation() {
@@ -125,15 +136,46 @@ func (m *Model) cancelOperation() {
 }
 
 func appendOutput(current, chunk string) string {
-	current += chunk
-	current = strings.ReplaceAll(current, "\r\n", "\n")
-	current = strings.ReplaceAll(current, "\r", "\n")
+	if strings.ContainsRune(current, '\x1b') {
+		current = ansi.Strip(current)
+	}
+	if strings.ContainsRune(current, '\r') {
+		current = applyTerminalOutput("", current)
+	}
+	current = applyTerminalOutput(current, ansi.Strip(chunk))
 	if len(current) <= maxOperationOutput {
 		return current
 	}
 	current = current[len(current)-maxOperationOutput:]
 	if newline := strings.IndexByte(current, '\n'); newline >= 0 {
 		current = current[newline+1:]
+	}
+	return current
+}
+
+func applyTerminalOutput(current, stream string) string {
+	for index := 0; index < len(stream); index++ {
+		switch stream[index] {
+		case '\r':
+			if index+1 < len(stream) && stream[index+1] == '\n' {
+				continue
+			}
+			if newline := strings.LastIndexByte(current, '\n'); newline >= 0 {
+				current = current[:newline+1]
+			} else {
+				current = ""
+			}
+		case '\b':
+			lineStart := strings.LastIndexByte(current, '\n') + 1
+			if len(current) > lineStart {
+				_, size := utf8.DecodeLastRuneInString(current)
+				current = current[:len(current)-size]
+			}
+		default:
+			if stream[index] == '\n' || stream[index] == '\t' || (stream[index] >= ' ' && stream[index] != 0x7f) {
+				current += string(stream[index])
+			}
+		}
 	}
 	return current
 }

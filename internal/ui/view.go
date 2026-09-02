@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -21,7 +22,9 @@ const (
 	planChrome       = 14 // plus one line per plan row
 	snapshotChrome   = 11
 	pruneChrome      = 13
+	updateChrome     = 14
 	runningChrome    = 10
+	resultChrome     = 12
 )
 
 func (m Model) View() tea.View {
@@ -47,8 +50,12 @@ func (m Model) render() string {
 		return m.renderSnapshot()
 	case screenPrune:
 		return m.renderPrune()
+	case screenUpdate:
+		return m.renderUpdate()
 	case screenRunning:
 		return m.renderRunning()
+	case screenResult:
+		return m.renderResult()
 	default:
 		return m.renderDashboard()
 	}
@@ -209,14 +216,50 @@ func (m Model) dashboardActionText(action dashboardAction) (string, string) {
 	case dashboardInspect:
 		return "Inspect configuration", config.FormatCount(len(m.report.Resources), "resource", "resources")
 	case dashboardUpdateSoftware:
-		return "Update software", "Config, mise, tools, and packages"
+		return "Update software", m.updateActionSummary(config.UpdateSoftware, "Config, mise, tools, packages, skills")
 	case dashboardUpdateRepositories:
-		return "Update repositories", "fetch and fast-forward clean checkouts"
+		return "Update repositories", m.updateActionSummary(config.UpdateRepositories, "Config and clean checkouts")
+	case dashboardLastResult:
+		detail := m.last.label
+		if !m.last.finishedAt.IsZero() {
+			detail += " · " + m.last.finishedAt.Local().Format("Jan 2, 3:04 PM")
+		}
+		return "View last operation", detail
 	case dashboardCleanup:
 		return "Clean up", "preview unused tools and Config state"
 	default:
 		return "Quit", ""
 	}
+}
+
+func (m Model) updateActionSummary(scope config.UpdateScope, fallback string) string {
+	if m.checkingOverview && !m.overviewReady {
+		return "checking for updates…"
+	}
+	if m.overviewError != nil {
+		return "update check unavailable"
+	}
+	if !m.overviewReady {
+		return fallback
+	}
+	available, pending, unavailable := m.updateOverview.Counts(scope)
+	var parts []string
+	if available > 0 {
+		parts = append(parts, config.FormatCount(available, "available update", "available updates"))
+	}
+	if pending > 0 {
+		parts = append(parts, config.FormatCount(pending, "checked when run", "checked when run"))
+	}
+	if unavailable > 0 {
+		parts = append(parts, config.FormatCount(unavailable, "unavailable check", "unavailable checks"))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "current")
+	}
+	if !m.updateOverview.CheckedAt.IsZero() {
+		parts = append(parts, m.updateOverview.CheckedAt.Local().Format("3:04 PM"))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func inventoryLines(resources []config.Resource) []string {
@@ -400,6 +443,61 @@ func (m Model) renderPrune() string {
 	)
 }
 
+func (m Model) renderUpdate() string {
+	label := "SOFTWARE UPDATE"
+	if m.updateScope == config.UpdateRepositories {
+		label = "REPOSITORY UPDATE"
+	}
+	if m.checkingUpdate {
+		return frame(
+			m.width,
+			title.Render(label),
+			m.spinner.View()+" Checking for updates…",
+			muted.Render("Declared machine state does not change during this check."),
+			keyHints("esc back"),
+		)
+	}
+	if m.updateError != nil {
+		return frame(
+			m.width,
+			title.Render(label),
+			bad.Render("Update check failed")+"\n"+m.updateError.Error(),
+			focusRow(true, accent.Render("Back to dashboard")),
+			keyHints("r retry", "enter back", "esc back"),
+		)
+	}
+	var preview bytes.Buffer
+	config.WriteUpdatePlan(&preview, m.updatePreview)
+	lines := strings.Split(strings.Trim(preview.String(), "\n"), "\n")
+	available := max(5, m.height-updateChrome)
+	scrollable := len(lines) > available
+	lines = visibleLines(lines, m.scroll, available)
+	action := "Back to dashboard"
+	hints := []string{"enter back", "r refresh", "esc back"}
+	if m.updatePreview.HasWork() {
+		action = "Run software update"
+		if m.updateScope == config.UpdateRepositories {
+			action = "Run repository update"
+		}
+		hints[0] = "enter run"
+	}
+	if scrollable {
+		hints = append([]string{"↑/↓ scroll"}, hints...)
+	}
+	checked := ""
+	if !m.updatePreview.CheckedAt.IsZero() {
+		checked = muted.Render("Checked " + m.updatePreview.CheckedAt.Local().Format("3:04:05 PM"))
+	}
+	return frame(
+		m.width,
+		title.Render(label)+"  "+checked,
+		muted.Render("Review first. Providers recheck their state before changing the Mac."),
+		strings.Join(lines, "\n"),
+		focusRow(true, accent.Render(action)),
+		keyHints(hints...),
+	)
+}
+
 func (m Model) renderRunning() string {
 	output := m.operationTail(m.operation.output, max(5, m.height-runningChrome))
 	if output == "" {
@@ -410,6 +508,49 @@ func (m Model) renderRunning() string {
 		status = caution.Render("Cancelling…")
 	}
 	return frame(m.width, title.Render(strings.ToUpper(m.operation.label)), output, status, keyHints("ctrl+c cancel"))
+}
+
+func (m Model) resultLines() []string {
+	output := strings.Trim(ansi.Hardwrap(m.last.output, panelContentWidth(m.width), true), "\n")
+	if m.last.err != nil && !strings.Contains(output, m.last.err.Error()) {
+		if output != "" {
+			output += "\n\n"
+		}
+		output += "Error: " + m.last.err.Error()
+	}
+	if output == "" {
+		return []string{muted.Render("No command output.")}
+	}
+	return strings.Split(output, "\n")
+}
+
+func (m Model) renderResult() string {
+	symbol, status := good.Render("✓"), m.last.label+" complete"
+	if m.last.cancelled {
+		symbol, status = caution.Render("!"), m.last.label+" cancelled"
+	} else if m.last.err != nil {
+		symbol, status = bad.Render("✗"), m.last.label+" failed"
+	}
+	lines := m.resultLines()
+	available := max(5, m.height-resultChrome)
+	scrollable := len(lines) > available
+	lines = visibleLines(lines, m.scroll, available)
+	hints := []string{"enter dashboard", "esc dashboard"}
+	if scrollable {
+		hints = append([]string{"↑/↓ scroll"}, hints...)
+	}
+	finished := ""
+	if !m.last.finishedAt.IsZero() {
+		finished = "  " + muted.Render(m.last.finishedAt.Local().Format("Jan 2, 2006 at 3:04 PM"))
+	}
+	return frame(
+		m.width,
+		title.Render(strings.ToUpper(m.last.label)+" RESULT")+finished,
+		symbol+" "+status,
+		strings.Join(lines, "\n"),
+		focusRow(true, accent.Render("Back to dashboard")),
+		keyHints(hints...),
+	)
 }
 
 func keyHints(hints ...string) string {
@@ -468,6 +609,13 @@ func (m Model) scrollBound() int {
 	case screenPrune:
 		lines := strings.Split(strings.Trim(m.prunePreview, "\n"), "\n")
 		return max(0, len(lines)-max(5, m.height-pruneChrome))
+	case screenUpdate:
+		var preview bytes.Buffer
+		config.WriteUpdatePlan(&preview, m.updatePreview)
+		lines := strings.Split(strings.Trim(preview.String(), "\n"), "\n")
+		return max(0, len(lines)-max(5, m.height-updateChrome))
+	case screenResult:
+		return max(0, len(m.resultLines())-max(5, m.height-resultChrome))
 	}
 	return 0
 }

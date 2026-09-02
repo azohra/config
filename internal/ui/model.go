@@ -19,7 +19,9 @@ const (
 	screenPlan
 	screenSnapshot
 	screenPrune
+	screenUpdate
 	screenRunning
+	screenResult
 )
 
 type reportMsg struct {
@@ -32,47 +34,75 @@ type prunePlanMsg struct {
 	err     error
 }
 
-type Model struct {
-	paths           config.Paths
-	executable      string
-	inspector       config.Inspector
-	pruner          config.Pruner
-	report          config.Report
-	screen          screen
-	afterInspect    screen
-	loading         bool
-	dashboardCursor int
-	planCursor      int
-	scroll          int
-	choices         []planChoice
-	prunePreview    string
-	pruneHasWork    bool
-	spinner         spinner.Model
-	width           int
-	height          int
-	operation       operation
-	last            operationResult
+type updatePlanMsg struct {
+	plan    config.UpdatePlan
+	scope   config.UpdateScope
+	preview bool
+	err     error
 }
 
-func New(paths config.Paths, machine config.Machine, executable string) Model {
+type Model struct {
+	paths            config.Paths
+	executable       string
+	inspector        config.Inspector
+	pruner           config.Pruner
+	updater          config.Updater
+	report           config.Report
+	screen           screen
+	afterInspect     screen
+	loading          bool
+	dashboardCursor  int
+	planCursor       int
+	scroll           int
+	choices          []planChoice
+	prunePreview     string
+	pruneHasWork     bool
+	updateOverview   config.UpdatePlan
+	overviewReady    bool
+	overviewError    error
+	updatePreview    config.UpdatePlan
+	updateScope      config.UpdateScope
+	checkingOverview bool
+	checkingUpdate   bool
+	awaitingUpdate   bool
+	updateError      error
+	spinner          spinner.Model
+	width            int
+	height           int
+	operation        operation
+	last             operationResult
+}
+
+func New(paths config.Paths, machine config.Machine, executable, version string) Model {
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
 	spin.Style = accent
 	return Model{
-		paths:        paths,
-		executable:   executable,
-		inspector:    config.NewInspector(paths, machine, config.NewMachineRunner(paths)),
-		pruner:       config.NewPruner(paths, machine, io.Discard),
-		screen:       screenDashboard,
-		afterInspect: screenDashboard,
-		loading:      true,
-		spinner:      spin,
-		width:        80,
-		height:       24,
+		paths:            paths,
+		executable:       executable,
+		inspector:        config.NewInspector(paths, machine, config.NewMachineRunner(paths)),
+		pruner:           config.NewPruner(paths, machine, io.Discard),
+		updater:          config.NewUpdater(paths, io.Discard, version),
+		screen:           screenDashboard,
+		afterInspect:     screenDashboard,
+		loading:          true,
+		spinner:          spin,
+		width:            80,
+		height:           24,
+		checkingOverview: true,
+		last:             loadOperationResult(paths),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.inspectCmd(), m.spinner.Tick)
+	return tea.Batch(m.inspectCmd(), m.updatePlanCmd(config.UpdateAll, false), m.spinner.Tick)
+}
+
+func (m Model) updatePlanCmd(scope config.UpdateScope, preview bool) tea.Cmd {
+	planner := m.updater
+	return func() tea.Msg {
+		plan, err := planner.Plan(scope)
+		return updatePlanMsg{plan: plan, scope: scope, preview: preview, err: err}
+	}
 }
 
 func (m Model) inspectCmd() tea.Cmd {
@@ -100,7 +130,7 @@ func (m Model) pruneCmd() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var commands []tea.Cmd
-	if m.loading || m.screen == screenRunning {
+	if m.loading || m.checkingOverview || m.checkingUpdate || m.screen == screenRunning {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		commands = append(commands, cmd)
@@ -128,6 +158,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.screen = screenDashboard
 			}
+		case screenResult:
+			m.screen = screenResult
 		default:
 			m.screen = screenDashboard
 		}
@@ -142,6 +174,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prunePreview = msg.preview
 		m.pruneHasWork = msg.hasWork
 		m.screen = screenPrune
+	case updatePlanMsg:
+		if msg.preview {
+			if !m.awaitingUpdate || m.screen != screenUpdate || msg.scope != m.updateScope {
+				break
+			}
+			m.checkingUpdate = false
+			m.awaitingUpdate = false
+			m.updateError = msg.err
+			m.updatePreview = msg.plan
+			m.updateScope = msg.scope
+			m.scroll = 0
+			m.screen = screenUpdate
+		} else {
+			m.overviewReady = msg.err == nil
+			m.overviewError = msg.err
+			m.updateOverview = msg.plan
+			m.checkingOverview = false
+			if m.screen == screenUpdate && m.checkingUpdate && m.awaitingUpdate {
+				m.checkingUpdate = false
+				m.updateError = msg.err
+				m.updatePreview = msg.plan
+				m.updatePreview.Scope = m.updateScope
+				m.scroll = 0
+				m.awaitingUpdate = false
+			}
+		}
 	case operationEventMsg:
 		return m.updateOperation(msg)
 	case tea.KeyPressMsg:
@@ -166,6 +224,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSnapshot(msg)
 		case screenPrune:
 			return m.updatePrune(msg)
+		case screenUpdate:
+			return m.updateUpdate(msg)
+		case screenResult:
+			return m.updateResult(msg)
 		}
 	}
 	// The action list is rebuilt from every report, so clamping only on a

@@ -94,15 +94,54 @@ func TestUpdateRunsOnlyWhenSelected(t *testing.T) {
 		executable:      "/tmp/config",
 	}
 	next, cmd := m.updateDashboard(press(tea.KeyEnter))
-	running := next.(Model)
-	if running.screen != screenRunning || running.operation.label != "Software update" {
-		t.Fatalf("screen=%v label=%q, want running software update", running.screen, running.operation.label)
+	planning := next.(Model)
+	if planning.screen != screenUpdate || !planning.checkingUpdate {
+		t.Fatalf("screen=%v checking=%v, want software preview", planning.screen, planning.checkingUpdate)
 	}
 	if cmd == nil {
-		t.Fatal("Update did not start an operation")
+		t.Fatal("Update did not start discovery")
 	}
-	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "software"}) {
+	plan := config.UpdatePlan{Scope: config.UpdateSoftware, Groups: []config.UpdateGroup{{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending}}}
+	next, _ = planning.Update(updatePlanMsg{plan: plan, scope: config.UpdateSoftware, preview: true})
+	preview := next.(Model)
+	next, cmd = preview.updateUpdate(press(tea.KeyEnter))
+	running := next.(Model)
+	if running.screen != screenRunning || running.operation.label != "Software update" || cmd == nil {
+		t.Fatalf("screen=%v label=%q command=%v, want running software update", running.screen, running.operation.label, cmd)
+	}
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "software", "--yes"}) {
 		t.Fatalf("software update command = %q %q", running.operation.name, running.operation.args)
+	}
+}
+
+func TestUpdatePreviewReusesAnInFlightDashboardCheck(t *testing.T) {
+	m := Model{screen: screenDashboard, checkingOverview: true}
+	next, cmd := m.beginUpdate(config.UpdateSoftware)
+	planning := next.(Model)
+	if planning.screen != screenUpdate || !planning.checkingUpdate || cmd == nil {
+		t.Fatalf("in-flight check was not reused: screen=%v checking=%v command=%v", planning.screen, planning.checkingUpdate, cmd)
+	}
+	overview := config.UpdatePlan{
+		Scope:  config.UpdateAll,
+		Groups: []config.UpdateGroup{{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending}},
+	}
+	next, _ = planning.Update(updatePlanMsg{plan: overview, scope: config.UpdateAll})
+	preview := next.(Model)
+	if preview.checkingUpdate || preview.updatePreview.Scope != config.UpdateSoftware || !preview.updatePreview.HasWork() {
+		t.Fatalf("dashboard check did not become the scoped preview: %+v", preview.updatePreview)
+	}
+}
+
+func TestLeavingAnUpdateCheckDoesNotReopenItsPreview(t *testing.T) {
+	m := Model{screen: screenDashboard}
+	next, _ := m.beginUpdate(config.UpdateSoftware)
+	planning := next.(Model)
+	next, _ = planning.updateUpdate(press(tea.KeyEscape))
+	dashboard := next.(Model)
+	plan := config.UpdatePlan{Scope: config.UpdateSoftware, Groups: []config.UpdateGroup{{State: config.UpdatePending}}}
+	next, _ = dashboard.Update(updatePlanMsg{plan: plan, scope: config.UpdateSoftware, preview: true})
+	if got := next.(Model); got.screen != screenDashboard {
+		t.Fatalf("stale preview reopened screen %v", got.screen)
 	}
 }
 
@@ -128,11 +167,19 @@ func TestRepositoryUpdateIsSeparateFromSoftwareUpdate(t *testing.T) {
 		executable:      "/tmp/config",
 	}
 	next, cmd := m.updateDashboard(press(tea.KeyEnter))
+	planning := next.(Model)
+	if cmd == nil || planning.screen != screenUpdate || !planning.checkingUpdate {
+		t.Fatalf("screen=%v checking=%v command=%v", planning.screen, planning.checkingUpdate, cmd)
+	}
+	plan := config.UpdatePlan{Scope: config.UpdateRepositories, Groups: []config.UpdateGroup{{Name: "Repositories", Scope: config.UpdateRepositories, State: config.UpdatePending}}}
+	next, _ = planning.Update(updatePlanMsg{plan: plan, scope: config.UpdateRepositories, preview: true})
+	preview := next.(Model)
+	next, cmd = preview.updateUpdate(press(tea.KeyEnter))
 	running := next.(Model)
 	if cmd == nil || running.screen != screenRunning || running.operation.label != "Repository update" {
 		t.Fatalf("screen=%v label=%q command=%v", running.screen, running.operation.label, cmd)
 	}
-	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "repositories"}) {
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"update", "repositories", "--yes"}) {
 		t.Fatalf("repository update command = %q %q", running.operation.name, running.operation.args)
 	}
 }
@@ -187,7 +234,7 @@ func TestSnapshotRefreshesShowsFilesAndSavesWithoutAMessage(t *testing.T) {
 		Dirty: 2, Changes: []string{" M README.md", "?? cmd/config/main.go"},
 		Upstream: "origin/main", Destination: "origin/main",
 	}}
-	m := New(config.Paths{}, config.Machine{}, "/tmp/config")
+	m := New(config.Paths{}, config.Machine{}, "/tmp/config", "dev")
 	m.screen, m.report, m.width, m.height = screenDashboard, report, 80, 24
 	next, _ := m.beginSnapshot()
 	refreshing := next.(Model)

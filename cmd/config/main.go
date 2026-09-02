@@ -23,7 +23,7 @@ Usage:
   config --status
   config --version
   config path
-  config update [software | repositories]
+  config update [software | repositories] [--dry-run | --yes]
   config prune [--dry-run | --yes]
   config bootstrap <repository>
 
@@ -34,12 +34,12 @@ Bootstrap clones an authenticated Git repository into Config's managed storage,
 installs the permanent Config command, and resumes restore until every declared
 step has completed. Path prints the managed repository's canonical location.
 
-Update acquires the latest verified Config release through a separate
-cache-owned adapter before reading the machine contract. If Mise is declared,
-it then installs that resource when necessary and updates its selected
-declarations. With no selection it updates declared tools, packages, agent
-skills, and clean repositories. Software omits the networked repository phase;
-repositories runs only that phase.
+Update previews what can be discovered before making changes. Without a
+terminal it is preview-only; --yes applies after checking again. Config updates
+itself through a separate cache-owned adapter before reading the machine
+contract. With no selection it updates declared tools, packages, agent skills,
+and clean repositories. Software omits repositories; repositories runs only
+that phase.
 
 Prune previews stale Mise inventory and Config-owned local state. Without a
 terminal it is preview-only; --yes applies the exact plan after checking it
@@ -101,16 +101,7 @@ func run() error {
 		return config.InstallCurrent(paths, version, os.Stdout)
 	}
 	if len(args) > 0 && args[0] == "update" {
-		scope := config.UpdateAll
-		if len(args) == 2 {
-			switch args[1] {
-			case "software":
-				scope = config.UpdateSoftware
-			case "repositories":
-				scope = config.UpdateRepositories
-			}
-		}
-		return config.NewUpdater(paths, os.Stdout, version).Update(scope)
+		return update(paths, args[1:])
 	}
 	var machine config.Machine
 	restorePending := false
@@ -157,8 +148,90 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	_, err = tea.NewProgram(ui.New(paths, machine, executable)).Run()
+	_, err = tea.NewProgram(ui.New(paths, machine, executable, version)).Run()
 	return err
+}
+
+type updateOptions struct {
+	scope  config.UpdateScope
+	dryRun bool
+	yes    bool
+}
+
+func parseUpdateOptions(args []string) (updateOptions, error) {
+	options := updateOptions{scope: config.UpdateAll}
+	scopeSeen := false
+	for _, argument := range args {
+		switch argument {
+		case "software", "repositories":
+			if scopeSeen {
+				return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+			}
+			scopeSeen = true
+			if argument == "software" {
+				options.scope = config.UpdateSoftware
+			} else {
+				options.scope = config.UpdateRepositories
+			}
+		case "--dry-run":
+			if options.dryRun {
+				return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+			}
+			options.dryRun = true
+		case "--yes":
+			if options.yes {
+				return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+			}
+			options.yes = true
+		default:
+			return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+		}
+	}
+	if options.dryRun && options.yes {
+		return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+	}
+	return options, nil
+}
+
+func update(paths config.Paths, args []string) error {
+	options, err := parseUpdateOptions(args)
+	if err != nil {
+		return err
+	}
+	updater := config.NewUpdater(paths, os.Stdout, version)
+	plan, err := updater.Plan(options.scope)
+	if err != nil {
+		return err
+	}
+	config.WriteUpdatePlan(os.Stdout, plan)
+	if plan.Blocked {
+		return errors.New("Config: update is unavailable")
+	}
+	if !plan.HasWork() || options.dryRun {
+		return nil
+	}
+	if !options.yes {
+		if !terminal(os.Stdin) || !terminal(os.Stdout) {
+			command := "config update"
+			switch options.scope {
+			case config.UpdateSoftware:
+				command += " software"
+			case config.UpdateRepositories:
+				command += " repositories"
+			}
+			fmt.Fprintf(os.Stdout, "\nNo changes made; run %s --yes to apply this plan.\n", command)
+			return nil
+		}
+		confirmed, err := confirm(os.Stdin, os.Stdout, "Run this update?")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Fprintln(os.Stdout, "No changes made.")
+			return nil
+		}
+	}
+	return updater.Update(options.scope)
 }
 
 type pruneOptions struct {
@@ -222,7 +295,11 @@ func prune(paths config.Paths, machine config.Machine, args []string) error {
 }
 
 func confirmPrune(in io.Reader, out io.Writer) (bool, error) {
-	fmt.Fprint(out, "\nPrune these items? [y/N] ")
+	return confirm(in, out, "Prune these items?")
+}
+
+func confirm(in io.Reader, out io.Writer, prompt string) (bool, error) {
+	fmt.Fprintf(out, "\n%s [y/N] ", prompt)
 	answer, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
@@ -266,9 +343,8 @@ func checkArguments(args []string) error {
 			return fmt.Errorf("usage: config %s", args[0])
 		}
 	case "update":
-		if len(args) > 2 || (len(args) == 2 && args[1] != "software" && args[1] != "repositories") {
-			return errors.New("usage: config update [software | repositories]")
-		}
+		_, err := parseUpdateOptions(args[1:])
+		return err
 	case "bootstrap":
 		if len(args) != 2 {
 			return errors.New("usage: config bootstrap <repository>")

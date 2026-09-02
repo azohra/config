@@ -234,6 +234,65 @@ func TestUpdateRejectsAnUnknownScope(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsRequireOneExplicitApplyMode(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want updateOptions
+		ok   bool
+	}{
+		{nil, updateOptions{scope: config.UpdateAll}, true},
+		{[]string{"software", "--dry-run"}, updateOptions{scope: config.UpdateSoftware, dryRun: true}, true},
+		{[]string{"--yes", "repositories"}, updateOptions{scope: config.UpdateRepositories, yes: true}, true},
+		{[]string{"--dry-run", "--yes"}, updateOptions{}, false},
+		{[]string{"software", "repositories"}, updateOptions{}, false},
+		{[]string{"--force"}, updateOptions{}, false},
+	} {
+		got, err := parseUpdateOptions(test.args)
+		if (err == nil) != test.ok || got != test.want {
+			t.Errorf("parseUpdateOptions(%q) = %+v, %v", test.args, got, err)
+		}
+	}
+}
+
+func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
+	binary, home := buildConfig(t), fixtureHome(t)
+	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
+	document, err := os.ReadFile(filepath.Join(root, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document = bytes.Replace(document, []byte("dock = true"), []byte("dock = true\nmise = true"), 1)
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), document, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "mise-commands")
+	t.Setenv("UPDATE_TEST_LOG", log)
+	mise := filepath.Join(home, ".local", "bin", "mise")
+	if err := os.MkdirAll(filepath.Dir(mise), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
+if [ "$1" = --version ]; then printf '2026.9.1\n'; fi
+if [ "$1" = outdated ]; then printf '{}\n'; fi
+if [ "$1 $2 $3" = "bootstrap packages status" ]; then printf '{"brew":{"packages":[{}]}}\n'; fi
+`
+	if err := os.WriteFile(mise, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output, code := runConfig(t, binary, home, "update", "software")
+	if code != 0 || !strings.Contains(output, "Update plan · software") || !strings.Contains(output, "No changes made; run config update software --yes") {
+		t.Fatalf("redirected update exited %d:\n%s", code, output)
+	}
+	commands, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(commands), "upgrade --yes") || strings.Contains(string(commands), "packages upgrade") {
+		t.Fatalf("preview mutated through Mise:\n%s", commands)
+	}
+}
+
 func TestHelpKeepsInstallAsDistributionPlumbing(t *testing.T) {
 	output, code := runConfig(t, buildConfig(t), t.TempDir(), "help")
 	if code != 0 {
