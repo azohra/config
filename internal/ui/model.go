@@ -78,6 +78,7 @@ type Model struct {
 	spinner          spinner.Model
 	width            int
 	height           int
+	showDiagnostics  bool
 	operation        operation
 	last             operationResult
 }
@@ -113,6 +114,10 @@ func New(paths config.Paths, machine config.Machine, executable, version string,
 		m.checkingOverview = false
 		m.loading = false
 		m.screen = screenResult
+		m.showDiagnostics = m.last.err != nil && m.last.log.hasDiagnostics()
+		if m.showDiagnostics {
+			m.scroll = m.scrollBound()
+		}
 		m.reopenResult = true
 	}
 	return m
@@ -166,7 +171,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		followedTail := m.screen == screenResult && m.showDiagnostics && m.scroll == m.scrollBound()
 		m.width, m.height = msg.Width, msg.Height
+		if followedTail {
+			m.scroll = m.scrollBound()
+		}
 	case reportMsg:
 		m.report = msg.report
 		if msg.passive {
@@ -230,7 +239,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateOverview = msg.plan
 			m.checkingOverview = false
 		}
-	case operationEventMsg:
+	case operationEventsMsg:
 		return m.updateOperation(msg)
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
@@ -240,6 +249,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cancelUpdatePlanning()
 			return m, tea.Quit
+		}
+		if m.screen == screenRunning && msg.String() == "d" {
+			m.showDiagnostics = !m.showDiagnostics
+			m.scroll = 0
+			return m, tea.Batch(commands...)
 		}
 		if m.loading || m.screen == screenRunning {
 			return m, tea.Batch(commands...)

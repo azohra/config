@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"strings"
 	"unicode/utf8"
 
@@ -10,25 +9,89 @@ import (
 	"github.com/azohra/config/internal/config"
 )
 
+const (
+	maxOperationProgressBytes   = 128 << 10
+	maxOperationProgressLines   = 256
+	maxOperationDiagnosticBytes = 128 << 10
+	maxOperationDiagnosticLines = 200
+)
+
 type outputSpan struct {
 	kind config.OperationEventKind
 	text []byte
 }
 
 type terminalOutput struct {
-	spans      []outputSpan
-	escape     byte
-	pendingCR  bool
-	storedSize int
+	spans        []outputSpan
+	escape       byte
+	pendingCR    bool
+	storedSize   int
+	omittedLines int
+	maxBytes     int
+	maxLines     int
 }
 
 func outputFromString(text string) terminalOutput {
-	var output terminalOutput
+	output := newTerminalOutput(maxOperationProgressBytes, maxOperationProgressLines)
 	output.appendText(config.OperationOutput, text)
+	output.bound()
 	return output
 }
 
+func newTerminalOutput(maxBytes, maxLines int) terminalOutput {
+	return terminalOutput{maxBytes: maxBytes, maxLines: maxLines}
+}
+
+func newOperationLog() operationLog {
+	return operationLog{
+		progress:    newTerminalOutput(maxOperationProgressBytes, maxOperationProgressLines),
+		diagnostics: newTerminalOutput(maxOperationDiagnosticBytes, maxOperationDiagnosticLines),
+	}
+}
+
+// operationLog separates Config's durable, typed account of an operation from
+// the provider transcript that happens to accompany it. Provider output still
+// remains available for diagnosis, but it cannot become the primary UI.
+type operationLog struct {
+	progress    terminalOutput
+	diagnostics terminalOutput
+	activity    string
+}
+
+func (o *operationLog) Append(event config.OperationEvent) {
+	o.ensureLimits()
+	if event.Kind == config.OperationOutput {
+		o.diagnostics.Append(event)
+		if activity := lastNonblankLine(o.diagnostics.String()); activity != "" {
+			o.activity = activity
+		}
+		return
+	}
+	o.activity = ""
+	o.progress.Append(event)
+}
+
+func (o *operationLog) ensureLimits() {
+	o.progress.ensureLimits(maxOperationProgressBytes, maxOperationProgressLines)
+	o.diagnostics.ensureLimits(maxOperationDiagnosticBytes, maxOperationDiagnosticLines)
+}
+
+func (o operationLog) hasDiagnostics() bool {
+	return strings.TrimSpace(o.diagnostics.String()) != ""
+}
+
+func lastNonblankLine(text string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if line := strings.TrimSpace(lines[index]); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
 func (o *terminalOutput) Append(event config.OperationEvent) {
+	o.ensureLimits(maxOperationProgressBytes, maxOperationProgressLines)
 	switch event.Kind {
 	case config.OperationSection:
 		o.appendText(config.OperationOutput, "\n"+event.Text+"\n")
@@ -51,6 +114,15 @@ func (o *terminalOutput) Append(event config.OperationEvent) {
 		o.appendText(config.OperationOutput, event.Text)
 	}
 	o.bound()
+}
+
+func (o *terminalOutput) ensureLimits(maxBytes, maxLines int) {
+	if o.maxBytes == 0 {
+		o.maxBytes = maxBytes
+	}
+	if o.maxLines == 0 {
+		o.maxLines = maxLines
+	}
 }
 
 func (o *terminalOutput) appendText(kind config.OperationEventKind, text string) {
@@ -159,33 +231,54 @@ func (o *terminalOutput) removeLastRune() {
 }
 
 func (o *terminalOutput) bound() {
-	if o.storedSize <= maxOperationOutput {
+	text := o.String()
+	start := byteBoundStart(text, o.maxBytes)
+	start = max(start, lineBoundStart(text, o.maxLines))
+	if start == 0 {
 		return
 	}
-	drop := o.storedSize - maxOperationOutput
-	offset := 0
-	start := drop
-	foundNewline := false
-	for _, span := range o.spans {
-		if offset+len(span.text) <= drop {
-			offset += len(span.text)
-			continue
-		}
-		from := max(0, drop-offset)
-		if newline := bytes.IndexByte(span.text[from:], '\n'); newline >= 0 {
-			start = offset + from + newline + 1
-			foundNewline = true
-			break
-		}
-		offset += len(span.text)
-	}
-	if !foundNewline {
-		text := o.String()
-		for start < len(text) && !utf8.RuneStart(text[start]) {
-			start++
-		}
+	o.omittedLines += strings.Count(text[:start], "\n")
+	if text[start-1] != '\n' {
+		o.omittedLines++
 	}
 	o.dropPrefix(start)
+}
+
+func byteBoundStart(text string, limit int) int {
+	if limit <= 0 || len(text) <= limit {
+		return 0
+	}
+	start := len(text) - limit
+	if newline := strings.IndexByte(text[start:], '\n'); newline >= 0 {
+		return start + newline + 1
+	}
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return start
+}
+
+func lineBoundStart(text string, limit int) int {
+	if limit <= 0 || text == "" {
+		return 0
+	}
+	lines := strings.Count(text, "\n")
+	if text[len(text)-1] != '\n' {
+		lines++
+	}
+	drop := lines - limit
+	if drop <= 0 {
+		return 0
+	}
+	start := 0
+	for range drop {
+		newline := strings.IndexByte(text[start:], '\n')
+		if newline < 0 {
+			return len(text)
+		}
+		start += newline + 1
+	}
+	return start
 }
 
 func (o *terminalOutput) dropPrefix(size int) {
@@ -231,6 +324,47 @@ func (o terminalOutput) Styled() string {
 	return text.String()
 }
 
-func (o terminalOutput) Tail(width, available int) string {
-	return outputTail(ansi.Hardwrap(o.Styled(), width, true), available)
+func (o terminalOutput) Lines(width int, omissionNoun string) []string {
+	output := strings.Trim(ansi.Hardwrap(o.Styled(), width, true), "\n")
+	var lines []string
+	if o.omittedLines > 0 {
+		lines = append(lines, omissionLine(o.omittedLines, omissionNoun))
+	}
+	if output != "" {
+		lines = append(lines, strings.Split(output, "\n")...)
+	}
+	return lines
+}
+
+// TailLines wraps only enough logical lines to fill a live viewport. The
+// completed result can afford to build its bounded scroll model, but the
+// spinner redraws this path continuously while a provider is running.
+func (o terminalOutput) TailLines(width, available int, omissionNoun string) []string {
+	if available <= 0 {
+		return nil
+	}
+	output := strings.Trim(o.Styled(), "\n")
+	var lines []string
+	if output != "" {
+		logical := strings.Split(output, "\n")
+		for index := len(logical) - 1; index >= 0 && len(lines) < available; index-- {
+			wrapped := strings.Split(ansi.Hardwrap(logical[index], width, true), "\n")
+			remaining := available - len(lines)
+			if len(wrapped) > remaining {
+				wrapped = wrapped[len(wrapped)-remaining:]
+			}
+			lines = append(wrapped, lines...)
+		}
+	}
+	if o.omittedLines > 0 {
+		if len(lines) == available {
+			lines = lines[1:]
+		}
+		lines = append([]string{omissionLine(o.omittedLines, omissionNoun)}, lines...)
+	}
+	return lines
+}
+
+func omissionLine(count int, noun string) string {
+	return muted.Render("… " + config.FormatCount(count, "earlier "+noun+" omitted", "earlier "+noun+"s omitted"))
 }

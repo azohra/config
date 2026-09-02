@@ -11,7 +11,7 @@ import (
 	"github.com/azohra/config/internal/config"
 )
 
-const operationResultSchema = 2
+const operationResultSchema = 3
 
 type storedOutputSpan struct {
 	Kind config.OperationEventKind `json:"kind,omitempty"`
@@ -19,13 +19,18 @@ type storedOutputSpan struct {
 }
 
 type storedOperationResult struct {
-	Schema     int                `json:"schema"`
-	Label      string             `json:"label"`
-	Output     string             `json:"output,omitempty"`
-	Spans      []storedOutputSpan `json:"spans,omitempty"`
-	Error      string             `json:"error,omitempty"`
-	Cancelled  bool               `json:"cancelled,omitempty"`
-	FinishedAt time.Time          `json:"finished_at"`
+	Schema             int                `json:"schema"`
+	Label              string             `json:"label"`
+	Output             string             `json:"output,omitempty"`
+	Spans              []storedOutputSpan `json:"spans,omitempty"`
+	Progress           []storedOutputSpan `json:"progress,omitempty"`
+	Diagnostics        string             `json:"diagnostics,omitempty"`
+	ProgressOmitted    int                `json:"progress_omitted,omitempty"`
+	DiagnosticsOmitted int                `json:"diagnostics_omitted,omitempty"`
+	Error              string             `json:"error,omitempty"`
+	Cancelled          bool               `json:"cancelled,omitempty"`
+	FinishedAt         time.Time          `json:"finished_at"`
+	DurationMS         int64              `json:"duration_ms,omitempty"`
 }
 
 func operationResultPath(paths config.Paths) string {
@@ -41,23 +46,47 @@ func loadOperationResult(paths config.Paths) operationResult {
 		return operationResult{}
 	}
 	var stored storedOperationResult
-	if json.Unmarshal(data, &stored) != nil || (stored.Schema != 1 && stored.Schema != operationResultSchema) || stored.Label == "" {
+	if json.Unmarshal(data, &stored) != nil || (stored.Schema < 1 || stored.Schema > operationResultSchema) || stored.Label == "" {
 		return operationResult{}
 	}
-	output := outputFromString(stored.Output)
-	if stored.Schema == operationResultSchema {
-		output = terminalOutput{}
+	if stored.ProgressOmitted < 0 || stored.DiagnosticsOmitted < 0 || stored.DurationMS < 0 {
+		return operationResult{}
+	}
+	log := newOperationLog()
+	switch stored.Schema {
+	case 1:
+		log.diagnostics = outputFromString(stored.Output)
+		log.diagnostics.maxBytes = maxOperationDiagnosticBytes
+		log.diagnostics.maxLines = maxOperationDiagnosticLines
+		log.diagnostics.bound()
+	case 2:
 		for _, span := range stored.Spans {
-			if span.Kind != config.OperationOutput && span.Kind != config.OperationOK && span.Kind != config.OperationInfo &&
-				span.Kind != config.OperationWarn && span.Kind != config.OperationError {
+			if !storedSpanKind(span.Kind) {
 				return operationResult{}
 			}
-			output.appendText(span.Kind, span.Text)
+			// Schema 2 stored a rendered transcript: the spaces and message
+			// around a typed glyph were ordinary output spans. Keep that
+			// transcript intact instead of manufacturing partial progress.
+			log.diagnostics.appendText(config.OperationOutput, span.Text)
 		}
-		output.bound()
+		log.diagnostics.bound()
+	case operationResultSchema:
+		for _, span := range stored.Progress {
+			if !storedSpanKind(span.Kind) {
+				return operationResult{}
+			}
+			log.progress.appendText(span.Kind, span.Text)
+		}
+		log.progress.bound()
+		log.diagnostics.appendText(config.OperationOutput, stored.Diagnostics)
+		log.diagnostics.bound()
+		log.progress.omittedLines += stored.ProgressOmitted
+		log.diagnostics.omittedLines += stored.DiagnosticsOmitted
 	}
+	log.activity = lastNonblankLine(log.diagnostics.String())
 	result := operationResult{
-		label: stored.Label, output: output, cancelled: stored.Cancelled, finishedAt: stored.FinishedAt,
+		label: stored.Label, log: log, cancelled: stored.Cancelled, finishedAt: stored.FinishedAt,
+		duration: time.Duration(stored.DurationMS) * time.Millisecond,
 	}
 	if stored.Error != "" {
 		result.err = errors.New(stored.Error)
@@ -74,10 +103,12 @@ func saveOperationResult(paths config.Paths, result operationResult) error {
 	}
 	stored := storedOperationResult{
 		Schema: operationResultSchema, Label: result.label,
-		Cancelled: result.cancelled, FinishedAt: result.finishedAt,
+		Cancelled: result.cancelled, FinishedAt: result.finishedAt, DurationMS: result.duration.Milliseconds(),
+		ProgressOmitted: result.log.progress.omittedLines, DiagnosticsOmitted: result.log.diagnostics.omittedLines,
+		Diagnostics: result.log.diagnostics.String(),
 	}
-	for _, span := range result.output.spans {
-		stored.Spans = append(stored.Spans, storedOutputSpan{Kind: span.kind, Text: string(span.text)})
+	for _, span := range result.log.progress.spans {
+		stored.Progress = append(stored.Progress, storedOutputSpan{Kind: span.kind, Text: string(span.text)})
 	}
 	if result.err != nil {
 		stored.Error = result.err.Error()
@@ -90,4 +121,9 @@ func saveOperationResult(paths config.Paths, result operationResult) error {
 		return fmt.Errorf("save operation result: %w", err)
 	}
 	return nil
+}
+
+func storedSpanKind(kind config.OperationEventKind) bool {
+	return kind == config.OperationOutput || kind == config.OperationOK || kind == config.OperationInfo ||
+		kind == config.OperationWarn || kind == config.OperationError
 }

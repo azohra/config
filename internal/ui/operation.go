@@ -17,25 +17,30 @@ import (
 	"github.com/azohra/config/internal/config"
 )
 
-const maxOperationOutput = 128 << 10
+const (
+	operationOutputFlushInterval = 75 * time.Millisecond
+	maxOperationEventBatch       = 128
+)
 
 type operation struct {
 	label     string
 	name      string
 	args      []string
-	output    terminalOutput
+	log       operationLog
 	events    <-chan operationEvent
 	cancel    context.CancelFunc
 	cancelled bool
 	version   string
+	startedAt time.Time
 }
 
 type operationResult struct {
 	label      string
-	output     terminalOutput
+	log        operationLog
 	err        error
 	cancelled  bool
 	finishedAt time.Time
+	duration   time.Duration
 }
 
 type operationEvent struct {
@@ -44,7 +49,7 @@ type operationEvent struct {
 	done  bool
 }
 
-type operationEventMsg operationEvent
+type operationEventsMsg []operationEvent
 
 type eventWriter struct {
 	ctx    context.Context
@@ -64,8 +69,13 @@ func (w eventWriter) Write(data []byte) (int, error) {
 func (m Model) startOperation(label, name string, args ...string) (tea.Model, tea.Cmd) {
 	m.cancelUpdatePlanning()
 	ctx, cancel := context.WithCancel(context.Background())
-	events := make(chan operationEvent)
-	m.operation = operation{label: label, name: name, args: append([]string(nil), args...), events: events, cancel: cancel}
+	events := make(chan operationEvent, maxOperationEventBatch)
+	m.operation = operation{
+		label: label, name: name, args: append([]string(nil), args...), log: newOperationLog(),
+		events: events, cancel: cancel, startedAt: time.Now(),
+	}
+	m.showDiagnostics = false
+	m.scroll = 0
 	m.screen = screenRunning
 	return m, tea.Batch(
 		m.spinner.Tick,
@@ -156,48 +166,98 @@ func knownOperationEvent(kind config.OperationEventKind) bool {
 
 func waitOperation(events <-chan operationEvent) tea.Cmd {
 	return func() tea.Msg {
-		event, ok := <-events
+		first, ok := <-events
 		if !ok {
 			return nil
 		}
-		return operationEventMsg(event)
+		batch := []operationEvent{first}
+		if first.done || first.event.Kind != config.OperationOutput {
+			return operationEventsMsg(batch)
+		}
+		timer := time.NewTimer(operationOutputFlushInterval)
+		defer timer.Stop()
+		for {
+			select {
+			case event, open := <-events:
+				if !open {
+					return operationEventsMsg(batch)
+				}
+				batch = append(batch, event)
+				if len(batch) >= maxOperationEventBatch || event.done || event.event.Kind != config.OperationOutput {
+					return operationEventsMsg(batch)
+				}
+			case <-timer.C:
+				return operationEventsMsg(batch)
+			}
+		}
 	}
 }
 
-func (m Model) updateOperation(msg operationEventMsg) (tea.Model, tea.Cmd) {
-	if msg.event.Kind != "" {
-		if msg.event.Kind == config.OperationVersion {
-			m.operation.version = msg.event.Text
-		} else {
-			m.operation.output.Append(msg.event)
+func (m Model) updateOperation(msg operationEventsMsg) (tea.Model, tea.Cmd) {
+	var final *operationEvent
+	var output strings.Builder
+	flushOutput := func() {
+		if output.Len() == 0 {
+			return
 		}
-		return m, waitOperation(m.operation.events)
+		m.operation.log.Append(config.OperationEvent{Kind: config.OperationOutput, Text: output.String()})
+		output.Reset()
 	}
-	if !msg.done {
+	for index := range msg {
+		item := msg[index]
+		if item.event.Kind != "" {
+			if item.event.Kind == config.OperationOutput {
+				output.WriteString(item.event.Text)
+			} else {
+				flushOutput()
+				if item.event.Kind == config.OperationVersion {
+					m.operation.version = item.event.Text
+				} else {
+					m.operation.log.Append(item.event)
+				}
+			}
+		}
+		if item.done {
+			final = &item
+			break
+		}
+	}
+	flushOutput()
+	if final == nil {
 		return m, waitOperation(m.operation.events)
 	}
 	if m.operation.cancel != nil {
 		m.operation.cancel()
 	}
+	duration := time.Duration(0)
+	if !m.operation.startedAt.IsZero() {
+		duration = time.Since(m.operation.startedAt)
+	}
 	result := operationResult{
 		label:      m.operation.label,
-		output:     m.operation.output,
-		err:        msg.err,
+		log:        m.operation.log,
+		err:        final.err,
 		cancelled:  m.operation.cancelled,
 		finishedAt: time.Now(),
+		duration:   duration,
 	}
 	installedVersion := m.operation.version
 	if err := saveOperationResult(m.paths, result); err != nil {
-		result.output.Append(config.OperationEvent{Kind: config.OperationWarn, Text: "Last result was not saved: " + err.Error()})
+		result.log.Append(config.OperationEvent{Kind: config.OperationWarn, Text: "Last result was not saved: " + err.Error()})
 	}
 	m.last = result
 	m.operation = operation{}
 	m.screen = screenResult
+	m.scroll = 0
+	m.showDiagnostics = m.showDiagnostics || (result.err != nil && result.log.hasDiagnostics())
+	if m.showDiagnostics {
+		m.scroll = m.scrollBound()
+	}
 	m.cancelUpdatePlanning()
 	m.checkingOverview = false
 	m.overviewReady = false
 	m.overviewError = nil
-	if msg.err == nil && installedVersion != "" && installedVersion != m.version {
+	if final.err == nil && installedVersion != "" && installedVersion != m.version {
 		m.restart = true
 		return m, tea.Quit
 	}

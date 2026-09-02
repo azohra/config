@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -224,11 +225,9 @@ func TestDashboardPresentsOperationResultAsBanner(t *testing.T) {
 	}
 }
 
-// The pane colors what the Logger wrote, so drive a real Logger: a glyph the
-// producer stops emitting must fail here rather than silently lose its color.
-// Coloring never alters the text it paints, and the command output sampled here
-// keeps every byte.
-func TestOperationTailColorsStepLines(t *testing.T) {
+// Typed Config progress is durable and colored. Provider output contributes
+// only the current activity line until the user asks for details.
+func TestRunningOperationSeparatesProgressFromProviderActivity(t *testing.T) {
 	events := []config.OperationEvent{
 		{Kind: config.OperationInfo, Text: "checking machine state"},
 		{Kind: config.OperationOK, Text: "machine state valid"},
@@ -236,31 +235,69 @@ func TestOperationTailColorsStepLines(t *testing.T) {
 		{Kind: config.OperationError, Text: "push rejected"},
 	}
 	steps := []string{"  → checking machine state", "  ✓ machine state valid", "  ! commit remains local", "  ✗ push rejected"}
-	untouched := []string{"[check] ~/.gitconfig  symlink  applied", " 1 file changed, 1 insertion(+)", "  1 file changed", "Snapshot"}
-	var output terminalOutput
+	diagnostics := []string{"[check] ~/.gitconfig  symlink  applied", " 1 file changed, 1 insertion(+)", "Snapshot"}
+	log := newOperationLog()
 	for _, event := range events {
-		output.Append(event)
+		log.Append(event)
 	}
-	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: strings.Join(untouched, "\n")})
-
-	m := Model{width: 94}
-	lines := strings.Split(m.operationTail(output, 20), "\n")
-	if len(lines) != len(steps)+len(untouched) {
-		t.Fatalf("operationTail returned %d lines for %d", len(lines), len(steps)+len(untouched))
-	}
+	log.Append(config.OperationEvent{Kind: config.OperationOutput, Text: strings.Join(diagnostics, "\n") + "\n"})
+	colored := log.progress.Lines(86, "progress line")
 	for index, want := range steps {
-		got := lines[index]
-		if got == want {
-			t.Fatalf("step line %q went uncolored", want)
-		}
-		if stripped := ansi.Strip(got); stripped != want {
-			t.Fatalf("coloring changed the text: %q became %q", want, stripped)
+		if got := colored[index]; got == want || ansi.Strip(got) != want {
+			t.Fatalf("progress color changed %q into %q", want, got)
 		}
 	}
-	for offset, want := range untouched {
-		if got := lines[len(steps)+offset]; got != want {
-			t.Fatalf("command output line %q became %q", want, got)
+
+	m := Model{width: 94, height: 30, screen: screenRunning, operation: operation{label: "Update", log: log}}
+	view := m.renderRunning()
+	plain := ansi.Strip(view)
+	for _, want := range steps {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("progress missing %q:\n%s", want, plain)
 		}
+	}
+	if !strings.Contains(plain, "Now  Snapshot") || strings.Contains(plain, diagnostics[0]) {
+		t.Fatalf("default view did not compact provider activity:\n%s", plain)
+	}
+	if lipgloss.Height(view) > m.height {
+		t.Fatalf("running progress height=%d, terminal=%d", lipgloss.Height(view), m.height)
+	}
+
+	m.showDiagnostics = true
+	details := ansi.Strip(m.renderRunning())
+	for _, want := range diagnostics {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+	if strings.Contains(details, steps[0]) {
+		t.Fatalf("details mixed progress into provider output:\n%s", details)
+	}
+	if lipgloss.Height(m.renderRunning()) > m.height {
+		t.Fatalf("running details exceeded terminal height")
+	}
+}
+
+func TestResultDefaultsToProgressAndTogglesDetails(t *testing.T) {
+	log := newOperationLog()
+	log.Append(config.OperationEvent{Kind: config.OperationOK, Text: "packages current"})
+	log.Append(config.OperationEvent{Kind: config.OperationOutput, Text: "provider detail\n"})
+	m := Model{
+		width: 80, height: 24, screen: screenResult,
+		last: operationResult{label: "Update", log: log, finishedAt: time.Now(), duration: 3 * time.Second},
+	}
+
+	progress := ansi.Strip(m.renderResult())
+	if !strings.Contains(progress, "packages current") || !strings.Contains(progress, "3s") || strings.Contains(progress, "provider detail") {
+		t.Fatalf("result progress =\n%s", progress)
+	}
+	next, _ := m.updateResult(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	details := ansi.Strip(next.(Model).renderResult())
+	if !strings.Contains(details, "provider detail") || strings.Contains(details, "packages current") {
+		t.Fatalf("result details =\n%s", details)
+	}
+	if lipgloss.Height(next.(Model).renderResult()) > m.height {
+		t.Fatalf("result details exceeded terminal height")
 	}
 }
 

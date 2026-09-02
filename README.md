@@ -217,12 +217,14 @@ another scope cancels it and starts only the requested check. Before applying,
 the child command recomputes the selected plan and refuses to continue if its
 identity changed.
 
-Operations stream typed Config progress and separately framed provider output,
-so terminal control sequences and split UTF-8 cannot change the meaning of a
-status line. A completed result stays open while machine status refreshes. If
-Config replaces itself, the parent interface restarts from the installed
-binary and reopens that persisted result. Results remain in Config's private
-state until a later operation replaces them.
+Operations show typed Config progress and one current provider activity line.
+Press `d` to inspect the bounded provider details; failed operations open that
+final context automatically. Terminal control sequences and split UTF-8 cannot
+change the meaning of a status line. A completed result stays open while
+machine status refreshes and records how long the operation took. If Config
+replaces itself, the parent interface restarts from the installed binary and
+reopens that persisted result. Results remain in Config's private state until
+a later operation replaces them.
 
 `config prune` previews Mise's shared inventory decisions alongside Config's
 own stale state. A declared but unavailable Mise is reported and its state

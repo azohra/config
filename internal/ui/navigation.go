@@ -102,8 +102,12 @@ func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case dashboardUpdateRepositories:
 			return m.beginUpdate(config.UpdateRepositories)
 		case dashboardLastResult:
-			m.scroll = 0
+			m.showDiagnostics = m.last.err != nil && m.last.log.hasDiagnostics()
 			m.screen = screenResult
+			m.scroll = 0
+			if m.showDiagnostics {
+				m.scroll = m.scrollBound()
+			}
 		case dashboardCleanup:
 			return m.beginPrune()
 		case dashboardQuit:
@@ -203,6 +207,12 @@ func (m Model) updateResult(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll = max(0, m.scroll-10)
 	case "pgdown":
 		m.scroll = min(m.scroll+10, m.scrollBound())
+	case "d":
+		m.showDiagnostics = !m.showDiagnostics
+		m.scroll = 0
+		if m.showDiagnostics && m.last.err != nil {
+			m.scroll = m.scrollBound()
+		}
 	}
 	return m, nil
 }

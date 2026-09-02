@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -121,10 +122,75 @@ func TestAppendOutputNormalizesAndBounds(t *testing.T) {
 		t.Fatalf("appendOutput() kept cursor controls: %q", got)
 	}
 	output = terminalOutput{}
-	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: strings.Repeat("x", maxOperationOutput+10) + "\nlast\n"})
+	output.Append(config.OperationEvent{Kind: config.OperationOutput, Text: strings.Repeat("x", maxOperationProgressBytes+10) + "\nlast\n"})
 	got = output.String()
-	if len(got) > maxOperationOutput || !strings.HasSuffix(got, "last\n") {
+	if len(got) > maxOperationProgressBytes || !strings.HasSuffix(got, "last\n") {
 		t.Fatalf("bounded output length=%d suffix=%q", len(got), got[len(got)-5:])
+	}
+}
+
+func TestOperationLogSeparatesProgressFromProviderDiagnostics(t *testing.T) {
+	log := newOperationLog()
+	log.Append(config.OperationEvent{Kind: config.OperationSection, Text: "Packages"})
+	log.Append(config.OperationEvent{Kind: config.OperationOutput, Text: "downloading one\n"})
+	log.Append(config.OperationEvent{Kind: config.OperationOK, Text: "packages current"})
+	log.Append(config.OperationEvent{Kind: config.OperationOutput, Text: "downloading two\n"})
+
+	if got := log.progress.String(); !strings.Contains(got, "Packages") || !strings.Contains(got, "packages current") || strings.Contains(got, "downloading") {
+		t.Fatalf("progress = %q", got)
+	}
+	if got := log.diagnostics.String(); got != "downloading one\ndownloading two\n" {
+		t.Fatalf("diagnostics = %q", got)
+	}
+	if log.activity != "downloading two" {
+		t.Fatalf("activity = %q", log.activity)
+	}
+	log.Append(config.OperationEvent{Kind: config.OperationOK, Text: "download complete"})
+	if log.activity != "" {
+		t.Fatalf("completed provider activity remained current: %q", log.activity)
+	}
+}
+
+func TestOperationDiagnosticsHaveLineAndByteCeilings(t *testing.T) {
+	log := newOperationLog()
+	for index := range maxOperationDiagnosticLines + 20 {
+		log.Append(config.OperationEvent{Kind: config.OperationOutput, Text: fmt.Sprintf("line %03d\n", index)})
+	}
+	if lines := strings.Count(log.diagnostics.String(), "\n"); lines != maxOperationDiagnosticLines {
+		t.Fatalf("kept %d diagnostic lines, want %d", lines, maxOperationDiagnosticLines)
+	}
+	if log.diagnostics.omittedLines != 20 {
+		t.Fatalf("omitted %d diagnostic lines, want 20", log.diagnostics.omittedLines)
+	}
+
+	log = newOperationLog()
+	log.Append(config.OperationEvent{Kind: config.OperationOutput, Text: strings.Repeat("x", maxOperationDiagnosticBytes+10) + "\nlast\n"})
+	if got := log.diagnostics.String(); len(got) > maxOperationDiagnosticBytes || !strings.HasSuffix(got, "last\n") {
+		t.Fatalf("bounded diagnostics length=%d suffix=%q", len(got), got[max(0, len(got)-5):])
+	}
+}
+
+func TestOperationProgressHasItsOwnCeiling(t *testing.T) {
+	log := newOperationLog()
+	for index := range maxOperationProgressLines + 5 {
+		log.Append(config.OperationEvent{Kind: config.OperationInfo, Text: fmt.Sprintf("step %03d", index)})
+	}
+	if lines := strings.Count(log.progress.String(), "\n"); lines != maxOperationProgressLines {
+		t.Fatalf("kept %d progress lines, want %d", lines, maxOperationProgressLines)
+	}
+	if log.progress.omittedLines != 5 {
+		t.Fatalf("omitted %d progress lines, want 5", log.progress.omittedLines)
+	}
+}
+
+func TestWaitOperationCoalescesProviderOutputUntilProgress(t *testing.T) {
+	events := make(chan operationEvent, 3)
+	events <- operationEvent{event: config.OperationEvent{Kind: config.OperationOutput, Text: "one"}}
+	events <- operationEvent{event: config.OperationEvent{Kind: config.OperationOutput, Text: "two"}}
+	events <- operationEvent{event: config.OperationEvent{Kind: config.OperationOK, Text: "done"}}
+	msg, ok := waitOperation(events)().(operationEventsMsg)
+	if !ok || len(msg) != 3 || msg[2].event.Kind != config.OperationOK {
+		t.Fatalf("coalesced event = %#v", msg)
 	}
 }
 
@@ -161,19 +227,19 @@ func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	m.loading = false
 	m.operation = operation{label: "Apply", events: events}
 
-	next, cmd := m.updateOperation(operationEventMsg{event: config.OperationEvent{Kind: config.OperationOK, Text: "layout already current"}})
+	next, cmd := m.updateOperation(operationEventsMsg{{event: config.OperationEvent{Kind: config.OperationOK, Text: "layout already current"}}})
 	running := next.(Model)
 	if running.screen != screenRunning {
 		t.Fatalf("output moved off the running screen: %v", running.screen)
 	}
-	if !strings.Contains(running.operation.output.String(), "layout already current") {
-		t.Fatalf("output was not kept: %q", running.operation.output.String())
+	if !strings.Contains(running.operation.log.progress.String(), "layout already current") {
+		t.Fatalf("progress was not kept: %q", running.operation.log.progress.String())
 	}
 	if cmd == nil {
 		t.Fatal("the interface stopped waiting for the rest of the operation")
 	}
 
-	finished, cmd := running.updateOperation(operationEventMsg{done: true})
+	finished, cmd := running.updateOperation(operationEventsMsg{{done: true}})
 	result := finished.(Model)
 	if result.screen != screenResult {
 		t.Fatalf("a finished operation left screen %v", result.screen)
@@ -181,7 +247,7 @@ func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	if result.loading {
 		t.Fatal("a finished operation hid its result behind a refresh")
 	}
-	if result.last.label != "Apply" || !strings.Contains(result.last.output.String(), "layout already current") {
+	if result.last.label != "Apply" || !strings.Contains(result.last.log.progress.String(), "layout already current") {
 		t.Fatalf("the result was not carried to the result screen: %+v", result.last)
 	}
 	if result.operation.events != nil {
@@ -197,6 +263,48 @@ func TestUpdateOperationStreamsThenRefreshes(t *testing.T) {
 	refreshed, _ := result.Update(refresh)
 	if got := refreshed.(Model); got.screen != screenResult || got.loading {
 		t.Fatalf("refresh hid the completed result: screen=%v loading=%v", got.screen, got.loading)
+	}
+}
+
+func TestFailedOperationOpensFinalDiagnosticContext(t *testing.T) {
+	root := t.TempDir()
+	m := Model{
+		paths:  config.Paths{Root: root, Home: root, StateDir: filepath.Join(root, "state")},
+		screen: screenRunning,
+		width:  80,
+		height: 24,
+		operation: operation{
+			label: "Update", log: newOperationLog(), startedAt: time.Now().Add(-2 * time.Second),
+		},
+	}
+	var transcript strings.Builder
+	for index := range 30 {
+		fmt.Fprintf(&transcript, "provider line %02d\n", index)
+	}
+	next, _ := m.updateOperation(operationEventsMsg{
+		{event: config.OperationEvent{Kind: config.OperationOutput, Text: transcript.String()}},
+		{err: errors.New("provider failed"), done: true},
+	})
+	result := next.(Model)
+	if !result.showDiagnostics || result.scroll != result.scrollBound() {
+		t.Fatalf("failure details=%v scroll=%d bound=%d", result.showDiagnostics, result.scroll, result.scrollBound())
+	}
+	view := ansi.Strip(result.renderResult())
+	if !strings.Contains(view, "provider line 29") || !strings.Contains(view, "provider failed") {
+		t.Fatalf("failure did not expose final context:\n%s", view)
+	}
+	resized, _ := result.Update(tea.WindowSizeMsg{Width: 80, Height: 18})
+	result = resized.(Model)
+	if result.scroll != result.scrollBound() {
+		t.Fatalf("failure stopped following final context after resize: scroll=%d bound=%d", result.scroll, result.scrollBound())
+	}
+}
+
+func TestRunningOperationTogglesDiagnostics(t *testing.T) {
+	m := Model{screen: screenRunning, operation: operation{label: "Update", log: newOperationLog()}}
+	next, _ := m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if !next.(Model).showDiagnostics {
+		t.Fatal("d did not open running diagnostics")
 	}
 }
 
@@ -234,7 +342,9 @@ func TestResultBannerDistinguishesCancelledFromFailed(t *testing.T) {
 	if banner := ansi.Strip(cancelled.resultBanner()); !strings.Contains(banner, "Apply cancelled") {
 		t.Fatalf("cancelled banner = %q", banner)
 	}
-	failed := Model{width: 80, height: 24, last: operationResult{label: "Apply", err: errors.New("defaults: exit status 1")}}
+	failedLog := newOperationLog()
+	failedLog.Append(config.OperationEvent{Kind: config.OperationOK, Text: "earlier step complete"})
+	failed := Model{width: 80, height: 24, last: operationResult{label: "Apply", log: failedLog, err: errors.New("defaults: exit status 1")}}
 	if banner := ansi.Strip(failed.resultBanner()); !strings.Contains(banner, "Apply failed") || !strings.Contains(banner, "defaults") {
 		t.Fatalf("failed banner = %q", banner)
 	}
@@ -251,8 +361,8 @@ func TestConfigVersionEventRestartsTheParentAndReopensItsResult(t *testing.T) {
 		paths: paths, version: "v0.13.0", screen: screenRunning,
 		operation: operation{label: "Software update", events: events},
 	}
-	next, _ := m.updateOperation(operationEventMsg{event: config.OperationEvent{Kind: config.OperationVersion, Text: "v0.14.0"}})
-	finished, cmd := next.(Model).updateOperation(operationEventMsg{done: true})
+	next, _ := m.updateOperation(operationEventsMsg{{event: config.OperationEvent{Kind: config.OperationVersion, Text: "v0.14.0"}}})
+	finished, cmd := next.(Model).updateOperation(operationEventsMsg{{done: true}})
 	result := finished.(Model)
 	if !result.RestartRequested() || result.screen != screenResult || cmd == nil {
 		t.Fatalf("version handoff = restart %v screen %v command %v", result.RestartRequested(), result.screen, cmd)

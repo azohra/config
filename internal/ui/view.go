@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -23,8 +24,8 @@ const (
 	snapshotChrome   = 11
 	pruneChrome      = 13
 	updateChrome     = 14
-	runningChrome    = 10
-	resultChrome     = 12
+	runningChrome    = 11
+	resultChrome     = 13
 )
 
 func (m Model) View() tea.View {
@@ -64,7 +65,7 @@ func (m Model) render() string {
 func (m Model) renderInspecting() string {
 	blocks := []string{title.Render("CONFIG")}
 	if m.last.label != "" {
-		if output := m.operationTail(m.last.output, max(4, m.height-inspectingChrome)); output != "" {
+		if output := m.operationTail(m.last.log.progress, max(4, m.height-inspectingChrome)); output != "" {
 			blocks = append(blocks, output)
 		}
 		blocks = append(blocks, m.spinner.View()+" Refreshing status…")
@@ -136,11 +137,9 @@ func (m Model) resultBanner() string {
 		message = m.last.label + " cancelled"
 	} else if m.last.err != nil {
 		symbol = bad.Render("✗")
-		message = m.last.label + " failed"
-		if output := m.operationTail(m.last.output, 3); output != "" {
+		message = m.last.label + " failed — " + m.last.err.Error()
+		if output := m.operationTail(m.last.log.progress, 3); output != "" {
 			message += "\n" + output
-		} else {
-			message += " — " + m.last.err.Error()
 		}
 	}
 	return symbol + " " + message
@@ -505,29 +504,65 @@ func (m Model) renderUpdate() string {
 }
 
 func (m Model) renderRunning() string {
-	output := m.operationTail(m.operation.output, max(5, m.height-runningChrome))
-	if output == "" {
-		output = muted.Render("Waiting for output…")
+	available := max(5, m.height-runningChrome)
+	label, selectedOutput, omission := "Progress", m.operation.log.progress, "progress line"
+	if m.showDiagnostics {
+		label = "Provider details"
+		selectedOutput = m.operation.log.diagnostics
+		omission = "diagnostic line"
+	}
+	reserve := 0
+	activity := ""
+	if !m.showDiagnostics && m.operation.log.activity != "" {
+		activity = muted.Render("Now  " + ansi.Truncate(m.operation.log.activity, max(1, panelContentWidth(m.width)-5), "…"))
+		reserve = 1
+	}
+	lines := selectedOutput.TailLines(panelContentWidth(m.width), max(1, available-reserve), omission)
+	if len(lines) == 0 {
+		message := "Waiting for Config progress…"
+		if m.showDiagnostics {
+			message = "No provider diagnostics yet."
+		}
+		lines = []string{muted.Render(message)}
+	}
+	content := muted.Render(label) + "\n" + strings.Join(lines, "\n")
+	if activity != "" {
+		content += "\n" + activity
 	}
 	status := m.spinner.View() + " " + m.operation.label + " in progress…"
 	if m.operation.cancelled {
 		status = caution.Render("Cancelling…")
 	}
-	return frame(m.width, title.Render(strings.ToUpper(m.operation.label)), output, status, keyHints("ctrl+c cancel"))
+	detailHint := "d details"
+	if m.showDiagnostics {
+		detailHint = "d progress"
+	}
+	return frame(m.width, title.Render(strings.ToUpper(m.operation.label)), content, status, keyHints(detailHint, "ctrl+c cancel"))
 }
 
 func (m Model) resultLines() []string {
-	output := strings.Trim(ansi.Hardwrap(m.last.output.Styled(), panelContentWidth(m.width), true), "\n")
-	if m.last.err != nil && !strings.Contains(output, m.last.err.Error()) {
-		if output != "" {
-			output += "\n\n"
+	var lines []string
+	if m.showDiagnostics {
+		lines = m.last.log.diagnostics.Lines(panelContentWidth(m.width), "diagnostic line")
+		if len(lines) == 0 {
+			lines = append(lines, muted.Render("No provider diagnostics were captured."))
 		}
-		output += "Error: " + m.last.err.Error()
+	} else {
+		lines = m.last.log.progress.Lines(panelContentWidth(m.width), "progress line")
+		if len(lines) == 0 {
+			lines = append(lines, muted.Render("No structured progress was reported."))
+		}
 	}
-	if output == "" {
-		return []string{muted.Render("No command output.")}
+	if m.last.err != nil {
+		visibleText := m.last.log.progress.String()
+		if m.showDiagnostics {
+			visibleText = m.last.log.diagnostics.String()
+		}
+		if !strings.Contains(visibleText, m.last.err.Error()) {
+			lines = append(lines, "", bad.Render("Error: "+m.last.err.Error()))
+		}
 	}
-	return strings.Split(output, "\n")
+	return lines
 }
 
 func (m Model) renderResult() string {
@@ -541,22 +576,42 @@ func (m Model) renderResult() string {
 	available := max(5, m.height-resultChrome)
 	scrollable := len(lines) > available
 	lines = visibleLines(lines, m.scroll, available)
-	hints := []string{"enter dashboard", "esc dashboard"}
+	detailHint := "d details"
+	contentLabel := "Progress"
+	if m.showDiagnostics {
+		detailHint = "d progress"
+		contentLabel = "Provider details"
+	}
+	hints := []string{detailHint, "enter dashboard", "esc dashboard"}
 	if scrollable {
 		hints = append([]string{"↑/↓ scroll"}, hints...)
 	}
 	finished := ""
 	if !m.last.finishedAt.IsZero() {
-		finished = "  " + muted.Render(m.last.finishedAt.Local().Format("Jan 2, 2006 at 3:04 PM"))
+		metadata := m.last.finishedAt.Local().Format("Jan 2, 2006 at 3:04 PM")
+		if duration := formatOperationDuration(m.last.duration); duration != "" {
+			metadata += " · " + duration
+		}
+		finished = "  " + muted.Render(metadata)
 	}
 	return frame(
 		m.width,
 		title.Render(strings.ToUpper(m.last.label)+" RESULT")+finished,
 		symbol+" "+status,
-		strings.Join(lines, "\n"),
+		muted.Render(contentLabel)+"\n"+strings.Join(lines, "\n"),
 		focusRow(true, accent.Render("Back to dashboard")),
 		keyHints(hints...),
 	)
+}
+
+func formatOperationDuration(duration time.Duration) string {
+	if duration <= 0 {
+		return ""
+	}
+	if duration < time.Second {
+		return "<1s"
+	}
+	return duration.Round(time.Second).String()
 }
 
 func keyHints(hints ...string) string {
@@ -569,23 +624,8 @@ func visibleLines(lines []string, offset, available int) []string {
 	return lines[offset:min(len(lines), offset+available)]
 }
 
-func outputTail(output string, available int) string {
-	// Trim the blank lines around a command's output, never its indentation:
-	// the pane's own step lines are indented, and their alignment and color
-	// both depend on that prefix surviving.
-	output = strings.Trim(output, "\n")
-	if strings.TrimSpace(output) == "" {
-		return ""
-	}
-	lines := strings.Split(output, "\n")
-	if len(lines) > available {
-		lines = lines[len(lines)-available:]
-	}
-	return strings.Join(lines, "\n")
-}
-
 func (m Model) operationTail(output terminalOutput, available int) string {
-	return output.Tail(panelContentWidth(m.width), available)
+	return strings.Join(output.TailLines(panelContentWidth(m.width), available, "progress line"), "\n")
 }
 
 // scrollBound is the largest offset the rendered screen can actually use.
