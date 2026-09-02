@@ -42,6 +42,7 @@ func (s UpdateScope) arguments() []string {
 }
 
 type Updater struct {
+	Paths              Paths
 	Version            string
 	Config             string
 	ReleaseCache       string
@@ -51,6 +52,8 @@ type Updater struct {
 	Installed          Runner
 	ReleaseMise        LiveRunner
 	MachineMise        LiveRunner
+	SkillsProbe        Runner
+	SkillsLive         commandRunner
 	InstallReleaseMise func() error
 	InstallMachineMise func() error
 	Log                Logger
@@ -71,6 +74,7 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 	releaseInstaller := testedMiseInstallerAt(releaseMise)
 	machineInstaller := testedMiseInstaller(paths)
 	return Updater{
+		Paths:        paths,
 		Version:      version,
 		Config:       command,
 		ReleaseCache: filepath.Join(releaseRoot, "cache"),
@@ -92,6 +96,8 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 		}},
 		ReleaseMise:        live,
 		MachineMise:        newMiseLiveRunner(paths),
+		SkillsProbe:        newAgentSkillsRunner(paths),
+		SkillsLive:         newAgentSkillsLiveRunner(paths),
 		InstallReleaseMise: releaseInstaller.Install,
 		InstallMachineMise: machineInstaller.Install,
 		Log:                Logger{Out: out},
@@ -184,41 +190,50 @@ func (u Updater) Update(scope UpdateScope) error {
 }
 
 func (u Updater) updateMachine(scope UpdateScope, machine Machine) error {
-	if !machine.Mise {
-		return nil
-	}
-	if err := u.prepareMachineMise(); err != nil {
-		return err
-	}
-
 	type updateStep struct {
 		name    string
 		success string
 		args    []string
 	}
-	var steps []updateStep
-	if scope == UpdateAll || scope == UpdateSoftware {
-		steps = append(steps,
-			updateStep{"Tools", "declared tools updated", []string{"upgrade", "--yes"}},
-			updateStep{"Packages", "declared packages updated", []string{"bootstrap", "packages", "upgrade", "--yes"}},
-		)
-	}
-	if scope == UpdateAll || scope == UpdateRepositories {
-		steps = append(steps, updateStep{
-			"Repositories", "clean repositories updated",
-			[]string{"bootstrap", "repos", "update", "--yes", "--skip-dirty"},
-		})
-	}
-
 	var failures []error
-	for _, step := range steps {
-		u.Log.Section(step.name)
-		if err := u.MachineMise.Command("mise", step.args...); err != nil {
-			u.Log.Error(err.Error())
-			failures = append(failures, fmt.Errorf("%s: %w", step.name, err))
-			continue
+	if machine.Mise {
+		if err := u.prepareMachineMise(); err != nil {
+			failures = append(failures, err)
+		} else {
+			var steps []updateStep
+			if scope == UpdateAll || scope == UpdateSoftware {
+				steps = append(steps,
+					updateStep{"Tools", "declared tools updated", []string{"upgrade", "--yes"}},
+					updateStep{"Packages", "declared packages updated", []string{"bootstrap", "packages", "upgrade", "--yes"}},
+				)
+			}
+			if scope == UpdateAll || scope == UpdateRepositories {
+				steps = append(steps, updateStep{
+					"Repositories", "clean repositories updated",
+					[]string{"bootstrap", "repos", "update", "--yes", "--skip-dirty"},
+				})
+			}
+			for _, step := range steps {
+				u.Log.Section(step.name)
+				if err := u.MachineMise.Command("mise", step.args...); err != nil {
+					u.Log.Error(err.Error())
+					failures = append(failures, fmt.Errorf("%s: %w", step.name, err))
+					continue
+				}
+				u.Log.OK(step.success)
+			}
 		}
-		u.Log.OK(step.success)
+	}
+	if machine.AgentSkills != nil && (scope == UpdateAll || scope == UpdateSoftware) {
+		u.Log.Section(agentSkillsName)
+		manager := agentSkillManager{
+			Paths: u.Paths, Skills: *machine.AgentSkills, Probe: u.SkillsProbe,
+			Live: u.SkillsLive, Log: u.Log,
+		}
+		if err := manager.Update(); err != nil {
+			u.Log.Error(err.Error())
+			failures = append(failures, fmt.Errorf("%s: %w", agentSkillsName, err))
+		}
 	}
 	return errors.Join(failures...)
 }

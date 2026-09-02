@@ -10,11 +10,18 @@ import (
 func validMachineTOML() string {
 	return `
 kind = "azohra.config.machine"
-schema = 3
+schema = 4
 mise = true
 dock = true
 chrome_pwas = true
 finder_favorites = true
+
+[agent_skills]
+agents = ["claude-code", "codex"]
+
+[[agent_skills.sources]]
+source = "https://example.com/owner/skills.git"
+skills = ["review"]
 
 [[repository_hooks]]
 name = "post-checkout"
@@ -58,7 +65,7 @@ func TestLoadMachineReadsStrictContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Repository.Destination() != "origin/main" || !machine.Mise || !machine.Dock || !machine.ChromePWAs || !machine.FinderFavorites {
+	if machine.Repository.Destination() != "origin/main" || !machine.Mise || machine.AgentSkills == nil || !machine.Dock || !machine.ChromePWAs || !machine.FinderFavorites {
 		t.Fatalf("unexpected machine contract: %+v", machine)
 	}
 	if len(machine.Preferences) != 1 {
@@ -70,6 +77,35 @@ func TestLoadMachineReadsStrictContract(t *testing.T) {
 	}
 }
 
+func TestAgentSkillsContractRejectsAmbiguousDeclarations(t *testing.T) {
+	valid := testAgentSkills()
+	for _, test := range []struct {
+		name   string
+		change func(*AgentSkills)
+		want   string
+	}{
+		{"no agents", func(skills *AgentSkills) { skills.Agents = nil }, "agents must not be empty"},
+		{"duplicate agent", func(skills *AgentSkills) { skills.Agents = []string{"codex", "codex"} }, "agents repeats"},
+		{"invalid agent", func(skills *AgentSkills) { skills.Agents = []string{"../codex"} }, "agent"},
+		{"no sources", func(skills *AgentSkills) { skills.Sources = nil }, "sources must not be empty"},
+		{"invalid source", func(skills *AgentSkills) { skills.Sources[0].Source = "owner/repository" }, "source"},
+		{"empty source", func(skills *AgentSkills) { skills.Sources[0].Skills = nil }, "skills must not be empty"},
+		{"duplicate skill", func(skills *AgentSkills) { skills.Sources[0].Skills = []string{"orca-cli", "orca-cli"} }, "declared more than once"},
+		{"invalid skill", func(skills *AgentSkills) { skills.Sources[0].Skills = []string{"../skill"} }, "skill"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			contract := valid
+			contract.Agents = append([]string(nil), valid.Agents...)
+			contract.Sources = append([]AgentSkillSource(nil), valid.Sources...)
+			contract.Sources[0].Skills = append([]string(nil), valid.Sources[0].Skills...)
+			test.change(&contract)
+			if err := contract.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -78,9 +114,9 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 	}{
 		{"empty contract", "", "kind is"},
 		{"wrong kind", strings.Replace(validMachineTOML(), MachineKind, "another.machine", 1), "kind is"},
-		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 3", "schema = 1", 1), "schema is 1"},
-		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 3", "schema = 2", 1), "schema is 2"},
-		{"unknown field", strings.Replace(validMachineTOML(), "schema = 3", "schema = 3\ntyop = true", 1), "strict mode"},
+		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 4", "schema = 1", 1), "schema is 1"},
+		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 4", "schema = 2", 1), "schema is 2"},
+		{"unknown field", strings.Replace(validMachineTOML(), "schema = 4", "schema = 4\ntyop = true", 1), "strict mode"},
 		{"removed singular favorite", strings.Replace(validMachineTOML(), "finder_favorites = true", "[finder_favorite]\nname = \"Machine config\"", 1), "strict mode"},
 		{"invalid hook name", strings.Replace(validMachineTOML(), `name = "post-checkout"`, `name = "../post-checkout"`, 1), "repository_hooks name"},
 		{"absolute hook source", strings.Replace(validMachineTOML(), `source = "hooks/post-checkout"`, `source = "/tmp/post-checkout"`, 1), "relative file path"},
@@ -98,7 +134,7 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 func TestLoadMachineAcceptsOnlyRepositoryIdentity(t *testing.T) {
 	content := `
 kind = "azohra.config.machine"
-schema = 3
+schema = 4
 
 [repository]
 branch = "main"

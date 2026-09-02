@@ -51,7 +51,7 @@ printf '%s\n' '<?xml version="1.0"?><plist version="1.0"><dict><key>persistent-a
 		t.Fatal(err)
 	}
 	document := `kind = "azohra.config.machine"
-schema = 3
+schema = 4
 dock = true
 
 [repository]
@@ -298,7 +298,7 @@ exit 1
 	git("config", "user.name", "Config Test")
 	git("config", "user.email", "config@example.invalid")
 	document := `kind = "azohra.config.machine"
-schema = 3
+schema = 4
 mise = true
 
 [repository]

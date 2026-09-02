@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	restoreMacOSStep = "resource/" + macOSID
-	restoreMiseStep  = "resource/" + miseID
+	restoreMacOSStep       = "resource/" + macOSID
+	restoreMiseStep        = "resource/" + miseID
+	restoreAgentSkillsStep = "resource/" + agentSkillsID
 )
 
 type freshRestoreStep struct {
@@ -65,7 +66,7 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 // capabilities. Chrome PWAs precede the Dock so saved shortcuts exist before
 // a declared Dock layout is rebuilt.
 func freshRestoreSteps(applier Applier) []freshRestoreStep {
-	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+5)
+	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+6)
 	if len(macOSFacts(applier.Machine)) > 0 {
 		steps = append(steps, freshRestoreStep{
 			id: restoreMacOSStep, name: macOSName,
@@ -82,6 +83,15 @@ func freshRestoreSteps(applier Applier) []freshRestoreStep {
 			run: func() error {
 				applier.Log.Section(miseName)
 				return applier.applyMise()
+			},
+		})
+	}
+	if applier.Machine.AgentSkills != nil {
+		steps = append(steps, freshRestoreStep{
+			id: restoreAgentSkillsStep, name: agentSkillsName,
+			run: func() error {
+				applier.Log.Section(agentSkillsName)
+				return applier.agentSkillManager().Reconcile()
 			},
 		})
 	}

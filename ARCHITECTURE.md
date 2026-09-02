@@ -23,6 +23,20 @@ resource receive the managed `mise/` selectors. Native resources and repository
 operations clear those selectors, so storing Mise declarations in the machine
 repository grants no authority over unrelated child processes.
 
+Agent skills are another opt-in resource, independent of Mise. The machine
+document declares repository sources, skill names, and requested agent targets.
+User scope is implicit because Config manages a Mac; project-local skills
+remain repository-owned. A target is not an isolation boundary: universal
+agents share the canonical `.agents/skills` directory, while other agents get
+their own links. Config delegates that layout to the exact
+`skills@1.5.23` CLI it invokes through `npx`, so those implementation details
+can evolve in one place. The adapter lives in Config's cache and is not a
+globally installed machine tool. Its cache does not create another skill store:
+Config and ordinary `npx skills` invocations converge on the same global paths
+and skills CLI lock file. Config validates the current lock schema before any
+mutation and stops on an unreadable or incompatible schema rather than using its pinned
+adapter to recreate an older layout.
+
 `config update` is the explicit version transition for Config and the resources
 declared by the machine repository. A released Config uses a pinned,
 checksummed Mise adapter in its own cache to acquire the latest stable Config
@@ -31,11 +45,11 @@ configuration and is not the canonical machine executable. Config atomically
 installs the acquired executable and continues the same update from it before
 loading the machine document. The current release validates that document and,
 when Mise is declared, reconciles that resource to its exact tested version and
-updates the selected declarations.
-The software scope updates tools and packages; the repository scope performs
-the networked fast-forward of clean declared checkouts. The unqualified
-`config update` selects both scopes. Unversioned development builds skip the
-Config release transition. Release acquisition alone disables Mise's general
+updates the selected declarations. The software scope updates tools, packages,
+and declared agent skills; the repository scope performs the networked
+fast-forward of clean declared checkouts. The unqualified `config update`
+selects both scopes. Unversioned development builds skip the Config release
+transition. Release acquisition alone disables Mise's general
 release-age delay because this explicit operation promises the latest release;
 an exact resolved version, provenance verification, and downgrade refusal still
 gate replacement.
@@ -77,7 +91,7 @@ it stages, and the next run sweeps it.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
-capabilities. A capability is absent unless schema 3 declares it. The document
+capabilities. A capability is absent unless schema 4 declares it. The document
 opts into a capability and supplies personal values or payloads; Config owns
 where and how those declarations converge.
 
@@ -140,6 +154,16 @@ missing or incompatible, then delegates machine convergence with:
 ```text
 mise bootstrap --yes --skip-dirty
 ```
+
+Applying agent skills asks the pinned npx adapter for global and per-agent
+inventories. An existing skill from the declared source is adopted without a
+reinstall; missing skills or agent placements are reconciled by source. Config
+records the canonical path and a digest of each adopted tree under Application
+Support. A compatible same-source tree changed by another skills CLI is drift
+that Apply can adopt without rewriting it. Explicit update and prune refuse
+unadopted content, while a different source remains a conflict. Inspection is
+offline and uses Config's own npm cache; apply and explicit software updates may
+fetch the pinned package and declared skill repositories.
 
 When repository hooks are declared, Config prepares their clone template before
 Mise runs and supplies that template only to Mise's child Git processes. It
@@ -245,12 +269,16 @@ cleanup and dependent repository inventory are reported and preserved while
 Config still plans its own state. Undeclared Mise is never probed.
 
 Config directly removes only artifacts with verifiable Config provenance. An
-undeclared repository hook is eligible when its bytes still match the digest
-in Config's adjacent ownership manifest; a changed or non-regular hook and its
-record are preserved. A baseline is eligible only after its schema and resource
-identity validate and the machine no longer declares that capability. A
-completed restore record is eligible only when it validates and belongs to a
-managed-checkout identity other than the current one. Pending and current
+undeclared agent or skill placement is eligible only while the live source,
+canonical path, and tree digest still match Config's ownership record. Removal
+is delegated to the same pinned CLI so universal and agent-specific layouts
+remain its responsibility. An undeclared repository hook is eligible when its
+bytes still match the digest in Config's adjacent ownership manifest; a changed
+or non-regular hook and its record are preserved. A baseline is eligible only
+after its schema and resource identity validate and the machine no longer
+declares that capability. A completed restore record is eligible only when it
+validates and belongs to a managed-checkout identity other than the current
+one. Pending and current
 records remain. A marker recording a step an interrupted run still owes is
 eligible only when the document no longer declares the capability that would
 act on it.

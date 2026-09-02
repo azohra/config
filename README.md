@@ -1,8 +1,8 @@
 # Config
 
 Config turns a Git repository into a reproducible Mac setup. It inspects,
-plans, and reconciles resources such as Mise, native macOS settings, Finder
-Favorites, application state, and the Dock.
+plans, and reconciles resources such as Mise, agent skills, native macOS
+settings, Finder Favorites, application state, and the Dock.
 
 You choose the machine repository and keep control of its authentication.
 
@@ -43,11 +43,18 @@ Only the repository identity is required. Every capability is opt-in:
 
 ```toml
 kind = "azohra.config.machine"
-schema = 3
+schema = 4
 mise = true
 dock = true
 chrome_pwas = true
 finder_favorites = true
+
+[agent_skills]
+agents = ["claude-code", "codex"]
+
+[[agent_skills.sources]]
+source = "https://github.com/owner/skills.git"
+skills = ["orca-cli", "orchestration"]
 
 [[repository_hooks]]
 name = "post-checkout"
@@ -111,6 +118,26 @@ receive none of that authority. Repository-local Mise files can still add
 narrower authority while they are loadable, and Mise considers that shared
 inventory when pruning tools and packages.
 
+Agent skills are a separate user-wide resource. Global selects user scope, not
+exclusive visibility. Every global skill has one
+canonical copy under `~/.agents/skills`, which Codex and other universal agents
+read directly. `agents` requests targets from the skills CLI; agents with their
+own directory, such as Claude Code, receive a link to that canonical copy.
+Config deliberately does not encode those paths. Project-local skills remain
+part of their own repositories.
+
+Config runs its exact tested `skills@1.5.23` package through `npx` with a
+Config-owned npm cache. Node 22.20 or newer and `npx` must already be available;
+when Mise is enabled, its tool declaration can provide them before the skill
+resource converges. The private cache pins Config's adapter, but the adapter and
+an ordinary `npx skills` command intentionally share the same global skill
+store. An unreadable or incompatible shared lock makes the resource unavailable
+rather than letting the pinned adapter rewrite it. Apply adopts compatible
+installs or updates from the declared source without rewriting them. Update and
+prune refuse content that has changed since that adoption, and a different
+source is always left untouched. The machine repository should not also install
+a global `skills` package or run its own reconciler.
+
 ## Native state
 
 Captured state has stable paths in the machine repository:
@@ -173,18 +200,17 @@ config prune --yes
 config --version
 ```
 
-`config update software` updates declared tools and packages without checking
-repository remotes. `config update repositories` fast-forwards clean declared
-repositories. The unqualified command runs both scopes. A released build first
-updates Config itself and continues from the installed binary; a development
-build skips that release transition. When Mise is not declared, the machine
-portion has no Mise work to perform.
+`config update software` updates declared tools, packages, and agent skills
+without checking repository remotes. `config update repositories` fast-forwards
+clean declared repositories. The unqualified command runs both scopes. A
+released build first updates Config itself and continues from the installed
+binary; a development build skips that release transition. When Mise is not
+declared, the machine portion has no Mise work to perform.
 
 `config prune` previews Mise's shared inventory decisions alongside Config's
 own stale state. A declared but unavailable Mise is reported and its state
 stays untouched; Config-owned cleanup still proceeds. Config deletes only
-artifacts whose
-ownership it can prove:
+artifacts whose ownership it can prove: unchanged agent-skill placements,
 unchanged hook copies, baselines for disabled capabilities, and completed
 restore records from older managed checkouts. Ambiguous items stay put. A
 terminal asks for confirmation; redirected output remains preview-only unless

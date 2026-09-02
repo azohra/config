@@ -18,12 +18,14 @@ type Inspector struct {
 	Machine         Machine
 	Runner          Runner
 	Mise            Runner
+	Skills          Runner
 	FinderFavorites finderFavoritesStore
 }
 
 func NewInspector(paths Paths, machine Machine, runner Runner) Inspector {
 	return Inspector{
 		Paths: paths, Machine: machine, Runner: runner, Mise: NewMiseRunner(paths),
+		Skills:          newAgentSkillsRunner(paths),
 		FinderFavorites: newFinderFavoritesStore(),
 	}
 }
@@ -55,6 +57,13 @@ func authoritativeResource(id, name string, checks []Check) Resource {
 func (i Inspector) miseRunner() Runner {
 	if i.Mise != nil {
 		return i.Mise
+	}
+	return i.Runner
+}
+
+func (i Inspector) agentSkillsRunner() Runner {
+	if i.Skills != nil {
+		return i.Skills
 	}
 	return i.Runner
 }
@@ -318,7 +327,7 @@ func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(allResources bool) Report {
 	bidir := newBidirectional(i.Paths, i.Runner)
-	var mise, macOS, chromePWAs, dock, finderFavorites, repositoryHooks Resource
+	var mise, agentSkills, macOS, chromePWAs, dock, finderFavorites, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
@@ -329,6 +338,11 @@ func (i Inspector) inspect(allResources bool) Report {
 		if i.Machine.Mise {
 			inventory = newMiseRepositoryInventory(i.Paths, i.miseRunner())
 			tasks = append(tasks, func() { mise = i.mise(inventory) })
+		}
+		if i.Machine.AgentSkills != nil {
+			tasks = append(tasks, func() {
+				agentSkills = inspectAgentSkills(i.Paths, *i.Machine.AgentSkills, i.agentSkillsRunner())
+			})
 		}
 		if len(macOSFacts(i.Machine)) > 0 {
 			tasks = append(tasks, func() { macOS = i.macOS() })
@@ -375,6 +389,9 @@ func (i Inspector) inspect(allResources bool) Report {
 	if allResources {
 		if i.Machine.Mise {
 			resources = append(resources, mise)
+		}
+		if i.Machine.AgentSkills != nil {
+			resources = append(resources, agentSkills)
 		}
 		if len(macOSFacts(i.Machine)) > 0 {
 			resources = append(resources, macOS)

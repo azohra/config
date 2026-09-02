@@ -206,6 +206,9 @@ func restoreStepIDs(machine Machine) []string {
 	if machine.Mise {
 		steps = append(steps, restoreMiseStep)
 	}
+	if machine.AgentSkills != nil {
+		steps = append(steps, restoreAgentSkillsStep)
+	}
 	if machine.FinderFavorites {
 		steps = append(steps, "resource/"+finderFavoritesID)
 	}

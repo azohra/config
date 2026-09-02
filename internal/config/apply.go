@@ -66,6 +66,8 @@ type Applier struct {
 	Live            LiveRunner
 	Mise            Runner
 	MiseLive        LiveRunner
+	Skills          Runner
+	SkillsLive      commandRunner
 	InstallMise     func() error
 	FinderFavorites finderFavoritesStore
 	Log             Logger
@@ -92,6 +94,8 @@ func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 		Live:            newMachineLiveRunner(paths),
 		Mise:            NewMiseRunner(paths),
 		MiseLive:        newMiseLiveRunner(paths),
+		Skills:          newAgentSkillsRunner(paths),
+		SkillsLive:      newAgentSkillsLiveRunner(paths),
 		InstallMise:     installer.Install,
 		FinderFavorites: newFinderFavoritesStore(),
 		Log:             Logger{Out: out},
@@ -127,6 +131,11 @@ func (e Applier) Apply(selections []Selection) error {
 	}
 	if e.Machine.Mise {
 		steps = append(steps, step{miseID, miseName, func(Action) error { return e.applyMise() }})
+	}
+	if e.Machine.AgentSkills != nil {
+		steps = append(steps, step{agentSkillsID, agentSkillsName, func(Action) error {
+			return e.agentSkillManager().Reconcile()
+		}})
 	}
 	if e.Machine.FinderFavorites {
 		steps = append(steps, step{finderFavoritesID, finderFavoritesName, e.reconcileFinderFavorites})
@@ -188,6 +197,13 @@ func (e Applier) Apply(selections []Selection) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func (e Applier) agentSkillManager() agentSkillManager {
+	return agentSkillManager{
+		Paths: e.Paths, Skills: *e.Machine.AgentSkills, Probe: e.Skills,
+		Live: e.SkillsLive, Log: e.Log,
+	}
 }
 
 func (e Applier) reconcilePreference(preference PreferenceBackup, action Action) error {

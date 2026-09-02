@@ -55,6 +55,17 @@ type pruneHookTarget struct {
 	Hooks          []pruneHook
 }
 
+type pruneAgentSkill struct {
+	Name         string
+	RemoveAgents []string
+	ForgetAgents []string
+}
+
+type pruneAgentSkills struct {
+	ManifestDigest string
+	Skills         []pruneAgentSkill
+}
+
 // PrunePlan is the exact work Config has previewed. Its details stay private
 // so callers can confirm or apply a plan without widening the ownership model.
 type PrunePlan struct {
@@ -63,13 +74,15 @@ type PrunePlan struct {
 	packages        []prunePackageManager
 	files           []pruneFile
 	hooks           []pruneHookTarget
+	agentSkills     pruneAgentSkills
 	warnings        []string
 	skippedManagers []string
 }
 
 func (p PrunePlan) Empty() bool {
 	return len(p.registry.Tracked) == 0 && len(p.registry.Trusted) == 0 &&
-		len(p.tools) == 0 && len(p.packages) == 0 && len(p.files) == 0 && len(p.hooks) == 0
+		len(p.tools) == 0 && len(p.packages) == 0 && len(p.files) == 0 && len(p.hooks) == 0 &&
+		len(p.agentSkills.Skills) == 0
 }
 
 func (p PrunePlan) sameWork(other PrunePlan) bool {
@@ -77,7 +90,8 @@ func (p PrunePlan) sameWork(other PrunePlan) bool {
 		reflect.DeepEqual(p.tools, other.tools) &&
 		reflect.DeepEqual(p.packages, other.packages) &&
 		reflect.DeepEqual(p.files, other.files) &&
-		reflect.DeepEqual(p.hooks, other.hooks)
+		reflect.DeepEqual(p.hooks, other.hooks) &&
+		reflect.DeepEqual(p.agentSkills, other.agentSkills)
 }
 
 // Pruner delegates shared inventory decisions to mise and removes only local
@@ -88,18 +102,22 @@ type Pruner struct {
 	Runner       Runner
 	Mise         Runner
 	MiseLive     commandRunner
+	Skills       Runner
+	SkillsLive   commandRunner
 	MiseStateDir string
 	Log          Logger
 }
 
 func NewPruner(paths Paths, machine Machine, out io.Writer) Pruner {
 	return Pruner{
-		Paths:    paths,
-		Machine:  machine,
-		Runner:   NewMachineRunner(paths),
-		Mise:     NewMiseRunner(paths),
-		MiseLive: newMiseLiveRunner(paths),
-		Log:      Logger{Out: out},
+		Paths:      paths,
+		Machine:    machine,
+		Runner:     NewMachineRunner(paths),
+		Mise:       NewMiseRunner(paths),
+		MiseLive:   newMiseLiveRunner(paths),
+		Skills:     newAgentSkillsRunner(paths),
+		SkillsLive: newAgentSkillsLiveRunner(paths),
+		Log:        Logger{Out: out},
 	}
 }
 
@@ -176,6 +194,7 @@ func (p Pruner) Plan() (PrunePlan, error) {
 	if err != nil {
 		return PrunePlan{}, err
 	}
+	plan.agentSkills, plan.warnings = p.planAgentSkills(plan.warnings)
 	plan.files, plan.warnings, err = p.planConfigFiles(plan.warnings)
 	if err != nil {
 		return PrunePlan{}, err
@@ -185,6 +204,88 @@ func (p Pruner) Plan() (PrunePlan, error) {
 	slices.Sort(plan.skippedManagers)
 	plan.skippedManagers = slices.Compact(plan.skippedManagers)
 	return plan, nil
+}
+
+func (p Pruner) planAgentSkills(warnings []string) (pruneAgentSkills, []string) {
+	manifest, data, err := readAgentSkillManifest(p.Paths)
+	if err != nil {
+		return pruneAgentSkills{}, append(warnings, "Agent skill ownership is unrecognised; left untouched")
+	}
+	if len(data) == 0 || len(manifest.Skills) == 0 {
+		return pruneAgentSkills{}, warnings
+	}
+	agentSet := map[string]bool{}
+	for _, ownership := range manifest.Skills {
+		for _, agent := range ownership.Agents {
+			agentSet[agent] = true
+		}
+	}
+	var desired map[string]agentSkillDeclaration
+	if p.Machine.AgentSkills != nil {
+		desired = p.Machine.AgentSkills.desired()
+		for _, agent := range p.Machine.AgentSkills.Agents {
+			agentSet[agent] = true
+		}
+	}
+	agents := make([]string, 0, len(agentSet))
+	for agent := range agentSet {
+		agents = append(agents, agent)
+	}
+	slices.Sort(agents)
+	inventory, err := loadAgentSkillInventory(p.Paths, p.Skills, agents, true)
+	if err != nil {
+		return pruneAgentSkills{}, append(warnings, "Agent skill cleanup is unavailable; its state was left untouched: "+err.Error())
+	}
+	plan := pruneAgentSkills{ManifestDigest: contentDigest(data)}
+	names := make([]string, 0, len(manifest.Skills))
+	for name := range manifest.Skills {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		ownership := manifest.Skills[name]
+		var candidates []string
+		if declaration, declared := desired[name]; declared {
+			if !sameAgentSkillSource(ownership.Source, declaration.Source) {
+				continue
+			}
+			for _, agent := range ownership.Agents {
+				if !slices.Contains(declaration.Agents, agent) {
+					candidates = append(candidates, agent)
+				}
+			}
+		} else {
+			candidates = append(candidates, ownership.Agents...)
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		live, found := inventory.Global[name]
+		if found {
+			digest, digestErr := agentSkillDirectoryDigest(live.Path)
+			if !sameAgentSkillSource(live.locator(), ownership.Source) || live.Path != ownership.Path ||
+				digestErr != nil || digest != ownership.Digest {
+				warnings = append(warnings, name+" changed since Config installed it; left untouched")
+				continue
+			}
+		}
+		item := pruneAgentSkill{Name: name}
+		for _, agent := range candidates {
+			installed, present := inventory.Agents[agent][name]
+			if present && !sameAgentSkillSource(installed.locator(), ownership.Source) {
+				warnings = append(warnings, name+" for "+agent+" is no longer Config-owned; left untouched")
+				continue
+			}
+			item.ForgetAgents = append(item.ForgetAgents, agent)
+			if present {
+				item.RemoveAgents = append(item.RemoveAgents, agent)
+			}
+		}
+		if len(item.ForgetAgents) > 0 {
+			plan.Skills = append(plan.Skills, item)
+		}
+	}
+	return plan, warnings
 }
 
 func (p Pruner) planRegistry(stateDir string) (pruneRegistry, error) {
@@ -596,6 +697,12 @@ func WritePrunePlan(out io.Writer, plan PrunePlan) {
 			}
 		}
 	}
+	if len(plan.agentSkills.Skills) > 0 {
+		fmt.Fprintln(out, "\nAgent skills")
+		for _, skill := range plan.agentSkills.Skills {
+			fmt.Fprintf(out, "  %s (%s)\n", skill.Name, strings.Join(skill.ForgetAgents, ", "))
+		}
+	}
 	if len(plan.hooks) > 0 || len(plan.files) > 0 {
 		fmt.Fprintln(out, "\nConfig state")
 		for _, target := range plan.hooks {
@@ -660,6 +767,15 @@ func (p Pruner) Apply(expected PrunePlan) error {
 			}
 		}
 	}
+	if len(current.agentSkills.Skills) > 0 {
+		p.Log.Section(agentSkillsName)
+		if err := p.applyPruneAgentSkills(current.agentSkills); err != nil {
+			p.Log.Error(err.Error())
+			failures = append(failures, fmt.Errorf("%s: %w", agentSkillsName, err))
+		} else {
+			p.Log.OK(FormatCount(len(current.agentSkills.Skills), "skill placement pruned", "skill placements pruned"))
+		}
+	}
 	if len(current.hooks) > 0 || len(current.files) > 0 {
 		p.Log.Section("Config state")
 		for _, target := range current.hooks {
@@ -678,6 +794,85 @@ func (p Pruner) Apply(expected PrunePlan) error {
 				p.Log.OK(file.Label + " pruned")
 			}
 		}
+	}
+	return errors.Join(failures...)
+}
+
+func (p Pruner) applyPruneAgentSkills(plan pruneAgentSkills) error {
+	manifest, data, err := readAgentSkillManifest(p.Paths)
+	if err != nil {
+		return err
+	}
+	if contentDigest(data) != plan.ManifestDigest {
+		return errors.New("agent skill ownership changed after preview")
+	}
+	agentSet := map[string]bool{}
+	for _, skill := range plan.Skills {
+		for _, agent := range skill.RemoveAgents {
+			agentSet[agent] = true
+		}
+	}
+	agents := make([]string, 0, len(agentSet))
+	for agent := range agentSet {
+		agents = append(agents, agent)
+	}
+	slices.Sort(agents)
+	var inventory agentSkillInventory
+	if len(agents) > 0 {
+		inventory, err = loadAgentSkillInventory(p.Paths, p.Skills, agents, true)
+		if err != nil {
+			return fmt.Errorf("revalidate agent skills: %w", err)
+		}
+	}
+	var failures []error
+	for _, skill := range plan.Skills {
+		ownership, exists := manifest.Skills[skill.Name]
+		if !exists {
+			failures = append(failures, fmt.Errorf("%s ownership disappeared after preview", skill.Name))
+			continue
+		}
+		if len(skill.RemoveAgents) > 0 {
+			live, found := inventory.Global[skill.Name]
+			digest, digestErr := agentSkillDirectoryDigest(ownership.Path)
+			if !found || !sameAgentSkillSource(live.locator(), ownership.Source) ||
+				live.Path != ownership.Path || digestErr != nil || digest != ownership.Digest {
+				failures = append(failures, fmt.Errorf("%s changed after preview; left untouched", skill.Name))
+				continue
+			}
+			changed := false
+			for _, agent := range skill.RemoveAgents {
+				installed, present := inventory.Agents[agent][skill.Name]
+				if !present || !sameAgentSkillSource(installed.locator(), ownership.Source) {
+					changed = true
+				}
+			}
+			if changed {
+				failures = append(failures, fmt.Errorf("%s agent placements changed after preview; left untouched", skill.Name))
+				continue
+			}
+			arguments := []string{"remove", skill.Name, "-g", "-a"}
+			arguments = append(arguments, skill.RemoveAgents...)
+			arguments = append(arguments, "-y")
+			if err := validateAgentSkillsLock(p.Paths); err != nil {
+				failures = append(failures, fmt.Errorf("%s: %w", skill.Name, err))
+				continue
+			}
+			if err := p.SkillsLive.Command("npx", agentSkillsArguments(true, arguments...)...); err != nil {
+				failures = append(failures, fmt.Errorf("%s: %w", skill.Name, err))
+				continue
+			}
+		}
+		ownership.Agents = slices.DeleteFunc(ownership.Agents, func(agent string) bool {
+			return slices.Contains(skill.ForgetAgents, agent)
+		})
+		if len(ownership.Agents) == 0 {
+			delete(manifest.Skills, skill.Name)
+		} else {
+			manifest.Skills[skill.Name] = ownership
+		}
+	}
+	if err := writeAgentSkillManifest(p.Paths, manifest); err != nil {
+		failures = append(failures, err)
 	}
 	return errors.Join(failures...)
 }

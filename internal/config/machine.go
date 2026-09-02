@@ -13,7 +13,7 @@ import (
 
 const (
 	MachineKind   = "azohra.config.machine"
-	MachineSchema = 3
+	MachineSchema = 4
 	managedRemote = "origin"
 )
 
@@ -23,6 +23,7 @@ type Machine struct {
 	Schema          int                `toml:"schema"`
 	Repository      MachineRepository  `toml:"repository"`
 	Mise            bool               `toml:"mise"`
+	AgentSkills     *AgentSkills       `toml:"agent_skills"`
 	Dock            bool               `toml:"dock"`
 	ChromePWAs      bool               `toml:"chrome_pwas"`
 	FinderFavorites bool               `toml:"finder_favorites"`
@@ -57,7 +58,7 @@ type SpotlightShortcut struct {
 // A preference that borrowed one would collide with that capability wherever a
 // report, a selection, or a baseline is keyed by resource id.
 var reservedResourceIDs = []string{
-	miseID, macOSID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
+	miseID, agentSkillsID, macOSID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
 }
 
 var (
@@ -107,6 +108,11 @@ func (m Machine) Validate() error {
 	}
 	if !validGitName(m.Repository.Branch) {
 		return fmt.Errorf("repository.branch %q is invalid", m.Repository.Branch)
+	}
+	if m.AgentSkills != nil {
+		if err := m.AgentSkills.Validate(); err != nil {
+			return fmt.Errorf("agent_skills: %w", err)
+		}
 	}
 	if m.MacOS.Spotlight != nil {
 		spotlight := m.MacOS.Spotlight
