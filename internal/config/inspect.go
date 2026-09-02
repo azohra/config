@@ -68,11 +68,6 @@ func (i Inspector) agentSkillsRunner() Runner {
 	return i.Runner
 }
 
-func (i Inspector) miseChecks() []Check {
-	runner := i.miseRunner()
-	return i.miseChecksWithInventory(newMiseRepositoryInventory(i.Paths, runner))
-}
-
 func (i Inspector) miseChecksWithInventory(inventory *miseRepositoryInventory) []Check {
 	runner := i.miseRunner()
 	if !runner.Exists("mise") {

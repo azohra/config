@@ -95,23 +95,17 @@ func (o *terminalOutput) Append(event config.OperationEvent) {
 	switch event.Kind {
 	case config.OperationSection:
 		o.appendText(config.OperationOutput, "\n"+event.Text+"\n")
-	case config.OperationOK, config.OperationInfo, config.OperationWarn, config.OperationError:
-		glyph := config.GlyphInfo
-		switch event.Kind {
-		case config.OperationOK:
-			glyph = config.GlyphOK
-		case config.OperationWarn:
-			glyph = config.GlyphWarn
-		case config.OperationError:
-			glyph = config.GlyphError
+	case config.OperationVersion:
+		return
+	default:
+		glyph, step := event.Kind.Glyph()
+		if !step {
+			o.appendText(config.OperationOutput, event.Text)
+			break
 		}
 		o.appendText(config.OperationOutput, "  ")
 		o.appendText(event.Kind, glyph)
 		o.appendText(config.OperationOutput, " "+event.Text+"\n")
-	case config.OperationVersion:
-		return
-	default:
-		o.appendText(config.OperationOutput, event.Text)
 	}
 	o.bound()
 }
@@ -307,19 +301,7 @@ func (o terminalOutput) String() string {
 func (o terminalOutput) Styled() string {
 	var text strings.Builder
 	for _, span := range o.spans {
-		value := string(span.text)
-		switch span.kind {
-		case config.OperationOK:
-			text.WriteString(good.Render(value))
-		case config.OperationInfo:
-			text.WriteString(accent.Render(value))
-		case config.OperationWarn:
-			text.WriteString(caution.Render(value))
-		case config.OperationError:
-			text.WriteString(bad.Render(value))
-		default:
-			text.WriteString(value)
-		}
+		text.WriteString(styledKind(span.kind, string(span.text)))
 	}
 	return text.String()
 }

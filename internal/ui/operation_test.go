@@ -129,6 +129,42 @@ func TestAppendOutputNormalizesAndBounds(t *testing.T) {
 	}
 }
 
+// The app renders a severity the way config spells it. Every step kind reaches
+// the pane with the glyph config decided and a color of its own, so a kind
+// added to config does not need a second mapping here to become visible.
+func TestEveryStepKindRendersTheGlyphConfigDecided(t *testing.T) {
+	kinds := []config.OperationEventKind{
+		config.OperationOK, config.OperationInfo, config.OperationWarn, config.OperationError,
+	}
+	colors := map[string]config.OperationEventKind{}
+	for _, kind := range kinds {
+		glyph, ok := kind.Glyph()
+		if !ok {
+			t.Fatalf("config gives %q no glyph", kind)
+		}
+		output := newTerminalOutput(maxOperationProgressBytes, maxOperationProgressLines)
+		output.Append(config.OperationEvent{Kind: kind, Text: "a step"})
+		if got, want := output.String(), "  "+glyph+" a step\n"; got != want {
+			t.Fatalf("%q rendered %q, want %q", kind, got, want)
+		}
+		styled := styledKind(kind, glyph)
+		if styled == glyph {
+			t.Fatalf("%q rendered its glyph uncolored", kind)
+		}
+		if other, seen := colors[styled]; seen {
+			t.Fatalf("%q and %q are indistinguishable", kind, other)
+		}
+		colors[styled] = kind
+	}
+
+	// A kind with no severity is provider output, and carries no glyph.
+	for _, kind := range []config.OperationEventKind{config.OperationOutput, config.OperationSection, config.OperationVersion} {
+		if glyph, ok := kind.Glyph(); ok {
+			t.Fatalf("%q claimed the step glyph %q", kind, glyph)
+		}
+	}
+}
+
 func TestOperationLogSeparatesProgressFromProviderDiagnostics(t *testing.T) {
 	log := newOperationLog()
 	log.Append(config.OperationEvent{Kind: config.OperationSection, Text: "Packages"})

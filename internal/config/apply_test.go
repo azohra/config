@@ -13,37 +13,6 @@ import (
 	"time"
 )
 
-// Every step the Logger writes must read back as one: a reader that colors or
-// filters this output depends on the writer and StepGlyph agreeing.
-func TestStepGlyphRecognizesEveryLoggerStep(t *testing.T) {
-	var out bytes.Buffer
-	log := Logger{Out: &out}
-	log.OK("pushed")
-	log.Info("validating")
-	log.Warn("commit remains local")
-	log.Error("push rejected")
-
-	for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
-		glyph, ok := StepGlyph(line)
-		if !ok {
-			t.Fatalf("StepGlyph did not recognize the Logger's own %q", line)
-		}
-		if !strings.HasPrefix(strings.TrimLeft(line, " "), glyph+" ") {
-			t.Fatalf("StepGlyph(%q) = %q, which the line does not lead with", line, glyph)
-		}
-	}
-
-	var section bytes.Buffer
-	Logger{Out: &section}.Section("Snapshot")
-	notSteps := append(strings.Split(section.String(), "\n"),
-		"[check] ~/.gitconfig  symlink  applied", " 1 file changed", "  1 file changed", "  ✓", "✓ unindented", "  ↔ no Logger writes this")
-	for _, line := range notSteps {
-		if glyph, ok := StepGlyph(line); ok {
-			t.Fatalf("StepGlyph(%q) claimed glyph %q", line, glyph)
-		}
-	}
-}
-
 // converged answers every macOSFacts probe as already-correct, so applyMise
 // reaches its one live command and stops: nothing to fix, no restarts.
 type converged struct{}

@@ -24,6 +24,24 @@ const (
 	OperationVersion OperationEventKind = "version"
 )
 
+// Glyph is the step glyph for a Config event kind, and false for a kind that
+// is not a step. Every producer and consumer of a severity reads it here, so a
+// kind added to this package reaches the Logger's plain output and the app's
+// operation pane together instead of one at a time.
+func (k OperationEventKind) Glyph() (string, bool) {
+	switch k {
+	case OperationOK:
+		return GlyphOK, true
+	case OperationInfo:
+		return GlyphInfo, true
+	case OperationWarn:
+		return GlyphWarn, true
+	case OperationError:
+		return GlyphError, true
+	}
+	return "", false
+}
+
 type OperationEvent struct {
 	Kind OperationEventKind `json:"kind"`
 	Text string             `json:"text"`

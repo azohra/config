@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -29,21 +28,13 @@ type Logger struct {
 	Out io.Writer
 }
 
-func (l Logger) line(symbol, message string) {
+func (l Logger) line(kind OperationEventKind, message string) {
 	if sink, ok := l.Out.(operationEventSink); ok {
-		kind := OperationInfo
-		switch symbol {
-		case GlyphOK:
-			kind = OperationOK
-		case GlyphWarn:
-			kind = OperationWarn
-		case GlyphError:
-			kind = OperationError
-		}
 		_ = sink.OperationEvent(OperationEvent{Kind: kind, Text: message})
 		return
 	}
-	fmt.Fprintf(l.Out, "%s%s %s\n", stepIndent, symbol, message)
+	glyph, _ := kind.Glyph()
+	fmt.Fprintf(l.Out, "%s%s %s\n", stepIndent, glyph, message)
 }
 
 func (l Logger) Section(name string) {
@@ -53,34 +44,14 @@ func (l Logger) Section(name string) {
 	}
 	fmt.Fprintf(l.Out, "\n%s\n", name)
 }
-func (l Logger) OK(message string)    { l.line(GlyphOK, message) }
-func (l Logger) Info(message string)  { l.line(GlyphInfo, message) }
-func (l Logger) Warn(message string)  { l.line(GlyphWarn, message) }
-func (l Logger) Error(message string) { l.line(GlyphError, message) }
+func (l Logger) OK(message string)    { l.line(OperationOK, message) }
+func (l Logger) Info(message string)  { l.line(OperationInfo, message) }
+func (l Logger) Warn(message string)  { l.line(OperationWarn, message) }
+func (l Logger) Error(message string) { l.line(OperationError, message) }
 func (l Logger) Version(version string) {
 	if sink, ok := l.Out.(operationEventSink); ok {
 		_ = sink.OperationEvent(OperationEvent{Kind: OperationVersion, Text: version})
 	}
-}
-
-// StepGlyph reports the glyph of a Logger step line, and accepts only the
-// glyphs a Logger writes. A reader that presents this package's output — the
-// app's operation pane — classifies lines through here rather than respelling
-// the shape the Logger just wrote.
-func StepGlyph(line string) (string, bool) {
-	rest, indented := strings.CutPrefix(line, stepIndent)
-	if !indented {
-		return "", false
-	}
-	glyph, _, spaced := strings.Cut(rest, " ")
-	if !spaced {
-		return "", false
-	}
-	switch glyph {
-	case GlyphOK, GlyphInfo, GlyphWarn, GlyphError:
-		return glyph, true
-	}
-	return "", false
 }
 
 type Applier struct {

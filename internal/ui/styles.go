@@ -29,22 +29,34 @@ var (
 	panel       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(borderColor).Padding(1, 2)
 )
 
-// styledSymbol renders one of config's glyphs in its color — the one place a
-// glyph's color is decided, so the surfaces that show one agree. A glyph with
-// no color of its own renders plain.
-func styledSymbol(symbol string) string {
-	style := lipgloss.NewStyle()
+// severityStyle is the one place a glyph's color is decided, so every surface
+// that shows a severity agrees. A glyph with no color of its own renders plain.
+func severityStyle(symbol string) lipgloss.Style {
 	switch symbol {
 	case config.GlyphOK:
-		style = good
+		return good
 	case config.GlyphInfo:
-		style = accent
+		return accent
 	case config.GlyphWarn, config.GlyphChoice:
-		style = caution
+		return caution
 	case config.GlyphError:
-		style = bad
+		return bad
 	}
-	return style.Render(symbol)
+	return lipgloss.NewStyle()
+}
+
+func styledSymbol(symbol string) string {
+	return severityStyle(symbol).Render(symbol)
+}
+
+// styledKind colors a typed span the way the glyph for its severity is
+// colored, so config's event kinds need no second palette of their own.
+func styledKind(kind config.OperationEventKind, value string) string {
+	glyph, ok := kind.Glyph()
+	if !ok {
+		return value
+	}
+	return severityStyle(glyph).Render(value)
 }
 
 func frame(width int, blocks ...string) string {
