@@ -82,7 +82,12 @@ func TestRunOperationCancelsProcessGroup(t *testing.T) {
 	if final.err == nil {
 		t.Fatal("cancelled operation succeeded")
 	}
-	for range 200 {
+	// A shell starts a background command with SIGINT ignored, so the group
+	// dies on the SIGKILL that lands one CommandWaitDelay after the cancel.
+	// Wait well past that deadline: a budget equal to it is a race the test
+	// loses on a loaded machine, reporting a flake as a surviving descendant.
+	deadline := time.Now().Add(4 * config.CommandWaitDelay)
+	for time.Now().Before(deadline) {
 		if errors.Is(syscall.Kill(descendant, 0), syscall.ESRCH) {
 			return
 		}
