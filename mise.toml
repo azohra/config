@@ -1,5 +1,8 @@
-# Config's update path needs bootstrap repos --skip-dirty from mise 2026.8.13.
-min_version = "2026.8.13"
+# Config converges a Mac against one exact mise, spelled as testedMiseVersion in
+# internal/config/mise.go. TestMisePhasesCoverEveryBootstrapPhase reads the mise
+# on PATH, so the toolchain has to be that same release for the guard to mean
+# anything. Move this line, the workflow pins, and testedMiseVersion together.
+min_version = "2026.9.1"
 
 [tools]
 go = "1.27.0"
@@ -29,6 +32,10 @@ go test -race ./...
 govulncheck ./...
 go mod verify
 gitleaks dir --no-banner --redact .
+# gitleaks dir reads the working tree, and gitleaks git scans nothing at all
+# from a worktree, where .git is a file. History is permanent, so it is scanned
+# from the log itself.
+git log --all -p | gitleaks stdin --no-banner --redact
 """
 
 [tasks."check:darwin-native"]
@@ -49,21 +56,21 @@ grep -qx 'TestFinderFavoritesNativeCanary' <<<"$tests" || {
 go test -tags=config_native_canary ./internal/config \
   -run '^TestFinderFavoritesNativeCanary$' -count=1
 
-# The Chrome PWA rebuild tests skip themselves when Chrome is absent, and a
-# skip is invisible in an ordinary run. This is the proof that they ran.
-chrome='^TestChromePWABundleBuiltFromInstalledChromeCanBeSigned$|^TestChromePWARestoreInstallsTheSavedBundle$'
-output=$(go test ./internal/config -run "$chrome" -count=1 -v)
+# The Chrome PWA tests skip themselves when Chrome is absent, and a skip is
+# invisible in an ordinary run. Select them by prefix rather than by name, so a
+# Chrome-dependent test written tomorrow is covered the day it is written.
+output=$(go test ./internal/config -run '^TestChromePWA' -count=1 -v)
 printf '%s\n' "$output"
 if grep -q -- '--- SKIP' <<<"$output"; then
-  echo "check:darwin-native: the Chrome PWA proofs skipped themselves" >&2
+  echo "check:darwin-native: a Chrome PWA proof skipped itself" >&2
   exit 1
 fi
-for name in TestChromePWABundleBuiltFromInstalledChromeCanBeSigned TestChromePWARestoreInstallsTheSavedBundle; do
-  grep -q -- "--- PASS: $name" <<<"$output" || {
-    echo "check:darwin-native: $name did not run" >&2
-    exit 1
-  }
-done
+declared=$(go test ./internal/config -list '^TestChromePWA' | grep -c '^TestChromePWA' || true)
+passed=$(grep -c -- '--- PASS: TestChromePWA' <<<"$output" || true)
+[[ $declared -gt 0 && $passed -eq $declared ]] || {
+  echo "check:darwin-native: $passed of $declared Chrome PWA proofs ran" >&2
+  exit 1
+}
 """
 
 [tasks."build:release"]

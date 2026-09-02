@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const snapshotCommitSubject = "Update machine snapshot"
@@ -101,7 +100,7 @@ func (s Snapshotter) sweepStrandedWrites() {
 		if err != nil || entry.IsDir() {
 			return nil
 		}
-		if name := entry.Name(); strings.Contains(name, ".tmp.") {
+		if strandedWrite(entry.Name()) {
 			_ = os.Remove(path)
 		}
 		return nil

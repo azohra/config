@@ -115,6 +115,10 @@ func run(out io.Writer) error {
 		fmt.Fprintln(out, paths.Root)
 		return nil
 	}
+	// A release calls this on its successor: the running Config acquires a
+	// newer executable and runs that binary's own install. The spelling is a
+	// contract with every Config already on a Mac, so it stays bare while
+	// Config's other internal arguments carry a leading --.
 	if len(args) > 0 && args[0] == "install" {
 		return config.InstallCurrent(paths, version, out)
 	}

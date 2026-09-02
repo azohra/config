@@ -152,6 +152,13 @@ Bootstrap atomically installs the running released executable at
 therefore owns its permanent command even when restoration needs another run.
 `config path` exposes the canonical checkout without requiring it to exist.
 
+`config install` is the handoff verb one release calls on the next. The running
+Config acquires a newer release and runs that executable's own `install`, so the
+spelling is a contract between two versions rather than an interface for a
+person: renaming it would strip the ability to self-update from every Config
+already on a Mac. It is spelled without a leading `--`, unlike Config's other
+internal arguments, for that reason alone.
+
 ## Reconciliation
 
 Inspection runs independent probes concurrently and returns a `Report` of

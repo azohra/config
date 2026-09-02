@@ -278,6 +278,21 @@ func TestMisePhasesCoverEveryBootstrapPhase(t *testing.T) {
 	if err != nil {
 		t.Fatal("mise is not on PATH, so this guard cannot run")
 	}
+	// This guard is only worth its cost against the mise Config ships against.
+	// Read against any other, it certifies a command vocabulary nobody runs
+	// while every message below still names testedMiseVersion.
+	reported, err := exec.Command(mise, "--version").Output()
+	if err != nil {
+		t.Fatalf("mise --version: %v", err)
+	}
+	found, ok := miseVersion(string(reported))
+	if !ok {
+		t.Fatalf("mise --version is unreadable: %q", reported)
+	}
+	if found != testedMiseVersion {
+		t.Fatalf("this guard needs mise %s on PATH, but found %s; the toolchain pin and testedMiseVersion have drifted apart",
+			testedMiseVersion, found)
+	}
 	help, err := exec.Command(mise, "bootstrap", "--help").CombinedOutput()
 	if err != nil {
 		t.Fatalf("mise bootstrap --help: %v\n%s", err, help)

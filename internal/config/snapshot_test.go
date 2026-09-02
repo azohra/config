@@ -353,6 +353,12 @@ func TestSnapshotDoesNotCommitWhatAKilledCaptureStranded(t *testing.T) {
 	if err := os.WriteFile(stranded, []byte("half a layout\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The sweep runs unattended, immediately before an irreversible commit.
+	// Only the name atomicWrite stages under is Config's to delete.
+	neighbour := filepath.Join(root, "snapshots", "notes.tmp.txt")
+	if err := os.WriteFile(neighbour, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "settings"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +368,12 @@ func TestSnapshotDoesNotCommitWhatAKilledCaptureStranded(t *testing.T) {
 	if _, err := os.Stat(stranded); !os.IsNotExist(err) {
 		t.Fatal("the stranded write survived the save")
 	}
-	if tracked := gitTest(t, root, "ls-files", "snapshots"); strings.Contains(tracked, ".tmp.") {
-		t.Fatalf("a staging file reached the snapshot: %s", tracked)
+	if _, err := os.Stat(neighbour); err != nil {
+		t.Fatalf("the sweep deleted a file Config did not stage: %v", err)
+	}
+	for _, tracked := range strings.Fields(gitTest(t, root, "ls-files", "snapshots")) {
+		if strandedWrite(filepath.Base(tracked)) {
+			t.Fatalf("a staging file reached the snapshot: %s", tracked)
+		}
 	}
 }
