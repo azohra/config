@@ -24,7 +24,7 @@ func TestMiseVersionParsing(t *testing.T) {
 		ok     bool
 	}{
 		{"2026.8.14 macos-arm64", "2026.8.14", true},
-		{"mise 2026.9.0", "2026.9.0", true},
+		{"mise 2026.9.1", "2026.9.1", true},
 		{"v2026.8.13", "2026.8.13", true},
 		{"2026.8.14-beta.1", "", false},
 		{"not a version", "", false},

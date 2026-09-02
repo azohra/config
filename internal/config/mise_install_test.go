@@ -34,6 +34,7 @@ func TestMiseInstallerVerifiesAndAtomicallyInstallsTheRelease(t *testing.T) {
 		Destination: destination,
 		URL:         server.URL,
 		SHA256:      fmt.Sprintf("%x", sum),
+		Size:        int64(len(content)),
 		Client:      server.Client(),
 	}
 	if err := installer.Install(); err != nil {
@@ -61,12 +62,33 @@ func TestMiseInstallerRefusesUnverifiedBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	installer := miseInstaller{Destination: destination, URL: server.URL,
-		SHA256: fmt.Sprintf("%064x", 0), Client: server.Client()}
+		SHA256: fmt.Sprintf("%064x", 0), Size: int64(len("not the pinned release")), Client: server.Client()}
 	if err := installer.Install(); err == nil {
 		t.Fatal("unverified Mise release was installed")
 	}
 	if actual, err := os.ReadFile(destination); err != nil || string(actual) != "preserve" {
 		t.Fatalf("failed verification changed the destination: %q, %v", actual, err)
+	}
+}
+
+func TestMiseInstallerRefusesAnUnexpectedReleaseSize(t *testing.T) {
+	content := []byte("not the pinned size")
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write(content)
+	}))
+	defer server.Close()
+	destination := filepath.Join(t.TempDir(), "mise")
+	if err := os.WriteFile(destination, []byte("preserve"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(content)
+	installer := miseInstaller{Destination: destination, URL: server.URL,
+		SHA256: fmt.Sprintf("%x", sum), Size: int64(len(content) - 1), Client: server.Client()}
+	if err := installer.Install(); err == nil {
+		t.Fatal("unexpected Mise release size was installed")
+	}
+	if actual, err := os.ReadFile(destination); err != nil || string(actual) != "preserve" {
+		t.Fatalf("failed size verification changed the destination: %q, %v", actual, err)
 	}
 }
 

@@ -12,12 +12,11 @@ import (
 	"time"
 )
 
-const maxMiseReleaseSize = 100 << 20
-
 type miseInstaller struct {
 	Destination string
 	URL         string
 	SHA256      string
+	Size        int64
 	Client      *http.Client
 }
 
@@ -27,24 +26,28 @@ func testedMiseInstaller(paths Paths) miseInstaller {
 
 func testedMiseInstallerAt(destination string) miseInstaller {
 	asset, checksum := "", ""
+	var size int64
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "darwin/arm64":
 		asset = "mise-v" + testedMiseVersion + "-macos-arm64"
-		checksum = "50eeb4b907fb5fd4ad87a5fec0e55735bb16dfe00c725c9c3dc40852afd55b06"
+		checksum = "3cfbe3295dba1a7e43bd02653517a8cc21135ba91f0635b45c98f1ebecc5513f"
+		size = 89793376
 	case "darwin/amd64":
 		asset = "mise-v" + testedMiseVersion + "-macos-x64"
-		checksum = "d4c68596addfd102717699243acfb795177dc025e7895bad581317c43fadb4ef"
+		checksum = "0718a2aa14a96545a287f77a172d700247bb2d33016e5cf29fce1a05e45ac47a"
+		size = 107279616
 	}
 	return miseInstaller{
 		Destination: destination,
 		URL:         "https://github.com/jdx/mise/releases/download/v" + testedMiseVersion + "/" + asset,
 		SHA256:      checksum,
+		Size:        size,
 		Client:      &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
 func (i miseInstaller) Install() error {
-	if i.URL == "" || i.SHA256 == "" {
+	if i.URL == "" || i.SHA256 == "" || i.Size <= 0 {
 		return fmt.Errorf("mise %s has no release for %s/%s", testedMiseVersion, runtime.GOOS, runtime.GOARCH)
 	}
 	if !filepath.IsAbs(i.Destination) {
@@ -62,8 +65,8 @@ func (i miseInstaller) Install() error {
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("download mise %s: %s", testedMiseVersion, response.Status)
 	}
-	if response.ContentLength > maxMiseReleaseSize {
-		return fmt.Errorf("download mise %s: release is too large", testedMiseVersion)
+	if response.ContentLength >= 0 && response.ContentLength != i.Size {
+		return fmt.Errorf("download mise %s: release size is %d bytes, want %d", testedMiseVersion, response.ContentLength, i.Size)
 	}
 
 	parent := filepath.Dir(i.Destination)
@@ -78,7 +81,7 @@ func (i miseInstaller) Install() error {
 	defer os.Remove(stagedName)
 
 	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(staged, hash), io.LimitReader(response.Body, maxMiseReleaseSize+1))
+	written, copyErr := io.Copy(io.MultiWriter(staged, hash), io.LimitReader(response.Body, i.Size+1))
 	chmodErr := staged.Chmod(0o755)
 	syncErr := staged.Sync()
 	closeErr := staged.Close()
@@ -95,8 +98,8 @@ func (i miseInstaller) Install() error {
 			return fmt.Errorf("%s: %w", failure.name, failure.err)
 		}
 	}
-	if written > maxMiseReleaseSize {
-		return fmt.Errorf("download mise %s: release is too large", testedMiseVersion)
+	if written != i.Size {
+		return fmt.Errorf("download mise %s: release size is %d bytes, want %d", testedMiseVersion, written, i.Size)
 	}
 	if actual := fmt.Sprintf("%x", hash.Sum(nil)); actual != i.SHA256 {
 		return fmt.Errorf("verify mise %s: checksum is %s, want %s", testedMiseVersion, actual, i.SHA256)

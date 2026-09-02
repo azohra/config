@@ -206,7 +206,7 @@ func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
 	binary, home := buildConfigVersion(t, "v0.4.0"), t.TempDir()
 	writeMainTestReleaseMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.9.0\n'
+  printf '2026.9.1\n'
   exit 0
 fi
 exit 1
@@ -281,7 +281,7 @@ func TestBootstrapInstallsTheCommandBeforeAResourceFailure(t *testing.T) {
 	binary, home := buildConfig(t), t.TempDir()
 	writeMainTestMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.9.0\n'
+  printf '2026.9.1\n'
   exit 0
 fi
 exit 1
