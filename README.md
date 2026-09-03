@@ -31,7 +31,8 @@ Config rejects repository URLs containing credentials.
 ## Configure
 
 Every machine repository has a strict Config contract. A repository that opts
-into Mise also carries its native declarations:
+into Mise also carries the native declarations Config connects to Mise's global
+configuration:
 
 ```text
 config.toml       required Config contract
@@ -111,12 +112,14 @@ node = "24"
 Mise is a first-class Config resource. When enabled, its inspection reports the
 exact tested version, bootstrap phases, declared tools, and repository
 presence. Apply installs the pinned standalone binary at
-`~/.local/bin/mise` when necessary, then delegates convergence to
-`mise bootstrap`. Only machine Mise commands receive the managed
-`MISE_CONFIG_DIR` and related selectors; native resources and Git operations
-receive none of that authority. Repository-local Mise files can still add
-narrower authority while they are loadable, and Mise considers that shared
-inventory when pruning tools and packages.
+`~/.local/bin/mise` when necessary, safely connects the repository's `mise/`
+directory at `~/.config/mise`, then delegates convergence to `mise bootstrap`.
+An absent or empty global directory can be adopted; existing configuration is
+reported and left untouched. Config's Mise commands explicitly select that
+global directory while native resources and Git operations receive none of
+its authority. Repository-local Mise files layer on top in ordinary Mise
+precedence, and Mise considers that shared inventory when pruning tools and
+packages.
 
 Agent skills are a separate user-wide resource. Global selects user scope, not
 exclusive visibility. Every global skill has one

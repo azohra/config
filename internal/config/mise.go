@@ -136,6 +136,9 @@ func (i *miseRepositoryInventory) Repositories() ([]miseRepository, error) {
 // a declaration file: mise parses its own configuration and hands back the
 // paths, and what a repository is for stays mise's business.
 func miseRepositories(paths Paths, runner Runner) ([]miseRepository, error) {
+	if err := requireMiseConfigBinding(paths); err != nil {
+		return nil, fmt.Errorf("read global Mise configuration: %w", err)
+	}
 	listing := run(runner, "mise", "config", "ls", "-J")
 	if listing.Err != nil {
 		return nil, fmt.Errorf("list mise configuration: %w", listing.Failure())

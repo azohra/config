@@ -70,24 +70,26 @@ func (i Inspector) agentSkillsRunner() Runner {
 
 func (i Inspector) miseChecksWithInventory(inventory *miseRepositoryInventory) []Check {
 	runner := i.miseRunner()
+	binding := miseConfigBindingCheck(i.Paths)
 	if !runner.Exists("mise") {
-		return []Check{no("mise unavailable at ~/.local/bin/mise", "install the standalone mise binary")}
+		return []Check{no("mise unavailable at ~/.local/bin/mise", "install the standalone mise binary"), binding}
 	}
 	currentVersion, err := currentMiseVersion(runner)
 	if err != nil {
-		return []Check{no("mise version unreadable", "replace the standalone mise binary")}
+		return []Check{no("mise version unreadable", "replace the standalone mise binary"), binding}
 	}
 	if !supportsTestedMise(currentVersion) {
-		return []Check{no("mise "+currentVersion+" is unsupported", "install mise "+testedMiseVersion+" at ~/.local/bin/mise")}
+		return []Check{no("mise "+currentVersion+" is unsupported", "install mise "+testedMiseVersion+" at ~/.local/bin/mise"), binding}
+	}
+	checks := []Check{yes("mise " + currentVersion), binding}
+	if !binding.OK {
+		return checks
 	}
 	// Every phase probe returns exit 1 for real drift and for a document mise
 	// cannot read, so a broken machine document reported as thirteen drifted
 	// phases with the true cause buried below them. Ask once, first.
 	if listing := run(runner, "mise", "config", "ls", "-J"); listing.Err != nil {
-		return []Check{
-			yes("mise " + currentVersion),
-			no("machine document unreadable", listing.Failure().Error()),
-		}
+		return append(checks, no("machine document unreadable", listing.Failure().Error()))
 	}
 	// The three groups ask mise and git independent questions, so the slowest
 	// of them sets the cost rather than their sum.
@@ -105,7 +107,6 @@ func (i Inspector) miseChecksWithInventory(inventory *miseRepositoryInventory) [
 		}()
 	}
 	wg.Wait()
-	checks := []Check{yes("mise " + currentVersion)}
 	checks = append(checks, bootstrap...)
 	checks = append(checks, tools...)
 	checks = append(checks, repositories...)

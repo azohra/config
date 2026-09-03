@@ -10,8 +10,9 @@ binary starts belong to the caller.
 The machine repository owns policy and data. Its root `config.toml` is Config's
 strict contract. `mise = true` opts into the Mise resource; native Mise
 declarations then live under `mise/`, where Config does not parse or reinterpret
-them. Without that declaration Config does not inspect, install, update, or
-prune machine Mise state.
+them. Config connects that directory to Mise's canonical global configuration
+at `~/.config/mise`. Without the opt-in Config does not inspect, install,
+update, or prune machine Mise state.
 
 Mise is one Config resource. When declared, Config inspects the canonical
 standalone binary at `~/.local/bin/mise`, installs the exact release whose
@@ -19,9 +20,10 @@ command vocabulary it tests, and delegates the declared tools, packages,
 repositories, dotfiles, services, and lifecycle hooks to that binary. Package
 names, repository purposes, commands, secret references, and provider
 configuration remain opaque Mise input. Only commands issued for the Mise
-resource receive the managed `mise/` selectors. Native resources and repository
-operations clear those selectors, so storing Mise declarations in the machine
-repository grants no authority over unrelated child processes.
+resource explicitly select the canonical global directory and run from the
+user's home. Native resources and repository operations clear those selectors,
+so storing Mise declarations in the machine repository grants no authority over
+unrelated child processes.
 
 Agent skills are another opt-in resource, independent of Mise. The machine
 document declares repository sources, skill names, and requested agent targets.
@@ -78,12 +80,12 @@ returns, and backspaces across write boundaries, and persists the final typed
 spans. A successful self-update emits the installed version; the parent
 interface then re-executes that command and reopens the persisted result.
 
-The scoped child configuration is not a separate Mise installation. Mise's
-tool store and tracked-configuration ledger remain user-wide. The machine
-repository is the Mac's baseline authority, while a loadable repository-local
-Mise document can remain an additional authority for that repository. Config
-therefore delegates tool and package liveness to Mise's combined inventory
-instead of treating the machine document as an exclusive manifest.
+Mise's canonical executable, global configuration, tool store, and
+tracked-configuration ledger remain user-wide. The machine repository is the
+Mac's baseline authority, while a repository-local Mise document can add
+narrower authority for that repository. Config therefore delegates tool and
+package liveness to Mise's combined inventory instead of treating the machine
+document as an exclusive manifest.
 
 For a declared resource, Config asks once whether Mise can read the machine
 document at all, because a phase probe answers the same exit code for real
@@ -180,7 +182,9 @@ retry. A failed Mise resource does not prevent native resources from
 converging.
 
 Applying the Mise resource installs the tested standalone release when it is
-missing or incompatible, then delegates machine convergence with:
+missing or incompatible. It adopts a missing or empty `~/.config/mise` by
+linking it to the machine declarations; a foreign file, directory, or symlink
+is reported and preserved. Config then delegates machine convergence with:
 
 ```text
 mise bootstrap --yes --skip-dirty

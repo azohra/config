@@ -295,6 +295,9 @@ func (e Applier) applyMise() error {
 	if err := ensureTestedMise(e.Mise, e.InstallMise); err != nil {
 		return err
 	}
+	if err := ensureMiseConfigBinding(e.Paths); err != nil {
+		return err
+	}
 	if len(e.Machine.RepositoryHooks) > 0 {
 		if _, err := e.applyRepositoryHookTargets(false); err != nil {
 			return fmt.Errorf("prepare repository hook template: %w", err)

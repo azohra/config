@@ -227,7 +227,7 @@ func TestLoadMachineRefusesAManagedRootSymlink(t *testing.T) {
 	}
 }
 
-func TestMiseEnvironmentNamesTheSelectedRootWithoutMutatingTheProcess(t *testing.T) {
+func TestMiseEnvironmentNamesTheGlobalRootWithoutMutatingTheProcess(t *testing.T) {
 	paths := testPaths(t)
 	t.Setenv("MISE_CONFIG_DIR", "before")
 	t.Setenv("MISE_GLOBAL_CONFIG_ROOT", "before")
@@ -237,13 +237,13 @@ func TestMiseEnvironmentNamesTheSelectedRootWithoutMutatingTheProcess(t *testing
 	if got := environment[0]; got != "MISE_AUTO_UPDATE=0" {
 		t.Fatalf("machine environment = %v", environment)
 	}
-	if got := environment[1]; got != "MISE_CONFIG_DIR="+filepath.Join(paths.Root, "mise") {
+	if got := environment[1]; got != "MISE_CONFIG_DIR="+filepath.Join(paths.Home, ".config", "mise") {
 		t.Fatalf("machine environment = %v", environment)
 	}
-	if got := environment[2]; got != "MISE_GLOBAL_CONFIG_ROOT="+paths.Root {
+	if got := environment[2]; got != "MISE_GLOBAL_CONFIG_ROOT="+paths.Home {
 		t.Fatalf("machine environment = %v", environment)
 	}
-	if got := environment[3]; got != "MISE_CEILING_PATHS="+paths.Root {
+	if got := environment[3]; got != "MISE_CEILING_PATHS="+paths.Home {
 		t.Fatalf("machine environment = %v", environment)
 	}
 	if os.Getenv("MISE_CONFIG_DIR") != "before" || os.Getenv("MISE_GLOBAL_CONFIG_ROOT") != "before" || os.Getenv("MISE_CEILING_PATHS") != "before" || os.Getenv("MISE_AUTO_UPDATE") != "before" {

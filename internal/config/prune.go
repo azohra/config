@@ -155,7 +155,10 @@ func (p Pruner) Plan() (PrunePlan, error) {
 	var repositories []miseRepository
 	var miseErr error
 	if p.Machine.Mise {
-		miseErr = requireTestedMise(p.Mise)
+		miseErr = requireMiseConfigBinding(p.Paths)
+		if miseErr == nil {
+			miseErr = requireTestedMise(p.Mise)
+		}
 		if miseErr != nil {
 			plan.warnings = append(plan.warnings, "Mise cleanup is unavailable; its state was left untouched: "+miseErr.Error())
 		}

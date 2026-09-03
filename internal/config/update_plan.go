@@ -153,11 +153,12 @@ func (u Updater) PlanContext(ctx context.Context, scope UpdateScope) (UpdatePlan
 		if ready {
 			if scope == UpdateAll || scope == UpdateSoftware {
 				plan.Groups = append(plan.Groups, u.planTools(ctx))
+				plan.Groups = append(plan.Groups, u.planPackages(ctx))
 			}
 			if scope == UpdateAll || scope == UpdateRepositories {
 				plan.Groups = append(plan.Groups, u.planRepositories(ctx))
 			}
-		} else {
+		} else if miseGroup.State != UpdateUnavailable {
 			if scope == UpdateAll || scope == UpdateSoftware {
 				plan.Groups = append(plan.Groups, UpdateGroup{
 					Name: "Tools", Scope: UpdateSoftware, State: UpdatePending,
@@ -170,9 +171,6 @@ func (u Updater) PlanContext(ctx context.Context, scope UpdateScope) (UpdatePlan
 					Summary: "checked after Mise compatibility is restored",
 				})
 			}
-		}
-		if scope == UpdateAll || scope == UpdateSoftware {
-			plan.Groups = append(plan.Groups, u.planPackages(ctx))
 		}
 	}
 	if machine.AgentSkills != nil && (scope == UpdateAll || scope == UpdateSoftware) {
@@ -238,6 +236,17 @@ func (u Updater) planConfigRelease(ctx context.Context) (UpdateGroup, bool, stri
 
 func (u Updater) planMise(ctx context.Context) (UpdateGroup, bool) {
 	group := UpdateGroup{Name: miseName, Scope: UpdateAll}
+	state, detail := inspectMiseConfigBinding(u.Paths)
+	if state != miseConfigBindingCurrent {
+		group.Summary = detail
+		if state == miseConfigBindingMissing || state == miseConfigBindingEmpty {
+			group.State = UpdateAvailable
+			group.Count = 1
+		} else {
+			group.State = UpdateUnavailable
+		}
+		return group, false
+	}
 	if !u.MachineMiseProbe.Exists("mise") {
 		group.State = UpdateAvailable
 		group.Count = 1

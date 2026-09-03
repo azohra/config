@@ -190,11 +190,12 @@ func newMachineLiveRunner(paths Paths) LiveRunner {
 	return runner
 }
 
-// NewMiseRunner confines the managed machine document to commands issued on
-// behalf of the Mise resource. Native resources and repository operations use
+// NewMiseRunner gives commands issued for the Mise resource the canonical
+// global configuration. Native resources and repository operations use
 // NewMachineRunner and inherit none of Mise's configuration selectors.
 func NewMiseRunner(paths Paths) OSRunner {
 	runner := NewMachineRunner(paths)
+	runner.Dir = paths.Home
 	runner.Environment = miseEnvironment(paths)
 	runner.Executables = map[string]string{"mise": misePath(paths)}
 	return runner
@@ -202,6 +203,7 @@ func NewMiseRunner(paths Paths) OSRunner {
 
 func newMiseLiveRunner(paths Paths) LiveRunner {
 	runner := newMachineLiveRunner(paths)
+	runner.Dir = paths.Home
 	runner.Environment = miseEnvironment(paths)
 	runner.Executables = map[string]string{"mise": misePath(paths)}
 	return runner

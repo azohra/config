@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +60,49 @@ func (r updatePlanRunner) Run(_ context.Context, _ string, args ...string) Resul
 
 func (r updatePlanRunner) Exists(string) bool { return r.exists }
 
+func TestUpdatePlanRepairsOnlyAnUnoccupiedGlobalMisePath(t *testing.T) {
+	runner := updatePlanRunner{exists: true, answers: map[string]Result{
+		"--version": {Stdout: testedMiseVersion},
+	}}
+	for _, test := range []struct {
+		name      string
+		occupy    bool
+		wantState UpdateState
+		wantWork  bool
+	}{
+		{"missing", false, UpdateAvailable, true},
+		{"foreign", true, UpdateUnavailable, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := unboundMisePaths(t)
+			if test.occupy {
+				if err := os.MkdirAll(miseConfigDir(paths), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(miseConfigDir(paths), "config.toml"), []byte("[tools]\nnode = \"22\"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			updater := Updater{
+				Paths: paths, Version: "dev", MachineMiseProbe: runner, MachineMisePlan: runner,
+				LoadMachine: func() (Machine, error) { return Machine{Mise: true}, nil },
+			}
+			plan, err := updater.Plan(UpdateSoftware)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Groups) < 2 || plan.Groups[1].Name != miseName || plan.Groups[1].State != test.wantState {
+				t.Fatalf("Mise plan = %+v", plan.Groups)
+			}
+			if plan.HasWork() != test.wantWork {
+				t.Fatalf("HasWork() = %v, want %v for %+v", plan.HasWork(), test.wantWork, plan.Groups)
+			}
+		})
+	}
+}
+
 func TestUpdatePlanUsesExactMiseDiscoveryAndHonestDeferredChecks(t *testing.T) {
+	paths := testPaths(t)
 	runner := updatePlanRunner{exists: true, answers: map[string]Result{
 		"--version": {Stdout: testedMiseVersion + "\n"},
 		"outdated --json": {Stdout: `{
@@ -72,6 +116,7 @@ func TestUpdatePlanUsesExactMiseDiscoveryAndHonestDeferredChecks(t *testing.T) {
 ]}`},
 	}}
 	updater := Updater{
+		Paths:            paths,
 		Version:          "dev",
 		MachineMiseProbe: runner,
 		MachineMisePlan:  runner,
@@ -115,12 +160,13 @@ func TestUpdatePlanUsesExactMiseDiscoveryAndHonestDeferredChecks(t *testing.T) {
 }
 
 func TestRepositoryPlanLabelsUnverifiedRemoteFreshness(t *testing.T) {
+	paths := testPaths(t)
 	runner := updatePlanRunner{exists: true, answers: map[string]Result{
 		"--version":                     {Stdout: testedMiseVersion},
 		"bootstrap repos status --json": {Stdout: `{"repos":[{"path":"/tmp/config","state":"current"}]}`},
 	}}
 	updater := Updater{
-		Version: "dev", MachineMiseProbe: runner, MachineMisePlan: runner,
+		Paths: paths, Version: "dev", MachineMiseProbe: runner, MachineMisePlan: runner,
 		LoadMachine: func() (Machine, error) { return Machine{Mise: true}, nil },
 	}
 	plan, err := updater.Plan(UpdateRepositories)
@@ -189,11 +235,12 @@ func (r *cancelledUpdatePlanRunner) Run(ctx context.Context, _ string, _ ...stri
 }
 
 func TestUpdatePlanningCarriesCancellationToProviderCommands(t *testing.T) {
+	paths := testPaths(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runner := &cancelledUpdatePlanRunner{}
 	updater := Updater{
-		Version: "dev", MachineMiseProbe: runner, MachineMisePlan: runner,
+		Paths: paths, Version: "dev", MachineMiseProbe: runner, MachineMisePlan: runner,
 		LoadMachine: func() (Machine, error) { return Machine{Mise: true}, nil },
 	}
 	if _, err := updater.PlanContext(ctx, UpdateSoftware); err != nil {

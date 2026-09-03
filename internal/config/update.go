@@ -283,6 +283,10 @@ func (u Updater) prepareMachineMise() error {
 		u.Log.Error(err.Error())
 		return fmt.Errorf("mise: %w", err)
 	}
+	if err := ensureMiseConfigBinding(u.Paths); err != nil {
+		u.Log.Error(err.Error())
+		return fmt.Errorf("mise: %w", err)
+	}
 	u.Log.OK("standalone mise " + testedMiseVersion + " ready")
 	return nil
 }

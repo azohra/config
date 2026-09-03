@@ -29,7 +29,17 @@ func testPaths(t *testing.T) Paths {
 	t.Helper()
 	root := t.TempDir()
 	home := t.TempDir()
-	return Paths{Root: root, Home: home, StateDir: filepath.Join(t.TempDir(), "state")}
+	paths := Paths{Root: root, Home: home, StateDir: filepath.Join(t.TempDir(), "state")}
+	if err := os.Mkdir(filepath.Join(root, "mise"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "mise"), filepath.Join(home, ".config", "mise")); err != nil {
+		t.Fatal(err)
+	}
+	return paths
 }
 
 func testMachine() Machine {

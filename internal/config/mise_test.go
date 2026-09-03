@@ -125,8 +125,8 @@ func unsupportedMiseVersions() []string {
 
 func TestMiseChecksRequireTheTestedVersion(t *testing.T) {
 	for _, version := range unsupportedMiseVersions() {
-		checks := miseChecks(Inspector{Runner: &miseStubRunner{version: version}})
-		if len(checks) != 1 || checks[0].OK ||
+		checks := miseChecks(t, Inspector{Runner: &miseStubRunner{version: version}})
+		if len(checks) != 2 || checks[0].OK || !checks[1].OK ||
 			checks[0].Label != "mise "+version+" is unsupported" ||
 			!strings.Contains(checks[0].Detail, testedMiseVersion) {
 			t.Fatalf("mise %s produced %+v", version, checks)
@@ -135,8 +135,8 @@ func TestMiseChecksRequireTheTestedVersion(t *testing.T) {
 }
 
 func TestMiseChecksReportAnUnavailableResource(t *testing.T) {
-	checks := miseChecks(Inspector{Runner: unavailableRunner{}})
-	if len(checks) != 1 || checks[0].OK || checks[0].Label != "mise unavailable at ~/.local/bin/mise" {
+	checks := miseChecks(t, Inspector{Runner: unavailableRunner{}})
+	if len(checks) != 2 || checks[0].OK || !checks[1].OK || checks[0].Label != "mise unavailable at ~/.local/bin/mise" {
 		t.Fatalf("unavailable Mise produced %+v", checks)
 	}
 }
@@ -145,7 +145,7 @@ func TestMiseChecksReportAnUnavailableResource(t *testing.T) {
 // there is no ExitError to read. Reading the code before the error turns
 // every healthy phase into a missing binary.
 func TestMiseChecksTreatConvergedPhasesAsCurrent(t *testing.T) {
-	for _, check := range miseChecks(Inspector{Runner: &miseStubRunner{}}) {
+	for _, check := range miseChecks(t, Inspector{Runner: &miseStubRunner{}}) {
 		if !check.OK {
 			t.Fatalf("a fully converged machine reported %+v", check)
 		}
@@ -155,7 +155,7 @@ func TestMiseChecksTreatConvergedPhasesAsCurrent(t *testing.T) {
 func TestMiseChecksNameTheBootstrapPhaseThatNeedsAttention(t *testing.T) {
 	drifted := Result{Err: exec.Command("/usr/bin/false").Run()}
 	runner := &miseStubRunner{phase: map[string]Result{"dotfiles": drifted}}
-	checks := miseChecks(Inspector{Runner: runner})
+	checks := miseChecks(t, Inspector{Runner: runner})
 
 	var found bool
 	for _, check := range checks {
@@ -179,7 +179,7 @@ func TestMiseChecksNameTheBootstrapPhaseThatNeedsAttention(t *testing.T) {
 // Inspection must never reach for it.
 func TestMiseChecksNeverAskMiseForRepositoryFreshness(t *testing.T) {
 	runner := &miseStubRunner{}
-	miseChecks(Inspector{Runner: runner})
+	miseChecks(t, Inspector{Runner: runner})
 	for _, command := range runner.commands {
 		if strings.HasPrefix(command, "mise bootstrap repos status") ||
 			strings.HasPrefix(command, "mise bootstrap status") {
@@ -264,7 +264,11 @@ url = "git@github.com:example/absent.git"
 // miseChecks is the inspection these tests exercise. Production shares one
 // repository inventory across resources and calls miseChecksWithInventory
 // directly, so building a private one is a convenience that belongs here.
-func miseChecks(i Inspector) []Check {
+func miseChecks(t *testing.T, i Inspector) []Check {
+	t.Helper()
+	if i.Paths.Home == "" {
+		i.Paths = testPaths(t)
+	}
 	return i.miseChecksWithInventory(newMiseRepositoryInventory(i.Paths, i.miseRunner()))
 }
 
@@ -458,7 +462,7 @@ func TestAnUnreadableMachineDocumentIsNamedOnceNotAsPhaseDrift(t *testing.T) {
 	for _, phase := range misePhases {
 		runner.phase[phase[0]] = Result{Err: failure}
 	}
-	checks := miseChecks(Inspector{Paths: testPaths(t), Machine: testMachine(), Runner: runner})
+	checks := miseChecks(t, Inspector{Paths: testPaths(t), Machine: testMachine(), Runner: runner})
 
 	unreadable := 0
 	for _, check := range checks {

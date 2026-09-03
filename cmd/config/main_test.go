@@ -266,6 +266,15 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "config.toml"), document, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(root, "mise"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "mise"), filepath.Join(home, ".config", "mise")); err != nil {
+		t.Fatal(err)
+	}
 	log := filepath.Join(t.TempDir(), "mise-commands")
 	t.Setenv("UPDATE_TEST_LOG", log)
 	mise := filepath.Join(home, ".local", "bin", "mise")

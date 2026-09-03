@@ -45,12 +45,12 @@ fi
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	selection := filepath.Join(paths.Root, "mise")
+	selection := miseConfigDir(paths)
 	want := strings.Join([]string{
 		"--version||||0|1|",
-		"upgrade --yes|" + selection + "|" + paths.Root + "|" + paths.Root + "|0||",
-		"bootstrap packages upgrade --yes|" + selection + "|" + paths.Root + "|" + paths.Root + "|0||",
-		"bootstrap repos update --yes --skip-dirty|" + selection + "|" + paths.Root + "|" + paths.Root + "|0||",
+		"upgrade --yes|" + selection + "|" + paths.Home + "|" + paths.Home + "|0||",
+		"bootstrap packages upgrade --yes|" + selection + "|" + paths.Home + "|" + paths.Home + "|0||",
+		"bootstrap repos update --yes --skip-dirty|" + selection + "|" + paths.Home + "|" + paths.Home + "|0||",
 		"",
 	}, "\n")
 	if string(commands) != want {

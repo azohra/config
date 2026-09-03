@@ -44,8 +44,8 @@ func TestMiseChildIgnoresAnAmbientConfigurationSelection(t *testing.T) {
 		}
 	}
 	// The scoping Config does set still has to survive the overlay.
-	if !slices.Contains(environment, "MISE_CONFIG_DIR="+paths.InRoot("mise")) {
-		t.Error("the child lost Config's own configuration directory")
+	if !slices.Contains(environment, "MISE_CONFIG_DIR="+miseConfigDir(paths)) {
+		t.Error("the child lost the canonical global configuration directory")
 	}
 }
 
@@ -91,6 +91,9 @@ func TestMiseRunnersUseOnlyTheCanonicalMise(t *testing.T) {
 	t.Setenv("PATH", fallback+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	runner := NewMiseRunner(paths)
+	if runner.Dir != paths.Home {
+		t.Fatalf("Mise runner directory = %q, want home %q", runner.Dir, paths.Home)
+	}
 	result := runner.Run(context.Background(), "mise")
 	if result.Err != nil || result.Stdout != "canonical" {
 		t.Fatalf("Mise runner = %+v", result)
@@ -98,6 +101,9 @@ func TestMiseRunnersUseOnlyTheCanonicalMise(t *testing.T) {
 
 	var output bytes.Buffer
 	live := newMiseLiveRunner(paths)
+	if live.Dir != paths.Home {
+		t.Fatalf("Mise live runner directory = %q, want home %q", live.Dir, paths.Home)
+	}
 	live.Stdout, live.Stderr = &output, &output
 	if err := live.Command("mise"); err != nil {
 		t.Fatal(err)

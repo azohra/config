@@ -157,9 +157,9 @@ func validGitName(value string) bool {
 		!strings.HasSuffix(value, ".") && !strings.HasSuffix(value, "/")
 }
 
-// miseEnvironment selects the repository's native Mise configuration for a
-// command issued by the Mise resource and stops discovery at the managed
-// checkout.
+// miseEnvironment selects the canonical global Mise configuration for a
+// command issued by the Mise resource and stops discovery at the home
+// directory. The managed checkout is configuration input, not a Mise project.
 var miseLocalEnvironment = []string{
 	"MISE_AUTO_UPDATE",
 	"MISE_NO_CONFIG",
@@ -174,9 +174,9 @@ var miseLocalEnvironment = []string{
 func miseEnvironment(paths Paths) []string {
 	return []string{
 		"MISE_AUTO_UPDATE=0",
-		"MISE_CONFIG_DIR=" + paths.InRoot("mise"),
-		"MISE_GLOBAL_CONFIG_ROOT=" + paths.Root,
-		"MISE_CEILING_PATHS=" + paths.Root,
+		"MISE_CONFIG_DIR=" + miseConfigDir(paths),
+		"MISE_GLOBAL_CONFIG_ROOT=" + paths.Home,
+		"MISE_CEILING_PATHS=" + paths.Home,
 		// Naming the configuration directory is not enough. An ambient
 		// MISE_GLOBAL_CONFIG_FILE replaces the machine document, a system
 		// config file is loaded alongside it, and an ignored path erases it —
