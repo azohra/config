@@ -28,6 +28,8 @@ jobs:
           # check scans the whole history for secrets, not just the tree.
           fetch-depth: 0
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
         with:
           version: 2026.9.1
       - id: go_cache
