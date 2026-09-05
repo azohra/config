@@ -109,7 +109,7 @@ func runOperation(ctx context.Context, dir, name string, args []string, events c
 			command.Stdout = writer
 			err = command.Run()
 		}
-		settle(err)
+		settle()
 		// A successful operation whose descendant still holds the output pipes
 		// ends in ErrWaitDelay. Reporting that as a failed Apply, Save, or
 		// Update reports a machine that did not converge when it did.

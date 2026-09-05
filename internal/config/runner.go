@@ -50,7 +50,7 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 	cmd.Stderr = &stderr
 	settle := InterruptGroup(cmd, CommandWaitDelay)
 	err := cmd.Run()
-	settle(err)
+	settle()
 	return Result{Stdout: stdout.String(), Stderr: stderr.String(), Err: CommandFailure(cmd, err)}
 }
 
@@ -59,13 +59,13 @@ func (r OSRunner) Run(ctx context.Context, name string, args ...string) Result {
 // default cancellation kills the process Config started, while Wait goes on
 // waiting for every descendant that inherited its pipes.
 //
-// It returns a function to call with the command's own error once Wait has
-// returned. That cancels the pending group kill, so a signal cannot arrive
-// after the group is gone and land on a process that reused its identifier.
-func InterruptGroup(cmd *exec.Cmd, delay time.Duration) func(error) {
+// It returns a function to call once Wait has returned, which takes the group
+// then rather than leaving a timer to race Wait for it.
+func InterruptGroup(cmd *exec.Cmd, delay time.Duration) func() {
 	var (
 		mu         sync.Mutex
 		escalation *time.Timer
+		group      int
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = delay
@@ -73,31 +73,35 @@ func InterruptGroup(cmd *exec.Cmd, delay time.Duration) func(error) {
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
-		group := -cmd.Process.Pid
-		err := syscall.Kill(group, syscall.SIGINT)
+		pgid := -cmd.Process.Pid
+		err := syscall.Kill(pgid, syscall.SIGINT)
 		// A shell starts a background command with SIGINT ignored, and the
 		// escalation os/exec performs when WaitDelay elapses reaches only the
 		// process Config started. Without this the group survives a cancel.
 		mu.Lock()
-		escalation = time.AfterFunc(delay, func() { _ = syscall.Kill(group, syscall.SIGKILL) })
+		group, escalation = pgid, time.AfterFunc(delay, func() {
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		})
 		mu.Unlock()
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		}
 		return err
 	}
-	return func(err error) {
-		// ErrWaitDelay means the pipes outlived the command, which is the one
-		// case the group kill is for. Every other ending has already reaped
-		// the group, so the pending signal has nothing left to reach.
-		if errors.Is(err, exec.ErrWaitDelay) {
+	return func() {
+		// Wait has returned, so the process Config started is reaped and
+		// whatever remains in its group is the orphan the escalation was armed
+		// for. os/exec reports ErrWaitDelay only when no Cancel ran, so a
+		// cancelled command has no ending this could read to decide the group
+		// is already gone — it has to ask the group itself, and does that
+		// here, where the answer cannot arrive after the pending signal.
+		mu.Lock()
+		defer mu.Unlock()
+		if escalation == nil {
 			return
 		}
-		mu.Lock()
-		if escalation != nil {
-			escalation.Stop()
-		}
-		mu.Unlock()
+		escalation.Stop()
+		_ = syscall.Kill(group, syscall.SIGKILL)
 	}
 }
 
@@ -225,7 +229,7 @@ func (r LiveRunner) CommandContext(ctx context.Context, name string, args ...str
 	cmd.Stderr = r.Stderr
 	settle := InterruptGroup(cmd, CommandWaitDelay)
 	err := cmd.Run()
-	settle(err)
+	settle()
 	if err = CommandFailure(cmd, err); err != nil {
 		return fmt.Errorf("%s: %w", strings.Join(append([]string{name}, args...), " "), err)
 	}
