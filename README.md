@@ -15,7 +15,7 @@ standalone release when that resource first converges.
 On a machine that already has Mise, one way to run the released binary is:
 
 ```bash
-mise x github:azohra/config@0.17.0 -- \
+mise x github:azohra/config@0.18.0 -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
