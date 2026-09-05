@@ -42,6 +42,25 @@ type pruneFile struct {
 	Digest string
 }
 
+type pruneCacheFile struct {
+	Name string
+	Size int64
+}
+
+type pruneCache struct {
+	Label string
+	Dir   string
+	Files []pruneCacheFile
+}
+
+func (c pruneCache) bytes() int64 {
+	var total int64
+	for _, file := range c.Files {
+		total += file.Size
+	}
+	return total
+}
+
 type pruneHook struct {
 	Name       string
 	Digest     string
@@ -72,6 +91,7 @@ type PrunePlan struct {
 	registry        pruneRegistry
 	tools           []pruneTool
 	packages        []prunePackageManager
+	caches          []pruneCache
 	files           []pruneFile
 	hooks           []pruneHookTarget
 	agentSkills     pruneAgentSkills
@@ -81,14 +101,15 @@ type PrunePlan struct {
 
 func (p PrunePlan) Empty() bool {
 	return len(p.registry.Tracked) == 0 && len(p.registry.Trusted) == 0 &&
-		len(p.tools) == 0 && len(p.packages) == 0 && len(p.files) == 0 && len(p.hooks) == 0 &&
-		len(p.agentSkills.Skills) == 0
+		len(p.tools) == 0 && len(p.packages) == 0 && len(p.caches) == 0 && len(p.files) == 0 &&
+		len(p.hooks) == 0 && len(p.agentSkills.Skills) == 0
 }
 
 func (p PrunePlan) sameWork(other PrunePlan) bool {
 	return reflect.DeepEqual(p.registry, other.registry) &&
 		reflect.DeepEqual(p.tools, other.tools) &&
 		reflect.DeepEqual(p.packages, other.packages) &&
+		reflect.DeepEqual(p.caches, other.caches) &&
 		reflect.DeepEqual(p.files, other.files) &&
 		reflect.DeepEqual(p.hooks, other.hooks) &&
 		reflect.DeepEqual(p.agentSkills, other.agentSkills)
@@ -105,6 +126,7 @@ type Pruner struct {
 	Skills       Runner
 	SkillsLive   commandRunner
 	MiseStateDir string
+	MiseCacheDir string
 	Log          Logger
 }
 
@@ -125,29 +147,33 @@ func NewPruner(paths Paths, machine Machine, out io.Writer) Pruner {
 	}
 }
 
-// miseStateDir asks mise where its own state lives. Config once derived this
-// path from the environment and then forced it onto the subprocesses that
-// delete tools and packages, which made the safety of every deletion depend on
-// Config reproducing a path mise owns.
-func miseStateDir(runner Runner) (string, error) {
+// miseDirs asks mise where its own state and cache live. Config once derived
+// the state path from the environment and then forced it onto the subprocesses
+// that delete tools and packages, which made the safety of every deletion
+// depend on Config reproducing a path mise owns.
+func miseDirs(runner Runner) (state, cache string, err error) {
 	result := run(runner, "mise", "doctor", "--json")
 	var report struct {
 		Dirs struct {
 			State string `json:"state"`
+			Cache string `json:"cache"`
 		} `json:"dirs"`
 	}
 	// doctor exits non-zero when it has findings to report, and the document
 	// it prints is still the answer.
 	if err := json.Unmarshal([]byte(result.Stdout), &report); err != nil {
 		if result.Err != nil {
-			return "", fmt.Errorf("locate mise state: %w", result.Failure())
+			return "", "", fmt.Errorf("locate mise directories: %w", result.Failure())
 		}
-		return "", fmt.Errorf("locate mise state: %w", err)
+		return "", "", fmt.Errorf("locate mise directories: %w", err)
 	}
 	if !filepath.IsAbs(report.Dirs.State) {
-		return "", fmt.Errorf("locate mise state: mise reported %q", report.Dirs.State)
+		return "", "", fmt.Errorf("locate mise state: mise reported %q", report.Dirs.State)
 	}
-	return filepath.Clean(report.Dirs.State), nil
+	if !filepath.IsAbs(report.Dirs.Cache) {
+		return "", "", fmt.Errorf("locate mise cache: mise reported %q", report.Dirs.Cache)
+	}
+	return filepath.Clean(report.Dirs.State), filepath.Clean(report.Dirs.Cache), nil
 }
 
 func (p Pruner) Plan() (PrunePlan, error) {
@@ -164,12 +190,17 @@ func (p Pruner) Plan() (PrunePlan, error) {
 		}
 	}
 	if p.Machine.Mise && miseErr == nil {
-		stateDir := p.MiseStateDir
-		if stateDir == "" {
-			var err error
-			stateDir, err = miseStateDir(p.Mise)
+		stateDir, cacheDir := p.MiseStateDir, p.MiseCacheDir
+		if stateDir == "" || cacheDir == "" {
+			reportedState, reportedCache, err := miseDirs(p.Mise)
 			if err != nil {
-				plan.warnings = append(plan.warnings, "Mise configuration cleanup is unavailable: "+err.Error())
+				plan.warnings = append(plan.warnings, "Mise directory cleanup is unavailable: "+err.Error())
+			}
+			if stateDir == "" {
+				stateDir = reportedState
+			}
+			if cacheDir == "" {
+				cacheDir = reportedCache
 			}
 		}
 		if stateDir != "" {
@@ -177,6 +208,13 @@ func (p Pruner) Plan() (PrunePlan, error) {
 			plan.registry, err = p.planRegistry(stateDir)
 			if err != nil {
 				plan.warnings = append(plan.warnings, "Mise configuration cleanup is unavailable: "+err.Error())
+			}
+		}
+		if cacheDir != "" {
+			var err error
+			plan.caches, plan.warnings, err = p.planCaches(cacheDir, plan.warnings)
+			if err != nil {
+				plan.warnings = append(plan.warnings, "Mise download cache cleanup is unavailable: "+err.Error())
 			}
 		}
 		var err error
@@ -305,6 +343,65 @@ func (p Pruner) planRegistry(stateDir string) (pruneRegistry, error) {
 		return pruneRegistry{}, fmt.Errorf("inspect mise trusted configurations: %w", err)
 	}
 	return pruneRegistry{Tracked: tracked, Trusted: trusted}, nil
+}
+
+// systemBrewCaches is deliberately not every directory under system-brew: the
+// cask-extract sibling is where a payload is unpacked on its way into place,
+// so an install is using it.
+var systemBrewCaches = []struct{ dir, label string }{
+	{"casks", "Homebrew cask downloads"},
+	{"bottles", "Homebrew bottle downloads"},
+}
+
+func (p Pruner) planCaches(cacheDir string, warnings []string) ([]pruneCache, []string, error) {
+	root := filepath.Join(cacheDir, "system-brew")
+	var planned []pruneCache
+	for _, cache := range systemBrewCaches {
+		dir := filepath.Join(root, cache.dir)
+		files, warning, err := cacheDownloads(dir)
+		if err != nil {
+			return nil, warnings, fmt.Errorf("inspect %s: %w", cache.label, err)
+		}
+		if warning != "" {
+			warnings = append(warnings, cache.label+" "+warning)
+		}
+		if len(files) > 0 {
+			planned = append(planned, pruneCache{Label: cache.label, Dir: dir, Files: files})
+		}
+	}
+	return planned, warnings, nil
+}
+
+func cacheDownloads(dir string) ([]pruneCacheFile, string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	var files []pruneCacheFile
+	var foreign bool
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			foreign = true
+			continue
+		}
+		info, err := entry.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		files = append(files, pruneCacheFile{Name: entry.Name(), Size: info.Size()})
+	}
+	slices.SortFunc(files, func(left, right pruneCacheFile) int { return strings.Compare(left.Name, right.Name) })
+	var warning string
+	if foreign {
+		warning = "holds entries that are not downloaded files; left untouched"
+	}
+	return files, warning, nil
 }
 
 func deadConfigLinks(dir string) ([]pruneLink, error) {
@@ -704,6 +801,13 @@ func WritePrunePlan(out io.Writer, plan PrunePlan) {
 			}
 		}
 	}
+	if len(plan.caches) > 0 {
+		fmt.Fprintln(out, "\nMise download cache")
+		for _, cache := range plan.caches {
+			fmt.Fprintf(out, "  %s: %s, %s\n", cache.Label,
+				FormatCount(len(cache.Files), "file", "files"), FormatBytes(cache.bytes()))
+		}
+	}
 	if len(plan.agentSkills.Skills) > 0 {
 		fmt.Fprintln(out, "\nAgent skills")
 		for _, skill := range plan.agentSkills.Skills {
@@ -771,6 +875,19 @@ func (p Pruner) Apply(expected PrunePlan) error {
 				failures = append(failures, fmt.Errorf("%s packages: %w", manager.Name, err))
 			} else {
 				p.Log.OK(manager.Name + " packages pruned")
+			}
+		}
+	}
+	if len(current.caches) > 0 {
+		p.Log.Section("Mise download cache")
+		for _, cache := range current.caches {
+			reclaimed, err := applyPruneCache(cache)
+			if err != nil {
+				p.Log.Error(cache.Label + ": " + err.Error())
+				failures = append(failures, fmt.Errorf("%s: %w", cache.Label, err))
+			}
+			if err == nil || reclaimed > 0 {
+				p.Log.OK(cache.Label + " reclaimed " + FormatBytes(reclaimed))
 			}
 		}
 	}
@@ -931,6 +1048,25 @@ func applyPruneHooks(target pruneHookTarget) error {
 		return err
 	}
 	return AtomicWrite(manifestPath, append(encoded, '\n'), 0o644)
+}
+
+// applyPruneCache trusts the plan Apply just recomputed rather than checking
+// each file again: a cask is cached under a name carrying its content hash,
+// so there is nothing a second look could catch.
+func applyPruneCache(cache pruneCache) (int64, error) {
+	var reclaimed int64
+	var failures []error
+	for _, file := range cache.Files {
+		err := os.Remove(filepath.Join(cache.Dir, file.Name))
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			failures = append(failures, err)
+		default:
+			reclaimed += file.Size
+		}
+	}
+	return reclaimed, errors.Join(failures...)
 }
 
 func applyPruneFile(file pruneFile) error {

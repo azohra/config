@@ -76,6 +76,10 @@ type pruneFixture struct {
 	currentRestore string
 	hook           string
 	manifest       string
+	caskDir        string
+	bottleDir      string
+	cask           string
+	bottle         string
 }
 
 func newPruneFixture(t *testing.T) pruneFixture {
@@ -102,6 +106,23 @@ func newPruneFixture(t *testing.T) pruneFixture {
 		if err := os.Symlink(live, filepath.Join(miseState, dir, "live")); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	miseCache := t.TempDir()
+	caskDir := filepath.Join(miseCache, "system-brew", "casks")
+	bottleDir := filepath.Join(miseCache, "system-brew", "bottles")
+	for _, dir := range []string{caskDir, bottleDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cask := filepath.Join(caskDir, "example-1.0-abc123-Example.dmg")
+	if err := os.WriteFile(cask, bytes.Repeat([]byte("c"), 2048), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bottle := filepath.Join(bottleDir, "example-1.0.tar.gz")
+	if err := os.WriteFile(bottle, bytes.Repeat([]byte("b"), 1024), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	baselines := Baselines{Dir: paths.StateDir}
@@ -167,7 +188,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	machine.RepositoryHooks = nil
 	pruner := Pruner{
 		Paths: paths, Machine: machine, Runner: runner, Mise: runner, MiseLive: live,
-		MiseStateDir: miseState, Log: Logger{Out: &output},
+		MiseStateDir: miseState, MiseCacheDir: miseCache, Log: Logger{Out: &output},
 	}
 	return pruneFixture{
 		pruner: pruner, live: live,
@@ -176,6 +197,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 		finderBaseline: filepath.Join(paths.StateDir, finderFavoritesID+".json"),
 		oldRestore:     restoreStatePath(paths, oldID), currentRestore: restoreStatePath(paths, currentID),
 		hook: hookPath, manifest: manifestPath,
+		caskDir: caskDir, bottleDir: bottleDir, cask: cask, bottle: bottle,
 	}
 }
 
@@ -191,8 +213,8 @@ func TestNewPrunerLeavesMiseStateToMise(t *testing.T) {
 	paths := testPaths(t)
 	t.Setenv("MISE_STATE_DIR", "relative-mise-state")
 	pruner := NewPruner(paths, testMachine(), &bytes.Buffer{})
-	if pruner.MiseStateDir != "" {
-		t.Fatalf("pruner derived a mise state directory: %q", pruner.MiseStateDir)
+	if pruner.MiseStateDir != "" || pruner.MiseCacheDir != "" {
+		t.Fatalf("pruner derived mise directories: %q, %q", pruner.MiseStateDir, pruner.MiseCacheDir)
 	}
 	runner, ok := pruner.Mise.(OSRunner)
 	if !ok {
@@ -204,8 +226,10 @@ func TestNewPrunerLeavesMiseStateToMise(t *testing.T) {
 	}
 	for _, environment := range [][]string{runner.Environment, live.Environment} {
 		for _, entry := range environment {
-			if strings.HasPrefix(entry, "MISE_STATE_DIR=") {
-				t.Fatalf("Config forced mise state onto its own subprocess: %q", entry)
+			for _, forced := range []string{"MISE_STATE_DIR=", "MISE_CACHE_DIR="} {
+				if strings.HasPrefix(entry, forced) {
+					t.Fatalf("Config forced a mise directory onto its own subprocess: %q", entry)
+				}
 			}
 		}
 	}
@@ -245,24 +269,27 @@ func TestPrunerDoesNotProbeUndeclaredMise(t *testing.T) {
 	}
 }
 
-func TestPrunerAsksMiseWhereItsStateLives(t *testing.T) {
+func TestPrunerAsksMiseWhereItsStateAndCacheLive(t *testing.T) {
 	answers := map[string]Result{
-		"doctor": {Stdout: `{"dirs":{"state":"/var/db/mise-state"}}`},
+		"doctor": {Stdout: `{"dirs":{"state":"/var/db/mise-state","cache":"/var/db/mise-cache"}}`},
 	}
-	state, err := miseStateDir(stubRunner{answers: answers})
+	state, cache, err := miseDirs(stubRunner{answers: answers})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != "/var/db/mise-state" {
-		t.Fatalf("mise state directory = %q", state)
+	if state != "/var/db/mise-state" || cache != "/var/db/mise-cache" {
+		t.Fatalf("mise directories = %q, %q", state, cache)
 	}
 	for name, answer := range map[string]Result{
-		"relative": {Stdout: `{"dirs":{"state":"mise-state"}}`},
-		"absent":   {Stdout: `{"dirs":{}}`},
-		"garbage":  {Stdout: "not a document"},
+		"relative state": {Stdout: `{"dirs":{"state":"mise-state","cache":"/var/db/mise-cache"}}`},
+		"relative cache": {Stdout: `{"dirs":{"state":"/var/db/mise-state","cache":"mise-cache"}}`},
+		"absent state":   {Stdout: `{"dirs":{"cache":"/var/db/mise-cache"}}`},
+		"absent cache":   {Stdout: `{"dirs":{"state":"/var/db/mise-state"}}`},
+		"absent both":    {Stdout: `{"dirs":{}}`},
+		"garbage":        {Stdout: "not a document"},
 	} {
-		if _, err := miseStateDir(stubRunner{answers: map[string]Result{"doctor": answer}}); err == nil {
-			t.Errorf("%s answer accepted as a mise state directory", name)
+		if _, _, err := miseDirs(stubRunner{answers: map[string]Result{"doctor": answer}}); err == nil {
+			t.Errorf("%s answer accepted as a mise directory", name)
 		}
 	}
 }
@@ -300,6 +327,11 @@ func TestPrunePlanUsesMiseInventoryAndProvesConfigOwnership(t *testing.T) {
 	if !slices.Equal(plan.skippedManagers, []string{"mas"}) {
 		t.Fatalf("skipped managers = %v", plan.skippedManagers)
 	}
+	if len(plan.caches) != 2 ||
+		plan.caches[0].Label != "Homebrew cask downloads" || plan.caches[0].bytes() != 2048 ||
+		plan.caches[1].Label != "Homebrew bottle downloads" || plan.caches[1].bytes() != 1024 {
+		t.Fatalf("download cache plan = %+v", plan.caches)
+	}
 	if len(plan.hooks) != 1 || len(plan.hooks[0].Hooks) != 1 || !plan.hooks[0].Hooks[0].RemoveFile {
 		t.Fatalf("hook plan = %+v", plan.hooks)
 	}
@@ -315,6 +347,7 @@ func TestPrunePlanUsesMiseInventoryAndProvesConfigOwnership(t *testing.T) {
 	for _, want := range []string{
 		"1 dead tracked link", "1 dead trust link", "github:azohra/config@0.5.0",
 		"brew: would remove orphan-package", "post-checkout", "Dock baseline", "Finder Favorites baseline",
+		"Homebrew cask downloads: 1 file, 2.00 KiB", "Homebrew bottle downloads: 1 file, 1.00 KiB",
 		"mas does not support pruning; left untouched", "mise WARN stale tracked configuration",
 	} {
 		if !strings.Contains(output.String(), want) {
@@ -340,13 +373,23 @@ func TestPruneApplyRechecksThenUsesOwnedDeletionPaths(t *testing.T) {
 	if !slices.Equal(fixture.live.commands, wantCommands) {
 		t.Fatalf("apply commands = %v, want %v", fixture.live.commands, wantCommands)
 	}
-	for _, path := range []string{fixture.dockBaseline, fixture.chromeBaseline, fixture.finderBaseline, fixture.oldRestore, fixture.hook, fixture.manifest} {
+	for _, path := range []string{
+		fixture.dockBaseline, fixture.chromeBaseline, fixture.finderBaseline,
+		fixture.oldRestore, fixture.hook, fixture.manifest, fixture.cask, fixture.bottle,
+	} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("pruned path still exists: %s (%v)", path, err)
 		}
 	}
 	if _, err := os.Lstat(fixture.currentRestore); err != nil {
 		t.Fatalf("current restore record was removed: %v", err)
+	}
+	// The directories belong to mise; only the downloads inside them are ours
+	// to reclaim.
+	for _, dir := range []string{fixture.caskDir, fixture.bottleDir} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("prune removed a mise cache directory: %s (%v)", dir, err)
+		}
 	}
 }
 
@@ -529,6 +572,177 @@ func TestPruneRefusesAHookWhoseOwnershipMovedAfterPreview(t *testing.T) {
 	}
 	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
 		t.Fatal("an emptied ownership manifest survived the prune")
+	}
+}
+
+func TestFormatBytesReportsTheUnitsTheseFilesAreMeasuredIn(t *testing.T) {
+	for _, want := range []struct {
+		bytes int64
+		text  string
+	}{
+		{0, "0 B"},
+		{1023, "1023 B"},
+		{1024, "1.00 KiB"},
+		{1024*1024 - 1, "1024.00 KiB"},
+		{1024 * 1024, "1.00 MiB"},
+		{7657869475, "7.13 GiB"},
+		{1024 * 1024 * 1024 * 1024, "1.00 TiB"},
+		{1024 * 1024 * 1024 * 1024 * 1024, "1.00 PiB"},
+	} {
+		if got := FormatBytes(want.bytes); got != want.text {
+			t.Errorf("FormatBytes(%d) = %q, want %q", want.bytes, got, want.text)
+		}
+	}
+}
+
+func TestPruneCachePlansOnlyDownloadsAndOnlyWhereMiseKeepsThem(t *testing.T) {
+	fixture := newPruneFixture(t)
+	pruner := fixture.pruner
+
+	// A machine that never installed a Homebrew package has no such directory.
+	caches, warnings, err := pruner.planCaches(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caches) != 0 || len(warnings) != 0 {
+		t.Fatalf("absent cache planned %+v with warnings %v", caches, warnings)
+	}
+
+	// cask-extract is live during an install, so nothing in it is a candidate.
+	extract := filepath.Join(pruner.MiseCacheDir, "system-brew", "cask-extract", "example-1.0")
+	if err := os.MkdirAll(extract, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(filepath.Dir(extract), "Example.app.partial")
+	if err := os.WriteFile(staged, []byte("mid-install"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caches, warnings, err = pruner.planCaches(pruner.MiseCacheDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	for _, cache := range caches {
+		if strings.Contains(cache.Dir, "cask-extract") {
+			t.Fatalf("the cask staging directory was planned for deletion: %+v", cache)
+		}
+	}
+	if len(caches) != 2 || len(caches[0].Files) != 1 || caches[0].Files[0].Size != 2048 {
+		t.Fatalf("cache plan = %+v", caches)
+	}
+	for _, path := range []string{extract, staged} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("planning disturbed the staging area: %s (%v)", path, err)
+		}
+	}
+}
+
+func TestPruneCacheLeavesEverythingThatIsNotAFinishedDownload(t *testing.T) {
+	fixture := newPruneFixture(t)
+	nested := filepath.Join(fixture.caskDir, "partial")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(fixture.caskDir, "elsewhere.dmg")
+	if err := os.Symlink(fixture.bottle, link); err != nil {
+		t.Fatal(err)
+	}
+	caches, warnings, err := fixture.pruner.planCaches(fixture.pruner.MiseCacheDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caches) != 2 || len(caches[0].Files) != 1 || caches[0].Files[0].Name != filepath.Base(fixture.cask) {
+		t.Fatalf("cache plan = %+v", caches)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "not downloaded files; left untouched") {
+		t.Fatalf("warnings = %v", warnings)
+	}
+	if _, err := applyPruneCache(caches[0]); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{nested, link} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Errorf("prune removed %s: %v", path, err)
+		}
+	}
+}
+
+func TestPruneApplyRejectsAPlanADownloadArrivedAfter(t *testing.T) {
+	// An install finishing between preview and apply adds a file the user
+	// never saw in the plan.
+	fixture := newPruneFixture(t)
+	plan, err := fixture.pruner.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrival := filepath.Join(fixture.caskDir, "newcomer-2.0-def456-Newcomer.dmg")
+	if err := os.WriteFile(arrival, bytes.Repeat([]byte("n"), 512), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = fixture.pruner.Apply(plan)
+	if err == nil || !strings.Contains(err.Error(), "prune plan changed") {
+		t.Fatalf("changed cache apply = %v", err)
+	}
+	for _, path := range []string{arrival, fixture.cask, fixture.bottle} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("a refused plan removed %s: %v", path, err)
+		}
+	}
+}
+
+func TestPruneApplyRejectsAPlanADownloadGrewUnder(t *testing.T) {
+	// Nothing revalidates a file at the moment of deletion, so the recompute
+	// is what has to keep an install from losing what it is fetching.
+	fixture := newPruneFixture(t)
+	plan, err := fixture.pruner.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.cask, bytes.Repeat([]byte("c"), 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = fixture.pruner.Apply(plan)
+	if err == nil || !strings.Contains(err.Error(), "prune plan changed") {
+		t.Fatalf("apply over a growing download = %v", err)
+	}
+	for _, path := range []string{fixture.cask, fixture.bottle} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("a refused plan removed %s: %v", path, err)
+		}
+	}
+}
+
+func TestPruneCacheCountsWhatItActuallyReclaimed(t *testing.T) {
+	fixture := newPruneFixture(t)
+	caches, _, err := fixture.pruner.planCaches(fixture.pruner.MiseCacheDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A download that vanished in between is the outcome this wanted, and its
+	// bytes were not reclaimed here.
+	if err := os.Remove(fixture.bottle); err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, err := applyPruneCache(caches[1])
+	if err != nil {
+		t.Fatalf("a download that vanished was reported as a failure: %v", err)
+	}
+	if reclaimed != 0 {
+		t.Fatalf("reclaimed = %d for a file that was already gone", reclaimed)
+	}
+
+	reclaimed, err = applyPruneCache(caches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reclaimed != 2048 {
+		t.Fatalf("reclaimed = %d, want 2048", reclaimed)
+	}
+	if _, err := os.Stat(fixture.cask); !os.IsNotExist(err) {
+		t.Fatal("a planned download survived the prune")
 	}
 }
 
