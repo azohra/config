@@ -255,6 +255,25 @@ func FormatCount(n int, singular, plural string) string {
 	return fmt.Sprintf("%d %s", n, word)
 }
 
+// FormatBytes uses binary units so a figure reads against du without
+// conversion.
+func FormatBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	value := float64(n)
+	var suffix string
+	for _, name := range []string{"KiB", "MiB", "GiB", "TiB", "PiB"} {
+		value /= unit
+		suffix = name
+		if value < unit {
+			break
+		}
+	}
+	return fmt.Sprintf("%.2f %s", value, suffix)
+}
+
 // InRoot addresses this machine's configuration — the dotfile sources,
 // captured preferences, and declarations at the root of its config repo.
 func (p Paths) InRoot(parts ...string) string {
