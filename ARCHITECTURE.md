@@ -307,16 +307,25 @@ Config state.
 
 Pruning crosses two ownership domains without merging them. When declared,
 Mise computes prunable tool versions and provider-owned packages from its
-shared inventory. Config asks Mise where its state lives, reads the tracked and
-trusted configuration ledgers there to name the links that no longer resolve,
-and leaves every deletion to Mise. Config discovers package managers from Mise
-rather than maintaining its own provider list. A provider with no prune
-operation is reported and left alone. If declared Mise is unavailable, its
-cleanup and dependent repository inventory are reported and preserved while
-Config still plans its own state. Undeclared Mise is never probed.
+shared inventory. Config asks Mise where its state and cache live, reads the
+tracked and trusted configuration ledgers there to name the links that no
+longer resolve, and leaves those deletions to Mise. Config discovers package
+managers from Mise rather than maintaining its own provider list. A provider
+with no prune operation is reported and left alone. If declared Mise is
+unavailable, its cleanup and dependent repository inventory are reported and
+preserved while Config still plans its own state. Undeclared Mise is never
+probed.
 
-Config directly removes only artifacts with verifiable Config provenance. An
-undeclared agent or skill placement is eligible only while the live source,
+Mise's cached Homebrew installers are the exception Config removes itself,
+because Mise discards them only after thirty days untouched and an installer
+is read once. Config plans the finished downloads under Mise's cache root,
+reports each directory's count and reclaimable bytes, and leaves the
+directories, the unpacking staging area, and anything that is not a finished
+download alone. An absent directory is not a fault.
+
+Apart from those downloads, Config directly removes only artifacts with
+verifiable Config provenance. An undeclared agent or skill placement is
+eligible only while the live source,
 canonical path, and tree digest still match Config's ownership record. Removal
 is delegated to the same pinned CLI so universal and agent-specific layouts
 remain its responsibility. An undeclared repository hook is eligible when its
@@ -335,7 +344,9 @@ terminal interface confirms on its own screen and then invokes the explicit
 non-interactive apply form; a redirected CLI remains preview-only without
 `--yes`. Apply recomputes the plan and refuses it if the candidate set or any
 ownership digest changed after preview. Mise performs its own deletions; Config
-revalidates every file it removes immediately before the operation.
+revalidates every file it removes immediately before the operation. A cached
+download is named rather than digested, so the recomputed plan is the whole of
+its protection.
 
 ## Packages
 

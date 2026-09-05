@@ -15,7 +15,7 @@ standalone release when that resource first converges.
 On a machine that already has Mise, one way to run the released binary is:
 
 ```bash
-mise x github:azohra/config@0.17.0 -- \
+mise x github:azohra/config -- \
   config bootstrap https://github.com/owner/machine.git
 ```
 
@@ -234,9 +234,11 @@ own stale state. A declared but unavailable Mise is reported and its state
 stays untouched; Config-owned cleanup still proceeds. Config deletes only
 artifacts whose ownership it can prove: unchanged agent-skill placements,
 unchanged hook copies, baselines for disabled capabilities, and completed
-restore records from older managed checkouts. Ambiguous items stay put. A
-terminal asks for confirmation; redirected output remains preview-only unless
-`--yes` is explicit. The plan is recomputed before the first write.
+restore records from older managed checkouts. It also reclaims the Homebrew
+installers Mise leaves cached for thirty days, reporting the bytes each holds
+first. Ambiguous items stay put. A terminal asks for
+confirmation; redirected output remains preview-only unless `--yes` is
+explicit. The plan is recomputed before the first write.
 
 Snapshot saves stage the whole managed repository, use the fixed commit subject
 `Update machine snapshot`, honor repository hooks, and push only to the

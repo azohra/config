@@ -135,13 +135,7 @@ esac
 # Config refuses a release it cannot verify, so one published by hand is one
 # nobody can install.
 [ "${GITHUB_ACTIONS:-}" = "true" ] || refuse "a release is published by the Release workflow"
-# A pin the README documents is the version a new machine installs, so it
-# cannot lag the release being published. Assert the pin positively: a README
-# that names no version passed the old check silently.
-pins=$(grep -o 'github:azohra/config@[0-9A-Za-z.-]*' README.md || true)
-[ -n "$pins" ] || refuse "README pins no Config version for a new machine to install"
-printf '%s\n' "$pins" | grep -qvFx "github:azohra/config@${tag#v}" &&
-  refuse "README pins a version other than ${tag#v}"
+# The README bootstrap line names no version so it cannot lag a release.
 [ -n "${GITHUB_TOKEN:-}" ] || refuse "GITHUB_TOKEN is unset"
 command -v gh >/dev/null 2>&1 || refuse "GitHub CLI is unavailable"
 gh release view "$tag" >/dev/null 2>&1 && refuse "$tag already has a release"

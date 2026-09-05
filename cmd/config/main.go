@@ -42,9 +42,9 @@ contract. With no selection it updates declared tools, packages, agent skills,
 and clean repositories. Software omits repositories; repositories runs only
 that phase.
 
-Prune previews stale Mise inventory and Config-owned local state. Without a
-terminal it is preview-only; --yes applies the exact plan after checking it
-again.`
+Prune previews stale Mise inventory, spent Mise downloads, and Config-owned
+local state. Without a terminal it is preview-only; --yes applies the exact
+plan after checking it again.`
 
 var version = "dev"
 
