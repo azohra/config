@@ -49,3 +49,13 @@ jobs:
       - name: Finder Favorites canary
         if: runner.os == 'macOS'
         run: mise run check:darwin-native
+
+  required-check:
+    name: Check
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require platform proofs
+        if: needs.check.result != 'success'
+        run: exit 1
