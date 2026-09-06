@@ -25,6 +25,8 @@ description = "Prove formatting, behavior, dependencies, and repository safety"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
+bash scripts/release-source_test.sh
+bash scripts/release-publish_test.sh
 unformatted=$(gofmt -l cmd internal)
 [[ -z $unformatted ]] || { printf 'Run gofmt on:\n%s\n' "$unformatted" >&2; exit 1; }
 go vet ./...
@@ -136,9 +138,9 @@ esac
 # nobody can install.
 [ "${GITHUB_ACTIONS:-}" = "true" ] || refuse "a release is published by the Release workflow"
 # The README bootstrap line names no version so it cannot lag a release.
+[ "$(bash scripts/release-source.sh "$tag")" = "$(git rev-parse HEAD)" ] || refuse "release source is not HEAD"
 [ -n "${GITHUB_TOKEN:-}" ] || refuse "GITHUB_TOKEN is unset"
 command -v gh >/dev/null 2>&1 || refuse "GitHub CLI is unavailable"
-gh release view "$tag" >/dev/null 2>&1 && refuse "$tag already has a release"
 (test -f dist/config-darwin-arm64 && test -f dist/config-darwin-amd64 &&
   test -f dist/LICENSE && test -f dist/third-party-licenses.tar.gz &&
   test -f dist/checksums.txt) ||
@@ -151,11 +153,39 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
   (cd dist && shasum -a 256 -c checksums.txt)
 fi
-gh release create "$tag" \
-  dist/config-darwin-* \
-  dist/LICENSE \
-  dist/third-party-licenses.tar.gz \
-  dist/checksums.txt \
-  dist/version.txt \
-  --generate-notes --title "Config $tag" --verify-tag
+assets=(dist/config-darwin-arm64 dist/config-darwin-amd64 dist/LICENSE dist/third-party-licenses.tar.gz dist/checksums.txt dist/version.txt)
+existing_draft=""
+release_view_error=$(mktemp)
+if existing_draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>"$release_view_error"); then
+  rm -f "$release_view_error"
+  [ "$existing_draft" = "true" ] || refuse "release $tag is already published"
+else
+  if ! grep -Eiq 'not found|HTTP 404|status 404' "$release_view_error"; then
+    detail=$(tr '\n' ' ' <"$release_view_error")
+    rm -f "$release_view_error"
+    refuse "could not inspect release $tag${detail:+: $detail}"
+  fi
+  rm -f "$release_view_error"
+  gh release create "$tag" --draft --generate-notes --title "Config $tag" --verify-tag
+fi
+gh release upload "$tag" "${assets[@]}" --clobber
+published_assets=$(gh release view "$tag" --json assets --jq '.assets[].name') || refuse "could not read uploaded assets"
+for asset in "${assets[@]}"; do
+  asset_name=${asset##*/}
+  grep -Fxq "$asset_name" <<<"$published_assets" || refuse "release is missing uploaded asset $asset_name"
+done
+download=$(mktemp -d)
+trap 'rm -rf "$download"' EXIT
+gh release download "$tag" --dir "$download"
+for asset in "${assets[@]}"; do
+  cmp "$asset" "$download/${asset##*/}" || refuse "uploaded bytes differ for ${asset##*/}"
+done
+gh release edit "$tag" --draft=false
+published_state=$(gh release view "$tag" --json isDraft --jq .isDraft) || refuse "could not verify published release"
+[ "$published_state" = "false" ] || refuse "release $tag is still a draft"
 """
+
+[tasks."release:source"]
+description = "Resolve a release tag to its reviewed main commit"
+usage = 'arg "<tag>"'
+run = 'bash scripts/release-source.sh "$usage_tag"'

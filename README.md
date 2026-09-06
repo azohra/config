@@ -263,3 +263,15 @@ For implementation details and trust boundaries, see
 ## License
 
 [MIT](LICENSE)
+
+## Publishing a release
+
+Create a stable `vMAJOR.MINOR.PATCH` tag at the tested tip of main, then run the
+Release workflow on main with that tag. Pushing the tag alone does not publish.
+The tag must match the workflow's source commit so the attestation identifies the
+bytes' actual source. If publication fails, re-run the original workflow run;
+its source stays fixed even after main advances.
+
+The workflow builds without publishing credentials, attests those artifacts,
+then uploads into a draft and publishes it after verification. An incomplete
+draft can be retried. A published release is never overwritten.
