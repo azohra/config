@@ -42,7 +42,7 @@ adapter to recreate an older layout.
 `config update` is the explicit version transition for Config and the resources
 declared by the machine repository. A released Config uses a pinned,
 checksummed Mise adapter in its own cache to acquire the latest stable Config
-release with GitHub artifact attestation enabled. The adapter has no machine
+release with GitHub asset digest verification. The adapter has no machine
 configuration and is not the canonical machine executable. Config atomically
 installs the acquired executable and continues the same update from it before
 loading the machine document. The current release validates that document and,
@@ -53,7 +53,7 @@ fast-forward of clean declared checkouts. The unqualified `config update`
 selects both scopes. Unversioned development builds skip the Config release
 transition. Release acquisition alone disables Mise's general
 release-age delay because this explicit operation promises the latest release;
-an exact resolved version, provenance verification, and downgrade refusal still
+an exact resolved version, checksum verification, and downgrade refusal still
 gate replacement.
 
 Update planning has one domain contract for the CLI and terminal interface.

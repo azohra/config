@@ -390,11 +390,8 @@ func (u Updater) releaseOutputContext(ctx context.Context, name string, args ...
 func (u Updater) releaseRunner() LiveRunner {
 	runner := u.ReleaseMise
 	runner.Environment = append(runner.Environment,
-		// Provenance is the whole point of this runner, so every knob that
-		// relaxes it is pinned here rather than inherited from the caller.
-		"MISE_GITHUB_GITHUB_ATTESTATIONS=true",
-		"MISE_GITHUB_SLSA=true",
-		"MISE_PROVENANCE_API_FAILURES_FATAL=true",
+		"MISE_GITHUB_GITHUB_ATTESTATIONS=false",
+		"MISE_GITHUB_SLSA=false",
 		"MISE_MINIMUM_RELEASE_AGE=0s",
 		"MISE_CACHE_DIR="+u.ReleaseCache,
 		"MISE_STATE_DIR="+u.ReleaseState,

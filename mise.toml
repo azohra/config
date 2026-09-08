@@ -6,6 +6,7 @@ min_version = "2026.9.1"
 
 [tools]
 go = "1.27.1"
+git-cliff = "2.14.1"
 gitleaks = "8.30.0"
 "go:github.com/google/go-licenses/v2" = "2.0.1"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.7.0"
@@ -25,8 +26,6 @@ description = "Prove formatting, behavior, dependencies, and repository safety"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-bash scripts/release-source_test.sh
-bash scripts/release-publish_test.sh
 unformatted=$(gofmt -l cmd internal)
 [[ -z $unformatted ]] || { printf 'Run gofmt on:\n%s\n' "$unformatted" >&2; exit 1; }
 go vet ./...
@@ -75,16 +74,15 @@ passed=$(grep -c -- '--- PASS: TestChromePWA' <<<"$output" || true)
 }
 """
 
-[tasks."build:release"]
+[tasks."build:dist"]
 description = "Build release binaries and checksums without publishing"
-depends = ["check"]
-usage = 'arg "<tag>" help="The release tag, e.g. v1.2.3"'
+
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-tag="${usage_tag:?build:release: a release tag is required}"
+tag="${RELEASE_VERSION:-v0.0.0-dev}"
 [[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
-  echo "build:release: $tag is not a release tag" >&2
+  echo "build:dist: $tag is not a release tag" >&2
   exit 1
 }
 rm -rf -- dist
@@ -92,7 +90,7 @@ mkdir -p dist
 for arch in arm64 amd64; do
   output="dist/config-darwin-$arch"
   CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" \
-    go build -trimpath -ldflags "-s -w -X main.version=$tag" -o "$output" ./cmd/config
+    go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$tag" -o "$output" ./cmd/config
 done
 printf '%s\n' "$tag" > dist/version.txt
 cp LICENSE dist/LICENSE
@@ -116,76 +114,26 @@ else
 fi
 """
 
+[tasks.changelog]
+description = "Render the changelog from Conventional commits"
+run = "git cliff"
+
 [tasks.release]
-description = "Publish the release tag at HEAD"
-usage = 'arg "<tag>" help="The release tag, e.g. v1.2.3"'
-run = """
+description = "Build and publish a release from current main"
+tools = { gh = "2.100.0" }
+run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-tag="${usage_tag:?release: a release tag is required}"
-refuse() { echo "release: refusing — $*" >&2; exit 1; }
-[[ "$tag" =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$ ]] ||
-  refuse "$tag is not a stable release tag"
-[ -z "$(git status --porcelain)" ] || refuse "the tree is dirty"
-origin=$(git remote get-url origin)
-case "$origin" in
-  git@github.com:azohra/config.git|https://github.com/azohra/config|https://github.com/azohra/config.git) ;;
-  *) refuse "origin is not azohra/config" ;;
-esac
-[ "$(git describe --tags --exact-match 2>/dev/null || true)" = "$tag" ] || refuse "$tag is not the tag at HEAD"
-# A release is published by the workflow so its artifacts carry provenance.
-# Config refuses a release it cannot verify, so one published by hand is one
-# nobody can install.
-[ "${GITHUB_ACTIONS:-}" = "true" ] || refuse "a release is published by the Release workflow"
-# The README bootstrap line names no version so it cannot lag a release.
-[ "$(bash scripts/release-source.sh "$tag")" = "$(git rev-parse HEAD)" ] || refuse "release source is not HEAD"
-[ -n "${GITHUB_TOKEN:-}" ] || refuse "GITHUB_TOKEN is unset"
-command -v gh >/dev/null 2>&1 || refuse "GitHub CLI is unavailable"
-(test -f dist/config-darwin-arm64 && test -f dist/config-darwin-amd64 &&
-  test -f dist/LICENSE && test -f dist/third-party-licenses.tar.gz &&
-  test -f dist/checksums.txt) ||
-  refuse "release artifacts are missing; run mise run build:release $tag"
-[ "$(cat dist/version.txt 2>/dev/null || true)" = "$tag" ] || refuse "release artifacts were not built for $tag"
-cmp -s LICENSE dist/LICENSE || refuse "the release license does not match LICENSE"
-tar -tzf dist/third-party-licenses.tar.gz >/dev/null || refuse "the third-party license archive is invalid"
-if command -v sha256sum >/dev/null 2>&1; then
-  (cd dist && sha256sum -c checksums.txt)
-else
-  (cd dist && shasum -a 256 -c checksums.txt)
-fi
-assets=(dist/config-darwin-arm64 dist/config-darwin-amd64 dist/LICENSE dist/third-party-licenses.tar.gz dist/checksums.txt dist/version.txt)
-existing_draft=""
-release_view_error=$(mktemp)
-if existing_draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>"$release_view_error"); then
-  rm -f "$release_view_error"
-  [ "$existing_draft" = "true" ] || refuse "release $tag is already published"
-else
-  if ! grep -Eiq 'not found|HTTP 404|status 404' "$release_view_error"; then
-    detail=$(tr '\n' ' ' <"$release_view_error")
-    rm -f "$release_view_error"
-    refuse "could not inspect release $tag${detail:+: $detail}"
-  fi
-  rm -f "$release_view_error"
-  gh release create "$tag" --draft --generate-notes --title "Config $tag" --verify-tag
-fi
-gh release upload "$tag" "${assets[@]}" --clobber
-published_assets=$(gh release view "$tag" --json assets --jq '.assets[].name') || refuse "could not read uploaded assets"
-for asset in "${assets[@]}"; do
-  asset_name=${asset##*/}
-  grep -Fxq "$asset_name" <<<"$published_assets" || refuse "release is missing uploaded asset $asset_name"
-done
-download=$(mktemp -d)
-trap 'rm -rf "$download"' EXIT
-gh release download "$tag" --dir "$download"
-for asset in "${assets[@]}"; do
-  cmp "$asset" "$download/${asset##*/}" || refuse "uploaded bytes differ for ${asset##*/}"
-done
-gh release edit "$tag" --draft=false
-published_state=$(gh release view "$tag" --json isDraft --jq .isDraft) || refuse "could not verify published release"
-[ "$published_state" = "false" ] || refuse "release $tag is still a draft"
-"""
-
-[tasks."release:source"]
-description = "Resolve a release tag to its reviewed main commit"
-usage = 'arg "<tag>"'
-run = 'bash scripts/release-source.sh "$usage_tag"'
+[ -z "$(git status --porcelain)" ] || { echo 'release: commit changes first' >&2; exit 1; }
+git fetch -q origin main --tags
+head=$(git rev-parse HEAD)
+[ "$head" = "$(git rev-parse origin/main)" ] || { echo 'release: check out current main first' >&2; exit 1; }
+tag=$(git cliff --offline --unreleased --bumped-version)
+[[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]
+[ "$tag" != "$(git describe --tags --abbrev=0 --match 'v[0-9]*')" ] || { echo 'No new Conventional changes to release'; exit 0; }
+RELEASE_VERSION="$tag" mise run build:dist
+git cliff --unreleased --tag "$tag" > dist/notes.md
+gh release create "$tag" dist/config-darwin-* dist/LICENSE dist/third-party-licenses.tar.gz dist/checksums.txt dist/version.txt \
+  --repo azohra/config --target "$head" \
+  --title "Config $tag" --notes-file dist/notes.md
+'''

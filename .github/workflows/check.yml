@@ -1,8 +1,6 @@
 name: Check
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -46,6 +44,9 @@ jobs:
             go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-
       - name: Check
         run: mise run check
+      - name: Build release assets
+        if: runner.os == 'macOS'
+        run: mise run build:dist
       - name: Finder Favorites canary
         if: runner.os == 'macOS'
         run: mise run check:darwin-native

@@ -49,16 +49,14 @@ func TestMiseChildIgnoresAnAmbientConfigurationSelection(t *testing.T) {
 	}
 }
 
-func TestReleaseRunnerPinsEveryProvenanceKnob(t *testing.T) {
-	// An ambient value turns each of these off, and this runner exists to
-	// acquire a verified release.
+func TestReleaseRunnerDisablesProvenance(t *testing.T) {
+	// Machine settings must not change the Config release transport.
 	pinned := map[string]string{
-		"MISE_GITHUB_GITHUB_ATTESTATIONS":    "true",
-		"MISE_GITHUB_SLSA":                   "true",
-		"MISE_PROVENANCE_API_FAILURES_FATAL": "true",
+		"MISE_GITHUB_GITHUB_ATTESTATIONS": "false",
+		"MISE_GITHUB_SLSA":                "false",
 	}
 	for name := range pinned {
-		t.Setenv(name, "false")
+		t.Setenv(name, "true")
 	}
 	updater := Updater{ReleaseMise: newLiveRunner(t.TempDir())}
 	environment := childEnvironment(updater.releaseRunner().Environment, nil)

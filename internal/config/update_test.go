@@ -340,10 +340,10 @@ fi
 	}
 	want := strings.Join([]string{
 		"--version||0|1|||||",
-		"--no-config install github:azohra/config@0.5.0||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
-		"--no-config where github:azohra/config@0.5.0||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
-		"candidate --version||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
-		"candidate install||0|1|true|0s|" + releaseCache + "|" + releaseState + "|0",
+		"--no-config install github:azohra/config@0.5.0||0|1|false|0s|" + releaseCache + "|" + releaseState + "|0",
+		"--no-config where github:azohra/config@0.5.0||0|1|false|0s|" + releaseCache + "|" + releaseState + "|0",
+		"candidate --version||0|1|false|0s|" + releaseCache + "|" + releaseState + "|0",
+		"candidate install||0|1|false|0s|" + releaseCache + "|" + releaseState + "|0",
 		"",
 	}, "\n")
 	if string(commands) != want {
