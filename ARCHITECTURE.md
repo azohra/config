@@ -3,7 +3,9 @@
 Config has one boundary: a caller supplies a Git repository, and Config
 reconciles the Mac against the document in that repository. Authentication,
 identity recovery, repository selection, and any ceremony required before the
-binary starts belong to the caller.
+binary starts belong to the caller. The genesis script is one such caller,
+published beside Config so a factory-fresh Mac has a verified way to become
+one.
 
 ## Ownership
 
@@ -120,6 +122,35 @@ storage convention, snapshot safety, the terminal interface, and its optional
 capabilities. A capability is absent unless schema 4 declares it. The document
 opts into a capability and supplies personal values or payloads; Config owns
 where and how those declarations converge.
+
+## Genesis
+
+`bootstrap.sh` is the pre-Config ceremony served at bootstrap.azohra.com. It
+runs in the system Bash 3.2 of a factory-fresh Mac and owns only what must
+happen before Config can read a machine repository: the Command Line Tools, a
+verified Config release, and one authenticated handoff. It installs nothing
+else. Mise, the GitHub CLI, credential managers, and every machine tool are
+declarations the repository carries, converged after Config has cloned it.
+
+The site serves the committed script unchanged, so it needs no deployment when
+Config is released. The script resolves the latest release once, downloads the
+archive and `checksums.txt` published with it, verifies the archive, and checks
+that the executable reports that version before running it.
+
+The script assumes nothing about where a person keeps their identity. After
+verifying Config, it probes the repository with `git ls-remote` in the Mac's
+ambient environment, with Git's own credential prompt disabled and the terminal
+left available so SSH can confirm a first host key. Keys restored from a backup or
+Migration Assistant, a configured credential helper, and a public repository
+all succeed here, and Config then takes over with that environment
+untouched. Only when an HTTPS repository is unreachable does the script ask for
+a personal access token. That token is read from the terminal without echo,
+written to a mode 0600 file, exposed to system Git exactly once through a
+temporary askpass helper that deletes the file as Git reads it, and kept out of
+persistent Git configuration by ignoring the system and global files for that
+one process. The script refuses to finish if Git did not consume it, and
+Config's later reconciliation never sees it. An unreachable SSH repository stops
+the script, because nothing it could install would supply a missing key.
 
 ## Managed checkout
 
