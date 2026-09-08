@@ -8,6 +8,9 @@ min_version = "2026.9.1"
 go = "1.27.1"
 git-cliff = "2.14.1"
 gitleaks = "8.30.0"
+node = "24"
+shellcheck = "0.11.0"
+wrangler = "4.129.0"
 "go:github.com/google/go-licenses/v2" = "2.0.1"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.7.0"
 
@@ -21,8 +24,13 @@ run = "mkdir -p .build && go build -trimpath -o .build/config ./cmd/config"
 sources = ["go.mod", "go.sum", "cmd/**/*.go", "internal/**/*.go"]
 outputs = [".build/config"]
 
+[tasks."test:site"]
+description = "Lint and prove the bootstrap script"
+run = "bash -n bootstrap.sh && shellcheck -s bash bootstrap.sh && node --test site/bootstrap.test.mjs"
+
 [tasks.check]
 description = "Prove formatting, behavior, dependencies, and repository safety"
+depends = ["test:site"]
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -116,4 +124,56 @@ git cliff --unreleased --tag "$tag" > dist/notes.md
 gh release create "$tag" dist/config_darwin_arm64.tar.gz dist/checksums.txt \
   --repo azohra/config --target "$head" \
   --title "Config $tag" --notes-file dist/notes.md
+'''
+
+[tasks."deploy:site"]
+description = "Deploy bootstrap.azohra.com from the tip of main"
+depends = ["test:site"]
+confirm = "Deploy bootstrap.azohra.com to production?"
+timeout = "10m"
+usage = '''
+flag "--dry-run" help="Bundle the Worker without shipping"
+flag "--no-verify" help="Skip the public byte check, which GitHub-hosted runners cannot pass"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${usage_dry_run:-false}" = true ]; then
+  (cd site && wrangler deploy --dry-run)
+  exit 0
+fi
+[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "deploy:site: refusing — CLOUDFLARE_API_TOKEN is unset" >&2; exit 1; }
+[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "deploy:site: refusing — CLOUDFLARE_ACCOUNT_ID is unset" >&2; exit 1; }
+[ -z "$(git status --porcelain)" ] || { echo "deploy:site: refusing — tree is dirty" >&2; exit 1; }
+git fetch -q origin main
+[ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ] || { echo "deploy:site: refusing — HEAD is not the tip of origin/main" >&2; exit 1; }
+(cd site && wrangler deploy)
+[ "${usage_no_verify:-false}" != true ] || exit 0
+live=$(mktemp "${TMPDIR:-/tmp}/bootstrap-live.XXXXXX")
+trap 'rm -f "$live"' EXIT
+for attempt in {1..10}; do
+  if curl -fsS --connect-timeout 5 --max-time 15 https://bootstrap.azohra.com/ -o "$live" && cmp -s bootstrap.sh "$live"; then
+    echo "deploy:site: production serves bootstrap.sh"
+    exit 0
+  fi
+  [ "$attempt" -eq 10 ] || sleep 3
+done
+echo "deploy:site: production did not serve bootstrap.sh after deployment" >&2
+exit 1
+'''
+
+[tasks."seed:github"]
+description = "Install the site deployment secrets in the GitHub repository"
+tools = { gh = "2.100.0" }
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+: "${CLOUDFLARE_API_TOKEN:?seed:github: CLOUDFLARE_API_TOKEN is unset}"
+: "${CLOUDFLARE_ACCOUNT_ID:?seed:github: CLOUDFLARE_ACCOUNT_ID is unset}"
+[ "$(gh api user --jq .login)" = "azohra" ] || { echo "seed:github: GitHub account is not azohra" >&2; exit 1; }
+for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+  printf '%s' "${!name}" | gh secret set "$name" --app actions --repo azohra/config
+  gh secret list --app actions --repo azohra/config | awk '{print $1}' | grep -qx "$name"
+done
+echo "seed:github: site deployment secrets installed"
 '''

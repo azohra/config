@@ -8,11 +8,25 @@ You choose the machine repository and keep control of its authentication.
 
 ## Install
 
-Config requires macOS and Git. The caller supplies an authenticated repository
-handoff. When the machine contract opts into Mise, Config installs its tested
-standalone release when that resource first converges.
+Config requires an Apple Silicon Mac and Git. On a factory-fresh Mac, one
+command runs the genesis script that bootstrap.azohra.com serves:
 
-On a machine that already has Mise, one way to run the released binary is:
+```bash
+curl -fsSL bootstrap.azohra.com | bash -s -- https://github.com/owner/machine.git
+```
+
+The script ensures the Command Line Tools, downloads the latest Config release,
+checks the archive against the checksums published with it, then probes the
+machine repository with whatever Git access the Mac already has: SSH keys
+restored from a backup or Migration Assistant, a credential helper, or a public
+repository. When the probe succeeds, Config takes over with that same
+environment. When an HTTPS repository is not reachable, the script asks for a
+personal access token once, hands it to system Git through a temporary askpass
+helper that deletes it as Git reads it, and refuses to continue if Git did not
+consume it. An SSH repository the Mac cannot reach stops the script. Nothing
+else is installed; the machine repository declares every tool.
+
+On a Mac that already has Mise, the released binary can also be run directly:
 
 ```bash
 mise x github:azohra/config -- \
@@ -254,8 +268,16 @@ mise run build:dist
 
 `mise run build` writes `.build/config`. `mise run check` is the same proof CI
 runs: formatting, vet, race-enabled tests, vulnerability scanning, module
-verification, and a redacted secret scan. macOS CI also reads Finder Favorites
-through the native API without changing them.
+verification, a redacted secret scan, and the bootstrap script's lint and
+behaviour suite. macOS CI also reads Finder Favorites through the native API
+without changing them.
+
+`site/` is the Cloudflare Worker behind bootstrap.azohra.com. It serves
+`bootstrap.sh` to curl and a page to browsers. A push to main that changes
+either deploys it through `mise run deploy:site`, which needs
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; `mise run seed:github`
+installs both as repository secrets. An operator deployment also checks that
+the public endpoint serves the committed script byte for byte.
 
 For implementation details and trust boundaries, see
 [ARCHITECTURE.md](ARCHITECTURE.md).
