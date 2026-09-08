@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Bootstrap a fresh Mac from nothing.
+#   curl -fsSL bootstrap.azohra.com | bash
 #   curl -fsSL bootstrap.azohra.com | bash -s -- https://github.com/owner/machine.git
 #
 # Piping ignores the shebang, so this deliberately stays within the system Bash
 # 3.2 available on a factory-fresh Mac. Every byte served here is public.
 set -euo pipefail
 
-[[ $# -eq 1 && -n $1 ]] || {
-    printf 'error: usage: curl -fsSL bootstrap.azohra.com | bash -s -- <configuration-repository>\n' >&2
+[[ $# -le 1 ]] || {
+    printf 'error: usage: curl -fsSL bootstrap.azohra.com | bash [-s -- <machine-repository>]\n' >&2
     exit 2
 }
-CONFIG_REPOSITORY=$1
+CONFIG_REPOSITORY=${1:-}
 CONFIG_RELEASES=https://github.com/azohra/config/releases
 
 bold=''
@@ -39,19 +40,31 @@ die() {
     exit 1
 }
 
-# Config validates the locator fully before it clones. Genesis only needs to
-# know whether a token can stand in for missing authentication, and that is
-# true of HTTPS alone.
-case $CONFIG_REPOSITORY in
-    https://*) https_repository=1 ;;
-    ssh://* | *@*:*) https_repository=0 ;;
-    *) die "The configuration repository must be an HTTPS or SSH Git URL." ;;
-esac
-
 [[ $(uname -s) == Darwin ]] || die "This script is for macOS."
 [[ $(uname -m) == arm64 ]] || die "Config supports Apple Silicon Macs only."
 
 banner
+
+# The script arrives through a pipe, so every question goes to the terminal.
+tty_input=/dev/null
+if (: </dev/tty) 2>/dev/null; then
+    tty_input=/dev/tty
+fi
+
+if [[ -z $CONFIG_REPOSITORY ]]; then
+    [[ $tty_input == /dev/tty ]] || die "No terminal is available to enter the machine repository."
+    printf '\nMachine repository (HTTPS or SSH Git URL): ' >/dev/tty
+    IFS= read -r CONFIG_REPOSITORY </dev/tty
+fi
+
+# Config validates the locator fully before it clones. Genesis only needs to
+# know whether a personal access token can stand in for missing
+# authentication, and that is true of HTTPS alone.
+case $CONFIG_REPOSITORY in
+    https://*) https_repository=1 ;;
+    ssh://* | *@*:*) https_repository=0 ;;
+    *) die "The machine repository must be an HTTPS or SSH Git URL." ;;
+esac
 
 if xcode-select -p >/dev/null 2>&1; then
     ready "Xcode tools"
@@ -89,27 +102,23 @@ ready "Config $config_version"
 # from a backup or Migration Assistant, a credential helper, or a public
 # repository. The probe runs on this Mac with that ambient environment, asks Git
 # for nothing, and leaves SSH free to confirm a first host key on the terminal.
-step "Reach the configuration repository"
-tty_input=/dev/null
-if (: </dev/tty) 2>/dev/null; then
-    tty_input=/dev/tty
-fi
+step "Reach the machine repository"
 probe_output="$genesis_root/probe"
 if GIT_TERMINAL_PROMPT=0 \
     git ls-remote --exit-code -- "$CONFIG_REPOSITORY" HEAD \
     >/dev/null 2>"$probe_output" <"$tty_input"; then
     ready "Repository reachable"
 
-    step "Hand off the configuration repository"
+    step "Hand off the machine repository"
     "$config_bin" bootstrap "$CONFIG_REPOSITORY"
     exit 0
 fi
 
 [[ $https_repository -eq 1 ]] || {
     cat "$probe_output" >&2
-    die "The configuration repository is not reachable with this Mac's SSH configuration."
+    die "The machine repository is not reachable with this Mac's SSH configuration."
 }
-[[ $tty_input == /dev/tty ]] || die "No terminal is available to enter a credential."
+[[ $tty_input == /dev/tty ]] || die "No terminal is available to enter a personal access token."
 
 # One token, entered once, exposed to system Git once through a temporary
 # askpass helper, deleted as Git reads it, and never handed to Config's later
@@ -117,8 +126,9 @@ fi
 # token is neither read from nor written to a credential helper.
 repository_host=${CONFIG_REPOSITORY#https://}
 repository_host=${repository_host%%/*}
-step "Enter a personal access token for $repository_host"
-printf 'Paste the token, then press Enter: ' >/dev/tty
+step "Sign in to $repository_host"
+printf '%s does not accept an account password here.\n' "$repository_host" >/dev/tty
+printf 'Paste the personal access token saved in your password manager, then press Enter: ' >/dev/tty
 IFS= read -r -s git_credential </dev/tty
 printf '\n' >/dev/tty
 [[ -n $git_credential ]] || die "The personal access token is empty."
@@ -145,7 +155,7 @@ git_config="$genesis_root/gitconfig"
 printf '[credential]\n\thelper =\n' >"$git_config"
 ready "Personal access token"
 
-step "Hand off the configuration repository"
+step "Hand off the machine repository"
 LC_ALL=C \
     GIT_CONFIG_NOSYSTEM=1 \
     GIT_CONFIG_GLOBAL="$git_config" \

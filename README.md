@@ -12,19 +12,21 @@ Config requires an Apple Silicon Mac and Git. On a factory-fresh Mac, one
 command runs the genesis script that bootstrap.azohra.com serves:
 
 ```bash
-curl -fsSL bootstrap.azohra.com | bash -s -- https://github.com/owner/machine.git
+curl -fsSL bootstrap.azohra.com | bash
 ```
 
-The script ensures the Command Line Tools, downloads the latest Config release,
-checks the archive against the checksums published with it, then probes the
-machine repository with whatever Git access the Mac already has: SSH keys
-restored from a backup or Migration Assistant, a credential helper, or a public
-repository. When the probe succeeds, Config takes over with that same
-environment. When an HTTPS repository is not reachable, the script asks for a
-personal access token once, hands it to system Git through a temporary askpass
-helper that deletes it as Git reads it, and refuses to continue if Git did not
-consume it. An SSH repository the Mac cannot reach stops the script. Nothing
-else is installed; the machine repository declares every tool.
+The script asks for the Git URL of the machine repository, or takes it as an
+argument after `bash -s --`. It ensures the Command Line Tools, downloads the
+latest Config release, checks the archive against the checksums published with
+it, then probes the repository with whatever Git access the Mac already has:
+SSH keys restored from a backup or Migration Assistant, a credential helper, or
+a public repository. When the probe succeeds, Config takes over with that same
+environment. When an HTTPS repository is not reachable, the script asks once
+for a personal access token, because GitHub does not accept an account password
+for Git over HTTPS. It hands the token to system Git through a temporary
+askpass helper that deletes it as Git reads it, and refuses to continue if Git
+did not consume it. An SSH repository the Mac cannot reach stops the script.
+Nothing else is installed; the machine repository declares every tool.
 
 On a Mac that already has Mise, the released binary can also be run directly:
 
@@ -274,7 +276,7 @@ without changing them.
 
 `site/` is the Cloudflare Worker behind bootstrap.azohra.com. It serves
 `bootstrap.sh` to curl and a page to browsers. A push to main that changes
-either deploys it through `mise run deploy:site`, which needs
+either deploys it through `mise run deploy`, which needs
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repository secrets.
 
 For implementation details and trust boundaries, see

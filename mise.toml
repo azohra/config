@@ -126,8 +126,23 @@ gh release create "$tag" dist/config_darwin_arm64.tar.gz dist/checksums.txt \
   --title "Config $tag" --notes-file dist/notes.md
 '''
 
-[tasks."deploy:site"]
-description = "Deploy bootstrap.azohra.com from the tip of main"
+[tasks."env:contract"]
+hide = true
+description = "Every variable this repository needs, and whether it is a secret"
+run = """
+cat <<'CONTRACT'
+secret  CLOUDFLARE_API_TOKEN
+secret  CLOUDFLARE_ACCOUNT_ID
+CONTRACT
+"""
+
+[tasks.dev]
+description = "Dev server for the site; no secrets"
+dir = "site"
+run = "wrangler dev --local --port 8787"
+
+[tasks.deploy]
+description = "Deploy the site at the tip of main"
 depends = ["test:site"]
 confirm = "Deploy bootstrap.azohra.com to production?"
 timeout = "10m"
@@ -142,22 +157,22 @@ if [ "${usage_dry_run:-false}" = true ]; then
   (cd site && wrangler deploy --dry-run)
   exit 0
 fi
-[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "deploy:site: refusing — CLOUDFLARE_API_TOKEN is unset" >&2; exit 1; }
-[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "deploy:site: refusing — CLOUDFLARE_ACCOUNT_ID is unset" >&2; exit 1; }
-[ -z "$(git status --porcelain)" ] || { echo "deploy:site: refusing — tree is dirty" >&2; exit 1; }
+[ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "deploy: refusing — CLOUDFLARE_API_TOKEN is unset" >&2; exit 1; }
+[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "deploy: refusing — CLOUDFLARE_ACCOUNT_ID is unset" >&2; exit 1; }
+[ -z "$(git status --porcelain)" ] || { echo "deploy: refusing — tree is dirty" >&2; exit 1; }
 git fetch -q origin main
-[ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ] || { echo "deploy:site: refusing — HEAD is not the tip of origin/main" >&2; exit 1; }
+[ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ] || { echo "deploy: refusing — HEAD is not the tip of origin/main" >&2; exit 1; }
 (cd site && wrangler deploy)
 [ "${usage_no_verify:-false}" != true ] || exit 0
 live=$(mktemp "${TMPDIR:-/tmp}/bootstrap-live.XXXXXX")
 trap 'rm -f "$live"' EXIT
 for attempt in {1..10}; do
   if curl -fsS --connect-timeout 5 --max-time 15 https://bootstrap.azohra.com/ -o "$live" && cmp -s bootstrap.sh "$live"; then
-    echo "deploy:site: production serves bootstrap.sh"
+    echo "deploy: production serves bootstrap.sh"
     exit 0
   fi
   [ "$attempt" -eq 10 ] || sleep 3
 done
-echo "deploy:site: production did not serve bootstrap.sh after deployment" >&2
+echo "deploy: production did not serve bootstrap.sh after deployment" >&2
 exit 1
 '''

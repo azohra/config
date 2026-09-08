@@ -15,6 +15,7 @@ const source = readFileSync(script, 'utf8');
 const archiveName = 'config_darwin_arm64.tar.gz';
 
 const genesis = (t, { repository, reachable = true, corrupt = false }) => {
+  const args = repository === undefined ? [] : [repository];
   const root = mkdtempSync(join(tmpdir(), 'bootstrap-genesis.'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, 'bin');
@@ -52,7 +53,7 @@ const genesis = (t, { repository, reachable = true, corrupt = false }) => {
     `[ "${reachable}" = true ] || { echo 'fatal: could not read from remote' >&2; exit 128; }`,
   ].join('\n'));
 
-  const result = spawnSync('bash', [script.pathname, repository], {
+  const result = spawnSync('bash', [script.pathname, ...args], {
     encoding: 'utf8',
     env: { PATH: `${bin}:${process.env.PATH}`, TMPDIR: root, HOME: root, TERM: 'dumb' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -83,8 +84,22 @@ test('an unreachable SSH repository stops before any credential prompt', (t) => 
 test('an unreachable HTTPS repository needs a terminal for the token', (t) => {
   const run = genesis(t, { repository: 'https://github.com/owner/machine.git', reachable: false });
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /No terminal is available to enter a credential/);
+  assert.match(run.stderr, /No terminal is available to enter a personal access token/);
   assert.doesNotMatch(run.log, /config bootstrap/);
+});
+
+test('without an argument the repository is asked for on the terminal', (t) => {
+  const run = genesis(t, {});
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /No terminal is available to enter the machine repository/);
+  assert.doesNotMatch(run.log, /curl/);
+});
+
+test('a locator that is neither HTTPS nor SSH is refused before any download', (t) => {
+  const run = genesis(t, { repository: '/Users/me/machine' });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /must be an HTTPS or SSH Git URL/);
+  assert.doesNotMatch(run.log, /curl/);
 });
 
 test('an archive that does not match the published checksums is refused', (t) => {

@@ -143,8 +143,10 @@ ambient environment, with Git's own credential prompt disabled and the terminal
 left available so SSH can confirm a first host key. Keys restored from a backup or
 Migration Assistant, a configured credential helper, and a public repository
 all succeed here, and Config then takes over with that environment
-untouched. Only when an HTTPS repository is unreachable does the script ask for
-a personal access token. That token is read from the terminal without echo,
+untouched. The repository itself is
+asked for on the terminal when the command carries none. Only when an HTTPS
+repository is unreachable does the script ask for a personal access token,
+because GitHub accepts no account password for Git over HTTPS. That token is read from the terminal without echo,
 written to a mode 0600 file, exposed to system Git exactly once through a
 temporary askpass helper that deletes the file as Git reads it, and kept out of
 persistent Git configuration by ignoring the system and global files for that

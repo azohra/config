@@ -3,7 +3,7 @@
 
 import script from '../bootstrap.sh';
 
-const command = 'curl -fsSL bootstrap.azohra.com | bash -s -- https://github.com/owner/machine.git';
+const command = 'curl -fsSL bootstrap.azohra.com | bash';
 const escape = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 
 const page = `<!doctype html>
@@ -103,12 +103,12 @@ const page = `<!doctype html>
     <div class="output" role="list">
       <div class="boot-line" role="listitem" style="--i:0"><span class="mark">✓</span><span>Xcode tools</span></div>
       <div class="boot-line" role="listitem" style="--i:1"><span class="mark">✓</span><span>Config verified</span></div>
-      <div class="boot-line" role="listitem" style="--i:2"><span class="mark">✓</span><span>Repository reachable</span></div>
+      <div class="boot-line" role="listitem" style="--i:2"><span class="mark">✓</span><span>Machine repository</span></div>
       <div class="boot-line" role="listitem" style="--i:3"><span class="mark">→</span><span>Machine restore<span class="cursor" aria-hidden="true"></span></span></div>
     </div>
   </section>
   <section class="how">
-    <p>Replace the repository with your own. The script downloads the latest Config release, verifies it against the checksums published with it, then uses whatever Git access this Mac already has. If an HTTPS repository needs a credential, it asks for a personal access token once and lets Git consume it.</p>
+    <p>The script asks for the Git URL of your machine repository, downloads the latest Config release and verifies it against the checksums published with it, then reaches your repository with whatever Git access this Mac already has and hands off to Config. A private HTTPS repository asks once for a personal access token, since GitHub does not accept an account password there. An SSH repository needs a key already on the Mac. Nothing else is installed; your repository declares every tool.</p>
     <p>Config is open source. <a href="https://github.com/azohra/config#readme">Read how a machine repository is declared.</a></p>
   </section>
   <details><summary>Source</summary><pre>${escape(script)}</pre></details>
