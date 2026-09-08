@@ -268,8 +268,9 @@ For implementation details and trust boundaries, see
 
 Run `mise run release` from clean, current main, or dispatch the Release workflow.
 Git-cliff derives the next version from Conventional commits since the previous
-release. The task builds both Mac binaries and publishes their licences,
-checksums and version marker with a matching tag and generated release notes.
+release. The task publishes an Apple Silicon archive containing Config and its
+licence material, plus checksums, a matching tag and generated release notes.
+Intel Macs are no longer supported.
 Use `mise run changelog` to view the accumulated change history.
 
 Pull requests run the checks and build release assets. Main requires passing

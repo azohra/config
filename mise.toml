@@ -75,44 +75,24 @@ passed=$(grep -c -- '--- PASS: TestChromePWA' <<<"$output" || true)
 """
 
 [tasks."build:dist"]
-description = "Build release binaries and checksums without publishing"
-
-run = """
+description = "Build the Apple Silicon archive and checksums"
+run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-tag="${RELEASE_VERSION:-v0.0.0-dev}"
-[[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
-  echo "build:dist: $tag is not a release tag" >&2
-  exit 1
-}
-rm -rf -- dist
-mkdir -p dist
-for arch in arm64 amd64; do
-  output="dist/config-darwin-$arch"
-  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" \
-    go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$tag" -o "$output" ./cmd/config
-done
-printf '%s\n' "$tag" > dist/version.txt
-cp LICENSE dist/LICENSE
-license_dir=dist/third-party-licenses
-mkdir -p "$license_dir"
-for arch in arm64 amd64; do
-  GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 \
-    go-licenses save ./cmd/config \
-      --ignore github.com/azohra/config \
-      --save_path "$license_dir/config-darwin-$arch"
-done
-COPYFILE_DISABLE=1 tar -czf dist/third-party-licenses.tar.gz \
-  -C dist third-party-licenses
-rm -rf -- "$license_dir"
-if command -v sha256sum >/dev/null 2>&1; then
-  (cd dist && sha256sum \
-    LICENSE config-darwin-* third-party-licenses.tar.gz version.txt > checksums.txt)
-else
-  (cd dist && shasum -a 256 \
-    LICENSE config-darwin-* third-party-licenses.tar.gz version.txt > checksums.txt)
-fi
-"""
+version="${RELEASE_VERSION:-v0.0.0-dev}"
+rm -rf dist
+mkdir -p dist/package
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+  go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" \
+  -o dist/package/config ./cmd/config
+cp LICENSE dist/package/
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
+  go-licenses save ./cmd/config --ignore github.com/azohra/config \
+    --save_path dist/package/third-party-licenses
+COPYFILE_DISABLE=1 tar -czf dist/config_darwin_arm64.tar.gz \
+  -C dist/package config LICENSE third-party-licenses
+(cd dist && shasum -a 256 config_darwin_arm64.tar.gz > checksums.txt)
+'''
 
 [tasks.changelog]
 description = "Render the changelog from Conventional commits"
@@ -133,7 +113,7 @@ tag=$(git cliff --offline --unreleased --bumped-version)
 [ "$tag" != "$(git describe --tags --abbrev=0 --match 'v[0-9]*')" ] || { echo 'No new Conventional changes to release'; exit 0; }
 RELEASE_VERSION="$tag" mise run build:dist
 git cliff --unreleased --tag "$tag" > dist/notes.md
-gh release create "$tag" dist/config-darwin-* dist/LICENSE dist/third-party-licenses.tar.gz dist/checksums.txt dist/version.txt \
+gh release create "$tag" dist/config_darwin_arm64.tar.gz dist/checksums.txt \
   --repo azohra/config --target "$head" \
   --title "Config $tag" --notes-file dist/notes.md
 '''
