@@ -271,6 +271,9 @@ Git-cliff derives the next version from Conventional commits since the previous
 release. The task publishes an Apple Silicon archive containing Config and its
 licence material, plus checksums, a matching tag and generated release notes.
 Intel Macs are no longer supported.
+
+Before v1.0.0, breaking changes increment the minor version. Moving to v1.0.0
+is an explicit stability decision.
 Use `mise run changelog` to view the accumulated change history.
 
 Pull requests run the checks and build release assets. Main requires passing
