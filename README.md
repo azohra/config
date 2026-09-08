@@ -249,7 +249,7 @@ declared branch and upstream. A rejected push leaves the local commit intact.
 ```bash
 mise install
 mise run check
-mise run build:release -- v0.0.0-dev
+mise run build:dist
 ```
 
 `mise run build` writes `.build/config`. `mise run check` is the same proof CI
@@ -266,12 +266,15 @@ For implementation details and trust boundaries, see
 
 ## Publishing a release
 
-Create a stable `vMAJOR.MINOR.PATCH` tag at the tested tip of main, then run the
-Release workflow on main with that tag. Pushing the tag alone does not publish.
-The tag must match the workflow's source commit so the attestation identifies the
-bytes' actual source. If publication fails, re-run the original workflow run;
-its source stays fixed even after main advances.
+Run `mise run release` from clean, current main, or dispatch the Release workflow.
+Git-cliff derives the next version from Conventional commits since the previous
+release. The task builds both Mac binaries and publishes their licences,
+checksums and version marker with a matching tag and generated release notes.
+Use `mise run changelog` to view the accumulated change history.
 
-The workflow builds without publishing credentials, attests those artifacts,
-then uploads into a draft and publishes it after verification. An incomplete
-draft can be retried. A published release is never overwritten.
+Pull requests run the checks and build release assets. Main requires passing
+checks against the current base, so merging does not repeat that work.
+
+Config downloads releases over HTTPS through mise, which verifies GitHub's asset
+digest. It checks the executable's version before installation and refuses a
+downgrade. Releases do not require attestations.

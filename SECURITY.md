@@ -18,10 +18,10 @@ that no longer matches its ownership digest until Apply explicitly adopts a
 compatible same-source change. Config verifies the downloaded
 Mise bytes against the checksum embedded for its tested release before
 replacing the standalone command. Released updates use a separate cache-owned
-Mise adapter, not the machine resource, with GitHub artifact attestation and
-SLSA verification pinned rather than inherited. They resolve an exact stable
-version and refuse a downgrade before atomically replacing the permanent
-command. Releases are built and published by separate workflow jobs, and only
-the publishing one holds
-write or signing credentials; publishing outside that workflow is refused.
+Mise adapter, not the machine resource, with GitHub asset digest verification.
+They resolve an exact stable version, verify the executable's version and refuse
+a downgrade before atomically replacing the permanent command. Releases can be
+built and published locally or through the Release workflow. Checksums detect
+corrupt or mismatched downloads; they do not establish build provenance or
+protect against replacement of both an asset and its digest on GitHub.
 Reports that cross one of those boundaries are especially useful.
