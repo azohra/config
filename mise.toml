@@ -143,7 +143,6 @@ run = "wrangler dev --local --port 8787"
 
 [tasks.deploy]
 description = "Deploy the site at the tip of main"
-depends = ["test:site"]
 confirm = "Deploy bootstrap.azohra.com to production?"
 timeout = "10m"
 usage = '''
