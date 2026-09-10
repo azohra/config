@@ -43,7 +43,6 @@ func testPaths(t *testing.T) Paths {
 }
 
 func testMachine() Machine {
-	tapToClick := true
 	return Machine{
 		Kind:   MachineKind,
 		Schema: MachineSchema,
@@ -54,13 +53,7 @@ func testMachine() Machine {
 		},
 		Dock:       true,
 		ChromePWAs: true,
-		MacOS: MachineMacOS{
-			CurrentHostTapToClick: &tapToClick,
-			ClearUserKeyMapping:   true,
-			Spotlight: &SpotlightShortcut{
-				ID: 64, Enabled: false, Parameters: []int{32, 49, 1048576}, Type: "standard",
-			},
-		},
+		MacOS:      MachineMacOS{ClearUserKeyMapping: true},
 		Preferences: []PreferenceBackup{{
 			ID: "example-app", Name: "Example App", Bundle: "com.example.ExampleApp",
 			Domain: "com.example.ExampleApp",

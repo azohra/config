@@ -33,49 +33,14 @@ func (setupRunner) Exists(string) bool { return true }
 func setupFixture(t *testing.T, runner setupRunner) (Applier, func() []string) {
 	t.Helper()
 	commands := fakeTools(t,
-		fakeTool{name: "defaults"}, fakeTool{name: "hidutil"}, fakeTool{name: "plutil"})
+		fakeTool{name: "hidutil"})
 	applier, _ := testApplier(t, testPaths(t), testMachine(), runner)
 	return applier, commands
-}
-
-const spotlightDeclared = `{"enabled":"0","value":{"type":"standard","parameters":["32","49","1048576"]}}`
-
-func TestSetupProbesReadEveryFieldTheirFixWrites(t *testing.T) {
-	// The declared shortcut is bound to different keys. Comparing only
-	// enabled reports a match and leaves the Mac on the wrong binding.
-	rebound := `{"enabled":"0","value":{"type":"standard","parameters":["49","49","1048576"]}}`
-	checks := setupChecks(testPaths(t), setupRunner{answers: map[string]string{
-		"defaults": "1", "hidutil": "()", "plutil": rebound,
-	}}, macOSFacts(testMachine()))
-	for _, check := range checks {
-		if strings.HasPrefix(check.Label, "Spotlight") && check.OK {
-			t.Fatalf("a rebound Spotlight shortcut reported as matching: %#v", check)
-		}
-	}
-}
-
-func TestSetupProbesAcceptEveryScalarSpellingOfTheSameValue(t *testing.T) {
-	// macOS and Config have each written this key; a boolean, an integer, and
-	// a string can all carry the same value.
-	for _, entry := range []string{
-		spotlightDeclared,
-		`{"enabled":false,"value":{"type":"standard","parameters":[32,49,1048576]}}`,
-		`{"enabled":0,"value":{"type":"standard","parameters":["32",49,1048576]}}`,
-	} {
-		if !spotlightMatches(entry, "0", []string{"32", "49", "1048576"}, "standard") {
-			t.Errorf("declared shortcut reported as drift: %s", entry)
-		}
-	}
-	if spotlightMatches(`{"enabled":"1","value":{"type":"standard","parameters":["32","49","1048576"]}}`,
-		"0", []string{"32", "49", "1048576"}, "standard") {
-		t.Error("a shortcut that is enabled matched a declaration that disables it")
-	}
 }
 
 func TestSetupReportsAnUnreadableProbeInsteadOfDrift(t *testing.T) {
 	paths := testPaths(t)
 	runner := setupRunner{
-		answers:     map[string]string{"defaults": "1", "plutil": spotlightDeclared},
 		unavailable: map[string]bool{"hidutil": true},
 	}
 	checks := setupChecks(paths, runner, macOSFacts(testMachine()))
@@ -95,7 +60,6 @@ func TestSetupReportsAnUnreadableProbeInsteadOfDrift(t *testing.T) {
 
 func TestConvergeNeverWritesOnAProbeItCouldNotRun(t *testing.T) {
 	applier, commands := setupFixture(t, setupRunner{
-		answers:     map[string]string{"defaults": "1", "plutil": spotlightDeclared},
 		unavailable: map[string]bool{"hidutil": true},
 	})
 	changed, err := applier.converge(macOSFacts(applier.Machine))
@@ -112,42 +76,23 @@ func TestConvergeNeverWritesOnAProbeItCouldNotRun(t *testing.T) {
 	}
 }
 
-func TestConvergeAttemptsEveryFactAndRunsTheRealFixes(t *testing.T) {
-	// Every declared fact drifts, so all three live commands execute — and an
-	// unreadable probe in the middle must not hide the facts behind it.
-	applier, commands := setupFixture(t, setupRunner{
-		answers:     map[string]string{"hidutil": "(mapped)", "plutil": `{"enabled":"1","value":{"type":"standard","parameters":["1","2","3"]}}`},
-		unavailable: map[string]bool{"defaults": true},
-	})
+func TestConvergeClearsHardwareKeyMapping(t *testing.T) {
+	applier, commands := setupFixture(t, setupRunner{answers: map[string]string{"hidutil": "(mapped)"}})
 	changed, err := applier.converge(macOSFacts(applier.Machine))
-	if err == nil {
-		t.Fatal("converge hid the unreadable tap-to-click probe")
+	if err != nil || changed != 1 {
+		t.Fatalf("converge = %d, %v", changed, err)
 	}
-	if changed != 2 {
-		t.Fatalf("converge changed %d facts, want the two it could read", changed)
-	}
-	issued := strings.Join(commands(), "\n")
-	for _, wanted := range []string{
-		"defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 ",
-		`hidutil property --set {"UserKeyMapping":[]}`,
-	} {
-		if !strings.Contains(issued, wanted) {
-			t.Fatalf("converge never issued %q:\n%s", wanted, issued)
-		}
-	}
-	if strings.Contains(issued, "-currentHost write") {
-		t.Fatal("converge wrote tap-to-click from a probe it could not run")
+	if !slices.Contains(commands(), `hidutil property --set {"UserKeyMapping":[]}`) {
+		t.Fatalf("commands = %v", commands())
 	}
 }
 
 func TestMacOSFactsDoNotDependOnMise(t *testing.T) {
-	// The three facts invoke defaults, plutil and hidutil. None of them
-	// touches anything Mise installs, so the two resources must report and
-	// converge independently.
+	// Hardware key mapping uses hidutil independently of Mise.
 	paths := testPaths(t)
 	machine := testMachine()
 	probes := setupRunner{answers: map[string]string{
-		"defaults": "0", "hidutil": "(mapped)", "plutil": spotlightDeclared,
+		"hidutil": "(mapped)",
 	}}
 
 	// Inspection: an unsupported Mise cannot hide native settings beside it.
@@ -167,14 +112,14 @@ func TestMacOSFactsDoNotDependOnMise(t *testing.T) {
 
 	// Apply: Mise can fail while the selected macOS resource still runs.
 	commands := fakeTools(t, fakeTool{name: "mise", exit: 1},
-		fakeTool{name: "defaults"}, fakeTool{name: "hidutil"}, fakeTool{name: "plutil"})
+		fakeTool{name: "hidutil"})
 	applier, chatter := testApplier(t, paths, machine, probes)
 	applier.Mise = unsupportedMiseRunner{setupRunner: probes}
 	if err := applier.Apply([]Selection{{ID: macOSID, Action: Apply}, {ID: miseID, Action: Apply}}); err == nil {
 		t.Fatal("a failed mise bootstrap was reported as success")
 	}
 	issued := strings.Join(commands(), "\n")
-	for _, wanted := range []string{"-currentHost write", `hidutil property --set`} {
+	for _, wanted := range []string{`hidutil property --set`} {
 		if !strings.Contains(issued, wanted) {
 			t.Errorf("a failed mise skipped %q:\n%s\n%s", wanted, issued, chatter.String())
 		}

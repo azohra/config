@@ -95,14 +95,7 @@ branch = "main"
 url = "https://github.com/owner/machine.git"
 
 [macos]
-current_host_tap_to_click = true
 clear_user_key_mapping = true
-
-[macos.spotlight]
-id = 64
-enabled = false
-parameters = [32, 49, 1048576]
-type = "standard"
 
 [[preferences]]
 id = "example-app"
@@ -111,13 +104,33 @@ bundle = "com.example.ExampleApp"
 domain = "com.example.ExampleApp"
 ```
 
-`[macos]` declares native settings Config converges on every apply. The two
-keys opt in differently: `current_host_tap_to_click` is the value Config
-keeps, so `false` declares the setting off, while `clear_user_key_mapping`
-only means anything when it is `true`. Leave it out and the Mac keeps its own
-mapping. `[macos.spotlight]` names the shortcut by its symbolic hotkey id
-and carries the whole binding, so a Mac bound to different keys is drift.
-Config reports a setting it could not read rather than writing over it.
+`[macos].clear_user_key_mapping = true` clears hardware key mappings through
+`hidutil`. Leave it out and the Mac keeps its own mapping. Config reports a
+setting it could not read rather than writing over it.
+
+Current-host tap-to-click and Spotlight shortcuts now belong in native Mise
+configuration. Remove `macos.current_host_tap_to_click` and `[macos.spotlight]`
+from `config.toml`, enable `mise = true`, and move their values into
+`mise/conf.d/macos.toml` using the tested mise 2026.9.5 release:
+
+```toml
+[[bootstrap.macos.defaults_entries]]
+domain = "NSGlobalDomain"
+key = "com.apple.mouse.tapBehavior"
+host = "current"
+value = 1
+
+[[bootstrap.macos.defaults_entries]]
+domain = "com.apple.symbolichotkeys"
+key = "AppleSymbolicHotKeys"
+path = ["64"]
+value = { enabled = false, value = { parameters = [32, 49, 1048576], type = "standard" } }
+```
+
+Use `value = 0` for disabled tap-to-click. For a different shortcut, carry its
+id into `path` and preserve its enabled state, parameters, and type. The nested
+entry replaces only that shortcut and preserves the other symbolic hotkeys.
+The removed Config fields are rejected rather than silently ignored.
 
 Each `[[preferences]]` entry captures the complete `defaults` domain it names,
 byte for byte and unfiltered, into the machine repository, which Config then
@@ -129,7 +142,7 @@ Mise resource; without it Config neither inspects nor installs Mise. Mise keeps
 its native syntax under `mise/`:
 
 ```toml
-min_version = "2026.9.4"
+min_version = "2026.9.5"
 
 [tools]
 node = "24"

@@ -21,8 +21,6 @@ func (converged) Run(_ context.Context, name string, args ...string) Result {
 	switch {
 	case name == "mise" && slices.Equal(args, []string{"--version"}):
 		return Result{Stdout: testedMiseVersion}
-	case name == "defaults" && slices.Contains(args, "com.apple.mouse.tapBehavior"):
-		return Result{Stdout: "1\n"}
 	case name == "plutil":
 		return Result{Stdout: "0\n"}
 	case name == "hidutil":

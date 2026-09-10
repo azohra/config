@@ -32,14 +32,7 @@ branch = "main"
 url = "https://example.com/owner/machine.git"
 
 [macos]
-current_host_tap_to_click = true
 clear_user_key_mapping = true
-
-[macos.spotlight]
-id = 64
-enabled = false
-parameters = [32, 49, 1048576]
-type = "standard"
 
 [[preferences]]
 id = "example-app"
@@ -173,7 +166,7 @@ func TestMiseAndMacOSAreSeparateResources(t *testing.T) {
 		t.Fatalf("platform resources = %+v", report.Resources)
 	}
 	for _, check := range mise.Checks {
-		if strings.Contains(strings.ToLower(check.Label), "tap") || strings.Contains(check.Label, "Spotlight") {
+		if strings.Contains(check.Label, "hardware key mapping") {
 			t.Fatalf("Mise owns a macOS check: %+v", check)
 		}
 	}
@@ -265,5 +258,17 @@ func TestMachineRefusesAPreferenceIdConfigAlreadyAnswersTo(t *testing.T) {
 	machine.Preferences[0].ID = "example-app"
 	if err := machine.Validate(); err != nil {
 		t.Fatalf("an ordinary preference id was refused: %v", err)
+	}
+}
+
+func TestLoadMachineRejectsPreferencesMovedToMise(t *testing.T) {
+	for _, entry := range []string{
+		"current_host_tap_to_click = true",
+		"[macos.spotlight]\nid = 64\nenabled = false\nparameters = [32, 49, 1048576]\ntype = \"standard\"",
+	} {
+		content := strings.Replace(validMachineTOML(), "clear_user_key_mapping = true", "clear_user_key_mapping = true\n"+entry, 1)
+		if _, err := LoadMachine(writeMachineTOML(t, content)); err == nil {
+			t.Fatalf("removed field accepted: %s", entry)
+		}
 	}
 }
