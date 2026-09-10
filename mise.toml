@@ -2,7 +2,7 @@
 # internal/config/mise.go. TestMisePhasesCoverEveryBootstrapPhase reads the mise
 # on PATH, so the toolchain has to be that same release for the guard to mean
 # anything. Move this line, the workflow pins, and testedMiseVersion together.
-min_version = "2026.9.4"
+min_version = "2026.9.5"
 
 [vars]
 changelog_config = "https://raw.githubusercontent.com/azohra/conventional-pr/3b38025ec8de687c82bdadd36ddb56c4060eefda/cliff.toml"
