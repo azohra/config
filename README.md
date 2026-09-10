@@ -1,8 +1,8 @@
 # Config
 
 Config turns a Git repository into a reproducible Mac setup. It inspects,
-plans, and reconciles resources such as Mise, agent skills, native macOS
-settings, Finder Favorites, application state, and the Dock.
+plans, and reconciles resources such as Mise, agent skills, MCP servers,
+native macOS settings, Finder Favorites, application state, and the Dock.
 
 You choose the machine repository and keep control of its authentication.
 
@@ -72,6 +72,19 @@ agents = ["claude-code", "codex"]
 [[agent_skills.sources]]
 source = "https://github.com/owner/skills.git"
 skills = ["orca-cli", "orchestration"]
+
+[mcp_servers]
+agents = ["claude-code", "codex"]
+
+[mcp_servers.servers.blender]
+command = "uvx"
+args = ["blender-mcp"]
+env = { BLENDER_HOST = "localhost" }
+
+[mcp_servers.servers.docs]
+url = "https://mcp.example.com/mcp"
+headers = { X-Region = "us-east-1" }
+agents = ["codex"]
 
 [[repository_hooks]]
 name = "post-checkout"
@@ -156,6 +169,30 @@ installs or updates from the declared source without rewriting them. Update and
 prune refuse content that has changed since that adoption, and a different
 source is always left untouched. The machine repository should not also install
 a global `skills` package or run its own reconciler.
+
+MCP servers are a third user-wide resource, and one that needs neither Mise
+nor Node. The document declares each server once, and Config converges it into
+the user-scope configuration of every declared harness: the top-level
+`mcpServers` object of `~/.claude.json` for Claude Code, and the
+`[mcp_servers.<name>]` tables of `~/.codex/config.toml` for Codex. A stdio
+server carries `command`, `args`, and `env`; an http server carries `url` and
+`headers`. A server may name its own `agents` to reach fewer harnesses than
+the resource default. Config owns the whole entry for a declared name, so a
+key the harness added to it, such as a timeout, reads as drift and is
+replaced on apply.
+
+Both files are harness state, and Config treats them that way. It never
+creates either one: a harness that has not run yet is reported as not present
+and converges on the first run after its file exists. Config rewrites only the
+declared entries and leaves every other key, table, comment, and undeclared
+server byte for byte. It writes only when a declared entry actually differs.
+A harness file that is a link into the managed checkout, which is how
+a dotfile declaration usually places `~/.codex/config.toml`, is written
+through the link so the next snapshot records the result. A link that points
+anywhere else is reported and left alone. A running harness may still rewrite
+its file from memory after Config does; the next `config` run converges it
+again. Config records which names it wrote, so `config prune` removes an entry
+only when Config wrote it and it still reads as written.
 
 ## Native state
 
@@ -248,8 +285,9 @@ a later operation replaces them.
 `config prune` previews Mise's shared inventory decisions alongside Config's
 own stale state. A declared but unavailable Mise is reported and its state
 stays untouched; Config-owned cleanup still proceeds. Config deletes only
-artifacts whose ownership it can prove: unchanged agent-skill placements,
-unchanged hook copies, baselines for disabled capabilities, and completed
+artifacts whose ownership it can prove: unchanged agent-skill placements, MCP
+server entries it wrote and no longer declares, unchanged hook copies,
+baselines for disabled capabilities, and completed
 restore records from older managed checkouts. It also reclaims the Homebrew
 installers Mise leaves cached for thirty days, reporting the bytes each holds
 first. Ambiguous items stay put. A terminal asks for

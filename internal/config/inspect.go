@@ -323,7 +323,7 @@ func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(allResources bool) Report {
 	bidir := newBidirectional(i.Paths, i.Runner)
-	var mise, agentSkills, macOS, chromePWAs, dock, finderFavorites, repositoryHooks Resource
+	var mise, agentSkills, mcpServers, macOS, chromePWAs, dock, finderFavorites, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
@@ -339,6 +339,9 @@ func (i Inspector) inspect(allResources bool) Report {
 			tasks = append(tasks, func() {
 				agentSkills = inspectAgentSkills(i.Paths, *i.Machine.AgentSkills, i.agentSkillsRunner())
 			})
+		}
+		if i.Machine.MCPServers != nil {
+			tasks = append(tasks, func() { mcpServers = inspectMCPServers(i.Paths, *i.Machine.MCPServers) })
 		}
 		if len(macOSFacts(i.Machine)) > 0 {
 			tasks = append(tasks, func() { macOS = i.macOS() })
@@ -388,6 +391,9 @@ func (i Inspector) inspect(allResources bool) Report {
 		}
 		if i.Machine.AgentSkills != nil {
 			resources = append(resources, agentSkills)
+		}
+		if i.Machine.MCPServers != nil {
+			resources = append(resources, mcpServers)
 		}
 		if len(macOSFacts(i.Machine)) > 0 {
 			resources = append(resources, macOS)

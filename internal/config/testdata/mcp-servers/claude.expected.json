@@ -1,0 +1,47 @@
+{
+  "numStartups": 42,
+  "installMethod": "unknown",
+  "autoUpdates": true,
+  "tipsHistory": {
+    "new-user-warmup": 1
+  },
+  "mcpServers": {
+    "foreign": {
+      "type": "stdio",
+      "command": "foreign-mcp",
+      "args": [],
+      "env": {}
+    },
+    "blender": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "blender-mcp"
+      ],
+      "env": {
+        "BLENDER_HOST": "localhost"
+      }
+    },
+    "docs": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "X-Region": "us-east-1"
+      }
+    }
+  },
+  "projects": {
+    "/Users/example/project": {
+      "allowedTools": [],
+      "mcpServers": {
+        "blender": {
+          "type": "stdio",
+          "command": "project-blender",
+          "args": [],
+          "env": {}
+        }
+      }
+    }
+  },
+  "hasCompletedOnboarding": true
+}
