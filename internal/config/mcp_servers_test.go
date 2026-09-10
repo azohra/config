@@ -404,6 +404,19 @@ func TestMCPServersKeepTheCommentThatIntroducesTheNextTable(t *testing.T) {
 	}
 }
 
+func TestMCPServersRewriteASubTableWithoutDoublingBlankLines(t *testing.T) {
+	paths := testPaths(t)
+	codex := placeMCPHarness(t, paths, "codex", []byte("[mcp_servers.blender]\ncommand = \"old\"\n\n[mcp_servers.blender.env]\nA = \"1\"\n\n[other]\nkey = true\n"))
+	contract := MCPServers{Agents: []string{"codex"}, Servers: map[string]MCPServer{"blender": {Command: "uvx"}}}
+	if err := testMCPManager(paths, contract).Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(codex)
+	if want := "[mcp_servers.blender]\ncommand = \"uvx\"\n\n[other]\nkey = true\n"; string(got) != want {
+		t.Fatalf("config.toml:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestMCPServersRefuseACodexFormTheyCannotRewrite(t *testing.T) {
 	paths := testPaths(t)
 	original := []byte("[mcp_servers]\nblender.command = \"old\"\n")

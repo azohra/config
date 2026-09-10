@@ -1001,14 +1001,15 @@ func editCodexMCPServers(data []byte, set map[string]MCPServer, remove []string)
 		if servers, _ := remainder["mcp_servers"].(map[string]any); servers[name] != nil {
 			return nil, fmt.Errorf("%s is declared in a form Config cannot rewrite; left untouched", name)
 		}
+		// Each removed table leaves the blank line that followed it. Keep one
+		// so the rewritten table, or the table after a removed one, is
+		// separated the way it was before.
+		for insertAt < len(lines) && strings.TrimSpace(lines[insertAt]) == "" &&
+			(insertAt == 0 || strings.TrimSpace(lines[insertAt-1]) == "") {
+			lines = slices.Delete(lines, insertAt, insertAt+1)
+		}
 		server, declared := set[name]
 		if !declared {
-			// A removed table leaves the blank line before it and the one
-			// after it side by side; keep one.
-			for insertAt < len(lines) && strings.TrimSpace(lines[insertAt]) == "" &&
-				(insertAt == 0 || strings.TrimSpace(lines[insertAt-1]) == "") {
-				lines = slices.Delete(lines, insertAt, insertAt+1)
-			}
 			continue
 		}
 		block := renderCodexMCPServer(name, server)
