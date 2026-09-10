@@ -10,6 +10,7 @@ const (
 	restoreMacOSStep       = "resource/" + macOSID
 	restoreMiseStep        = "resource/" + miseID
 	restoreAgentSkillsStep = "resource/" + agentSkillsID
+	restoreMCPServersStep  = "resource/" + mcpServersID
 )
 
 type freshRestoreStep struct {
@@ -92,6 +93,15 @@ func freshRestoreSteps(applier Applier) []freshRestoreStep {
 			run: func() error {
 				applier.Log.Section(agentSkillsName)
 				return applier.agentSkillManager().Reconcile()
+			},
+		})
+	}
+	if applier.Machine.MCPServers != nil {
+		steps = append(steps, freshRestoreStep{
+			id: restoreMCPServersStep, name: mcpServersName,
+			run: func() error {
+				applier.Log.Section(mcpServersName)
+				return applier.mcpServerManager().Reconcile()
 			},
 		})
 	}

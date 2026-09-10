@@ -1,0 +1,36 @@
+{
+  "numStartups": 42,
+  "installMethod": "unknown",
+  "autoUpdates": true,
+  "tipsHistory": {
+    "new-user-warmup": 1
+  },
+  "mcpServers": {
+    "foreign": {
+      "type": "stdio",
+      "command": "foreign-mcp",
+      "args": [],
+      "env": {}
+    },
+    "blender": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["blender-mcp", "--old"],
+      "env": {}
+    }
+  },
+  "projects": {
+    "/Users/example/project": {
+      "allowedTools": [],
+      "mcpServers": {
+        "blender": {
+          "type": "stdio",
+          "command": "project-blender",
+          "args": [],
+          "env": {}
+        }
+      }
+    }
+  },
+  "hasCompletedOnboarding": true
+}

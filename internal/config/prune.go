@@ -85,6 +85,19 @@ type pruneAgentSkills struct {
 	Skills         []pruneAgentSkill
 }
 
+type pruneMCPServer struct {
+	Agent string
+	Name  string
+	// RemoveEntry is false when only the ownership record is stale: the
+	// harness file, or the entry inside it, is already gone.
+	RemoveEntry bool
+}
+
+type pruneMCPServers struct {
+	LedgerDigest string
+	Servers      []pruneMCPServer
+}
+
 // PrunePlan is the exact work Config has previewed. Its details stay private
 // so callers can confirm or apply a plan without widening the ownership model.
 type PrunePlan struct {
@@ -95,6 +108,7 @@ type PrunePlan struct {
 	files           []pruneFile
 	hooks           []pruneHookTarget
 	agentSkills     pruneAgentSkills
+	mcpServers      pruneMCPServers
 	warnings        []string
 	skippedManagers []string
 }
@@ -102,7 +116,7 @@ type PrunePlan struct {
 func (p PrunePlan) Empty() bool {
 	return len(p.registry.Tracked) == 0 && len(p.registry.Trusted) == 0 &&
 		len(p.tools) == 0 && len(p.packages) == 0 && len(p.caches) == 0 && len(p.files) == 0 &&
-		len(p.hooks) == 0 && len(p.agentSkills.Skills) == 0
+		len(p.hooks) == 0 && len(p.agentSkills.Skills) == 0 && len(p.mcpServers.Servers) == 0
 }
 
 func (p PrunePlan) sameWork(other PrunePlan) bool {
@@ -112,7 +126,8 @@ func (p PrunePlan) sameWork(other PrunePlan) bool {
 		reflect.DeepEqual(p.caches, other.caches) &&
 		reflect.DeepEqual(p.files, other.files) &&
 		reflect.DeepEqual(p.hooks, other.hooks) &&
-		reflect.DeepEqual(p.agentSkills, other.agentSkills)
+		reflect.DeepEqual(p.agentSkills, other.agentSkills) &&
+		reflect.DeepEqual(p.mcpServers, other.mcpServers)
 }
 
 // Pruner delegates shared inventory decisions to mise and removes only local
@@ -240,6 +255,7 @@ func (p Pruner) Plan() (PrunePlan, error) {
 		return PrunePlan{}, err
 	}
 	plan.agentSkills, plan.warnings = p.planAgentSkills(plan.warnings)
+	plan.mcpServers, plan.warnings = p.planMCPServers(plan.warnings)
 	plan.files, plan.warnings, err = p.planConfigFiles(plan.warnings)
 	if err != nil {
 		return PrunePlan{}, err
@@ -814,6 +830,17 @@ func WritePrunePlan(out io.Writer, plan PrunePlan) {
 			fmt.Fprintf(out, "  %s (%s)\n", skill.Name, strings.Join(skill.ForgetAgents, ", "))
 		}
 	}
+	if len(plan.mcpServers.Servers) > 0 {
+		fmt.Fprintln(out, "\nMCP servers")
+		for _, server := range plan.mcpServers.Servers {
+			action := "ownership record"
+			if server.RemoveEntry {
+				action = "entry and ownership record"
+			}
+			harness, _ := mcpHarnessByID(server.Agent)
+			fmt.Fprintf(out, "  %s: %s (%s)\n", harness.Name, server.Name, action)
+		}
+	}
 	if len(plan.hooks) > 0 || len(plan.files) > 0 {
 		fmt.Fprintln(out, "\nConfig state")
 		for _, target := range plan.hooks {
@@ -898,6 +925,15 @@ func (p Pruner) Apply(expected PrunePlan) error {
 			failures = append(failures, fmt.Errorf("%s: %w", agentSkillsName, err))
 		} else {
 			p.Log.OK(FormatCount(len(current.agentSkills.Skills), "skill placement pruned", "skill placements pruned"))
+		}
+	}
+	if len(current.mcpServers.Servers) > 0 {
+		p.Log.Section(mcpServersName)
+		if err := p.applyPruneMCPServers(current.mcpServers); err != nil {
+			p.Log.Error(err.Error())
+			failures = append(failures, fmt.Errorf("%s: %w", mcpServersName, err))
+		} else {
+			p.Log.OK(FormatCount(len(current.mcpServers.Servers), "MCP server entry pruned", "MCP server entries pruned"))
 		}
 	}
 	if len(current.hooks) > 0 || len(current.files) > 0 {

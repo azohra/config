@@ -24,6 +24,7 @@ type Machine struct {
 	Repository      MachineRepository  `toml:"repository"`
 	Mise            bool               `toml:"mise"`
 	AgentSkills     *AgentSkills       `toml:"agent_skills"`
+	MCPServers      *MCPServers        `toml:"mcp_servers"`
 	Dock            bool               `toml:"dock"`
 	ChromePWAs      bool               `toml:"chrome_pwas"`
 	FinderFavorites bool               `toml:"finder_favorites"`
@@ -58,7 +59,7 @@ type SpotlightShortcut struct {
 // A preference that borrowed one would collide with that capability wherever a
 // report, a selection, or a baseline is keyed by resource id.
 var reservedResourceIDs = []string{
-	miseID, agentSkillsID, macOSID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
+	miseID, agentSkillsID, mcpServersID, macOSID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
 }
 
 var (
@@ -112,6 +113,11 @@ func (m Machine) Validate() error {
 	if m.AgentSkills != nil {
 		if err := m.AgentSkills.Validate(); err != nil {
 			return fmt.Errorf("agent_skills: %w", err)
+		}
+	}
+	if m.MCPServers != nil {
+		if err := m.MCPServers.Validate(); err != nil {
+			return fmt.Errorf("mcp_servers: %w", err)
 		}
 	}
 	if m.MacOS.Spotlight != nil {

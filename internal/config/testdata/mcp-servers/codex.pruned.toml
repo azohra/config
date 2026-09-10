@@ -1,0 +1,28 @@
+# Codex configuration
+model = "gpt-5-codex"
+approval_policy = "on-request"
+
+[projects."/Users/example/project"]
+trust_level = "trusted"
+
+# A server Config never wrote
+[mcp_servers.foreign]
+command = "foreign-mcp"
+args = ["--serve"]
+
+[mcp_servers.foreign.env]
+FOREIGN = "1"   # keep me
+
+[mcp_servers.blender]
+command = "uvx"
+args = ["blender-mcp"]
+
+[mcp_servers.blender.env]
+BLENDER_HOST = "localhost"
+
+[shell_environment_policy]
+inherit = "all"
+
+[mcp_servers.scratch]
+command = "npx"
+args = ["-y", "@example/scratch-mcp"]

@@ -138,6 +138,11 @@ func (e Applier) Apply(selections []Selection) error {
 			return e.agentSkillManager().Reconcile()
 		}})
 	}
+	if e.Machine.MCPServers != nil {
+		steps = append(steps, step{mcpServersID, mcpServersName, func(Action) error {
+			return e.mcpServerManager().Reconcile()
+		}})
+	}
 	if e.Machine.FinderFavorites {
 		steps = append(steps, step{finderFavoritesID, finderFavoritesName, e.reconcileFinderFavorites})
 	}

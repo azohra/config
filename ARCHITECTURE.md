@@ -41,6 +41,15 @@ and skills CLI lock file. Config validates the current lock schema before any
 mutation and stops on an unreadable or incompatible schema rather than using its pinned
 adapter to recreate an older layout.
 
+MCP servers are a third opt-in resource, native to Config and independent of
+Mise. Each harness keeps its user-scope servers in a file it owns and
+rewrites on its own schedule: Claude Code in the top-level `mcpServers`
+object of `~/.claude.json`, beside dozens of runtime keys, and Codex in
+`[mcp_servers.<name>]` tables inside `~/.codex/config.toml`. Neither file can
+be a dotfile the repository renders, so the machine document declares each
+server once and Config converges only the declared names inside each file.
+Everything else in those files remains the harness's or the person's.
+
 `config update` is the explicit version transition for Config and the resources
 declared by the machine repository. A released Config uses a pinned,
 checksummed Mise adapter in its own cache to acquire the latest stable Config
@@ -241,6 +250,32 @@ exceptional name. Explicit updates reuse the preflight inventory and each tree's
 digest, then perform one post-update inventory and digest pass. Config writes
 the ownership manifest only when its canonical bytes changed.
 
+Applying MCP servers reads each declared harness file as state. Config never
+renders or creates the file: a harness that has not run yet is reported as
+not present and skipped, and a later run converges it once the file exists.
+Inside the file, a declared entry is compared by meaning rather than bytes,
+so a harness reformatting its own file is not drift, and Config writes only
+when a declared entry actually differs. The Claude Code edit splices the
+declared members of one JSON object at the offsets the standard decoder
+reports. The Codex edit replaces the header-owned lines of the declared
+tables and then proves the result by parsing it: the document minus the
+declared names must parse to exactly what it did before, and each written
+name must read back as declared. A server spelled in a form that proof
+cannot isolate, such as dotted keys under `[mcp_servers]`, is reported and
+left alone.
+
+The write stages and renames beside the resolved target, never at a link
+path, because a rename at the link would replace a dotfile link with a plain
+file. A target that is a link into the managed checkout is written through,
+which is how a Codex file that Mise links from the repository receives its
+tables; the next snapshot records them. A link that resolves anywhere else
+is reported with its destination and left untouched. Config records the
+names and entry digests it wrote before the write that claims them, as it
+does for hooks, so prune can later tell an entry Config wrote from one it
+never touched. A running harness can rewrite the file from its in-memory
+copy after Config writes. Reconcile is one read and at most one write per
+harness, so the next `config` run converges again at no real cost.
+
 When repository hooks are declared, Config prepares their clone template before
 Mise runs and supplies that template only to Mise's child Git processes. It
 sweeps the declared repositories after bootstrap so existing and newly created
@@ -361,7 +396,11 @@ verifiable Config provenance. An undeclared agent or skill placement is
 eligible only while the live source,
 canonical path, and tree digest still match Config's ownership record. Removal
 is delegated to the same pinned CLI so universal and agent-specific layouts
-remain its responsibility. An undeclared repository hook is eligible when its
+remain its responsibility. An undeclared MCP server entry is eligible only
+while it still reads as the entry Config recorded; an entry that changed, or
+a harness file Config must not write, is reported and preserved with its
+record. A record for an entry or a file that is already gone is dropped
+without a write. An undeclared repository hook is eligible when its
 bytes still match the digest in Config's adjacent ownership manifest; a changed
 or non-regular hook and its record are preserved. A baseline is eligible only
 after its schema and resource identity validate and the machine no longer
