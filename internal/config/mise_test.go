@@ -359,6 +359,7 @@ func TestTestedMiseVersionIsTheOnlyOneTheRepositoryNames(t *testing.T) {
 	for _, file := range []string{
 		"../../.github/workflows/check.yml",
 		"../../.github/workflows/release.yml",
+		"../../.github/workflows/deploy.yml",
 		"../../README.md",
 	} {
 		data, err := os.ReadFile(file)

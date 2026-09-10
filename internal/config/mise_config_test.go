@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,4 +217,36 @@ func TestMiseRunnerAndOrdinaryMiseReadTheSameGlobalConfiguration(t *testing.T) {
 		!strings.Contains(managed.Stdout, miseConfigDir(paths)) {
 		t.Fatalf("global machine configuration is absent from %s", managed.Stdout)
 	}
+
+	// Exercise Config's drift probes and delegated apply against the real
+	// binary without installing tools or touching the user's dotfiles.
+	runner := NewMiseRunner(paths)
+	inspector := Inspector{Paths: paths, Mise: runner}
+	for _, content := range []string{"first\n", "updated\n"} {
+		declaration := fmt.Sprintf("[dotfiles]\n\"~/.config/config-contract\" = { content = %q }\n", content)
+		configFile := paths.InRoot("mise", "config.toml")
+		if err := os.WriteFile(configFile, []byte(declaration), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if trusted := run(runner, "mise", "trust", configFile); trusted.Err != nil {
+			t.Fatal(trusted.Failure())
+		}
+		checks := inspector.bootstrapChecks()
+		if len(checks) != 1 || checks[0].OK || checks[0].Detail != "dotfiles" {
+			t.Fatalf("expected only dotfile drift before apply: %+v", checks)
+		}
+		if applied := run(runner, "mise", "bootstrap", "dotfiles", "apply", "--yes"); applied.Err != nil {
+			t.Fatal(applied.Failure())
+		}
+		actual, err := os.ReadFile(paths.InHome(".config", "config-contract"))
+		if err != nil || string(actual) != content {
+			t.Fatalf("applied dotfile = %q, %v; want %q", actual, err, content)
+		}
+		for _, check := range inspector.bootstrapChecks() {
+			if !check.OK {
+				t.Fatalf("bootstrap still drifted after apply: %+v", check)
+			}
+		}
+	}
+
 }
