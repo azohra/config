@@ -14,7 +14,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const testedMiseVersion = "2026.9.1"
+const testedMiseVersion = "2026.9.4"
 
 const (
 	miseID   = "mise"

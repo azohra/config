@@ -27,7 +27,7 @@ jobs:
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
         with:
-          version: 2026.9.1
+          version: 2026.9.4
       - run: mise run --yes deploy -- --no-verify
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
