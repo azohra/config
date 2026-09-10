@@ -4,6 +4,9 @@
 # anything. Move this line, the workflow pins, and testedMiseVersion together.
 min_version = "2026.9.4"
 
+[vars]
+changelog_config = "https://raw.githubusercontent.com/azohra/conventional-pr/3b38025ec8de687c82bdadd36ddb56c4060eefda/cliff.toml"
+
 [tools]
 go = "1.27.1"
 git-cliff = "2.14.1"
@@ -103,8 +106,16 @@ COPYFILE_DISABLE=1 tar -czf dist/config_darwin_arm64.tar.gz \
 '''
 
 [tasks.changelog]
-description = "Render the changelog from Conventional commits"
-run = "git cliff"
+description = "Render change history or export structured records"
+usage = 'flag "--json" help="Export structured Git history"'
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${usage_json:-false}" = true ]; then
+  exec git cliff --config-url "{{vars.changelog_config}}" --context
+fi
+git cliff --config-url "{{vars.changelog_config}}"
+'''
 
 [tasks.release]
 description = "Build and publish a release from current main"
@@ -116,11 +127,11 @@ set -euo pipefail
 git fetch -q origin main --tags
 head=$(git rev-parse HEAD)
 [ "$head" = "$(git rev-parse origin/main)" ] || { echo 'release: check out current main first' >&2; exit 1; }
-tag=$(git cliff --offline --unreleased --bumped-version)
+tag=$(git cliff --config-url "{{vars.changelog_config}}" --offline --unreleased --bumped-version)
 [[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]
 [ "$tag" != "$(git describe --tags --abbrev=0 --match 'v[0-9]*')" ] || { echo 'No new Conventional changes to release'; exit 0; }
 RELEASE_VERSION="$tag" mise run build:dist
-git cliff --unreleased --tag "$tag" > dist/notes.md
+git cliff --config-url "{{vars.changelog_config}}" --unreleased --tag "$tag" > dist/notes.md
 gh release create "$tag" dist/config_darwin_arm64.tar.gz dist/checksums.txt \
   --repo azohra/config --target "$head" \
   --title "Config $tag" --notes-file dist/notes.md

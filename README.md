@@ -288,6 +288,10 @@ For implementation details and trust boundaries, see
 
 ## Publishing a release
 
+See [Conventional PR](https://github.com/azohra/conventional-pr) for the change-record
+format and shared presentation. `mise run changelog -- --json` exports structured
+history; `mise.toml` pins the preset URL.
+
 Run `mise run release` from clean, current main, or dispatch the Release workflow.
 Git-cliff derives the next version from Conventional commits since the previous
 release. The task publishes an Apple Silicon archive containing Config and its
@@ -297,6 +301,7 @@ Intel Macs are no longer supported.
 Before v1.0.0, breaking changes increment the minor version. Moving to v1.0.0
 is an explicit stability decision.
 Use `mise run changelog` to view the accumulated change history.
+The preset is fetched for every invocation, including version calculation.
 
 Pull requests run the checks and build release assets. Main requires passing
 checks against the current base, so merging does not repeat that work.
