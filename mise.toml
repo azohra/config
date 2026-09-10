@@ -5,7 +5,7 @@
 min_version = "2026.9.4"
 
 [vars]
-changelog_config = "https://raw.githubusercontent.com/azohra/conventional-pr/3b38025ec8de687c82bdadd36ddb56c4060eefda/cliff.toml"
+changelog_config = "https://raw.githubusercontent.com/azohra/conventional-pr/main/cliff.toml"
 
 [tools]
 go = "1.27.1"
