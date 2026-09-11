@@ -341,7 +341,7 @@ For implementation details and trust boundaries, see
 
 See [Conventional PR](https://github.com/azohra/conventional-pr) for the change-record
 format and shared presentation. `mise run changelog -- --json` exports structured
-history; `mise.toml` pins the preset URL.
+history; `mise.toml` follows the shared preset on main.
 
 Run `mise run release` from clean, current main, or dispatch the Release workflow.
 Git-cliff derives the next version from Conventional commits since the previous
