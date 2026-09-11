@@ -43,16 +43,7 @@ func (r MachineRepository) Destination() string {
 }
 
 type MachineMacOS struct {
-	CurrentHostTapToClick *bool              `toml:"current_host_tap_to_click"`
-	ClearUserKeyMapping   bool               `toml:"clear_user_key_mapping"`
-	Spotlight             *SpotlightShortcut `toml:"spotlight"`
-}
-
-type SpotlightShortcut struct {
-	ID         int    `toml:"id"`
-	Enabled    bool   `toml:"enabled"`
-	Parameters []int  `toml:"parameters"`
-	Type       string `toml:"type"`
+	ClearUserKeyMapping bool `toml:"clear_user_key_mapping"`
 }
 
 // reservedResourceIDs are the identifiers Config's own capabilities answer to.
@@ -118,12 +109,6 @@ func (m Machine) Validate() error {
 	if m.MCPServers != nil {
 		if err := m.MCPServers.Validate(); err != nil {
 			return fmt.Errorf("mcp_servers: %w", err)
-		}
-	}
-	if m.MacOS.Spotlight != nil {
-		spotlight := m.MacOS.Spotlight
-		if spotlight.ID <= 0 || spotlight.Type != "standard" || len(spotlight.Parameters) != 3 {
-			return fmt.Errorf("macos.spotlight must declare a positive id, type standard, and three parameters")
 		}
 	}
 	seenHooks := map[string]bool{}

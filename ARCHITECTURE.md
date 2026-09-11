@@ -281,10 +281,11 @@ Mise runs and supplies that template only to Mise's child Git processes. It
 sweeps the declared repositories after bootstrap so existing and newly created
 checkouts converge to the same hook bodies. The selected Mise configuration
 owns any custom ordering inside that resource through Mise lifecycle hooks.
-The declared native macOS facts are a separate resource. None of them touches
-anything Mise installs, so an unusable Mise version neither hides their status
-nor stops them converging. A fact Config cannot read is reported rather than
-written over, and a fact that fails is an advisory, so the facts beside it and
+Hardware key mapping is a separate native macOS resource using `hidutil`.
+An unusable Mise version neither hides its status nor stops it converging.
+Current-host defaults and nested preference values belong to native Mise
+declarations and are inspected and applied by the Mise resource. A fact Config
+cannot read is reported rather than written over, and a fact that fails is an advisory, so the facts beside it and
 the steps after it still run. Config executes every other selected resource
 independently and collects failures so one resource does not hide the rest of
 the plan.
