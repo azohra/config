@@ -1,19 +1,14 @@
 name: Release
 
 on:
-  workflow_dispatch:
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: write
-  pull-requests: read
-
-concurrency:
-  group: release
-  cancel-in-progress: false
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -37,7 +32,22 @@ jobs:
           key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-${{ hashFiles('go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-
-      - name: Publish release
-        env:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        id: bosun
+        with:
+          client-id: ${{ vars.BOSUN_CLIENT_ID }}
+          private-key: ${{ secrets.BOSUN_PRIVATE_KEY }}
+          owner: azohra
+          repositories: homebrew-tools
+          permission-contents: write
+          permission-pull-requests: write
+      - env:
           GITHUB_TOKEN: ${{ github.token }}
+          HOMEBREW_TOOLS_TOKEN: ${{ steps.bosun.outputs.token }}
         run: mise run release
+      # A published release with no assets would be "latest" for Config's own
+      # updater. Put it back to draft so latest falls back to the previous release.
+      - if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=true

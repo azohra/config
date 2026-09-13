@@ -20,8 +20,8 @@ Mise bytes against the checksum embedded for its tested release before
 replacing the standalone command. Released updates use a separate cache-owned
 Mise adapter, not the machine resource, with GitHub asset digest verification.
 They resolve an exact stable version, verify the executable's version and refuse
-a downgrade before atomically replacing the permanent command. Releases can be
-built and published locally or through the Release workflow. Checksums detect
+a downgrade before atomically replacing the permanent command. Releases are
+published by the Release workflow from a tag. Checksums detect
 corrupt or mismatched downloads; they do not establish build provenance or
 protect against replacement of both an asset and its digest on GitHub.
 Reports that cross one of those boundaries are especially useful.
