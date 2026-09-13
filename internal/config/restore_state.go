@@ -221,8 +221,8 @@ func restoreStepIDs(machine Machine) []string {
 	if machine.ChromePWAs {
 		steps = append(steps, "resource/"+chromePWAsID)
 	}
-	if machine.Dock {
-		steps = append(steps, "resource/"+dockID)
+	if machine.Mise {
+		steps = append(steps, restoreMiseDefaultsStep)
 	}
 	return steps
 }

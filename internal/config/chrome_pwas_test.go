@@ -121,7 +121,7 @@ func TestChromePWAInspectionSupportsCaptureAndFreshMachineRestore(t *testing.T) 
 	icon := []byte("icon")
 	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
 	writeTestLivePWA(t, paths, app, icon)
-	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths)
 
 	resource := bidir.InspectChromePWAs()
 	if resource.State != Uncaptured || !slices.Equal(resource.Actions, []Action{Capture}) {
@@ -145,7 +145,7 @@ func TestChromePWAInspectionSupportsCaptureAndFreshMachineRestore(t *testing.T) 
 
 func TestChromePWAInitialCaptureTracksAnEmptyCollection(t *testing.T) {
 	paths := testPaths(t)
-	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths)
 
 	resource := bidir.InspectChromePWAs()
 	if resource.State != Uncaptured || resource.Failed() != 0 || !slices.Equal(resource.Actions, []Action{Capture}) {
@@ -169,7 +169,7 @@ func TestChromePWAInitialCaptureTracksAnEmptyCollection(t *testing.T) {
 func TestChromePWAEmptySnapshotCanRestoreAnEmptyCollection(t *testing.T) {
 	paths := testPaths(t)
 	runner := OSRunner{Dir: paths.Root}
-	bidir := newBidirectional(paths, runner)
+	bidir := newBidirectional(paths)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestChromePWASavedBackupVerifiesIconContent(t *testing.T) {
 	icon := []byte("icon")
 	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
 	writeTestLivePWA(t, paths, app, icon)
-	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestChromePWARestoreInstallsTheSavedBundle(t *testing.T) {
 	// Capture a live PWA, then remove it so the saved backup is the only copy.
 	bundle := writeTestLivePWA(t, paths, app, icon)
 	runner := OSRunner{Dir: paths.Root}
-	bidir := newBidirectional(paths, runner)
+	bidir := newBidirectional(paths)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestChromePWAsSurviveAForeignBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths)
 	_, live, damaged, err := bidir.chromePWALive()
 	if err != nil {
 		t.Fatalf("a foreign bundle broke the collection: %v", err)
@@ -371,7 +371,7 @@ func TestChromePWAsNameADamagedBundleWithoutLosingTheRest(t *testing.T) {
 		"CrAppModeShortcutURL":  "not a url",
 	}, icon)
 
-	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths)
 	_, live, damaged, err := bidir.chromePWALive()
 	if err != nil {
 		t.Fatalf("a damaged PWA broke the collection: %v", err)
@@ -412,7 +412,7 @@ func TestChromePWAsIgnoreContentChromeOwns(t *testing.T) {
 	paths := testPaths(t)
 	app := testChromePWA("YouTube", "agimnkijcaahngcdmfeangaknmldooml", "https://www.youtube.com/", []byte("old icon"))
 	writeTestLivePWA(t, paths, app, []byte("old icon"))
-	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestChromePWAsUseThreeWayReconciliationOnceTheSidesHaveAgreed(t *testing.T)
 	icon := []byte("icon")
 	app := testChromePWA("Gmail", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://mail.google.com/", icon)
 	writeTestLivePWA(t, paths, app, icon)
-	bidir := newBidirectional(paths, OSRunner{Dir: paths.Root})
+	bidir := newBidirectional(paths)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestChromePWARestoreTrashesABundleTheReplacementWillNotOverwrite(t *testing
 
 	bundle := writeTestLivePWA(t, paths, app, icon)
 	runner := OSRunner{Dir: paths.Root}
-	bidir := newBidirectional(paths, runner)
+	bidir := newBidirectional(paths)
 	if err := bidir.CaptureChromePWAs(); err != nil {
 		t.Fatal(err)
 	}
@@ -518,5 +518,82 @@ func TestChromePWARestoreTrashesABundleTheReplacementWillNotOverwrite(t *testing
 	}
 	if _, err := os.Stat(filepath.Join(chromePWALiveDir(paths), "Mail.app")); err != nil {
 		t.Fatalf("the saved bundle was not installed under its own name: %v", err)
+	}
+}
+
+func TestChromePWARestorePrecedesMiseDefaults(t *testing.T) {
+	if _, err := os.Stat(chromePWATemplatePath()); err != nil {
+		t.Skip("Google Chrome is not installed")
+	}
+	for _, bootstrap := range []bool{false, true} {
+		t.Logf("bootstrap=%t", bootstrap)
+		paths := testPaths(t)
+		machine := testMachine()
+		machine.MacOS = MachineMacOS{}
+		machine.Preferences = nil
+		icon := []byte("icon")
+		app := testChromePWA("Example", "fmgjjmmmlfnkbppncabfkddbjimcfncm", "https://example.com/", icon)
+		bundle := writeTestLivePWA(t, paths, app, icon)
+		bidir := newBidirectional(paths)
+		if err := bidir.CaptureChromePWAs(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(bundle); err != nil {
+			t.Fatal(err)
+		}
+		bin := t.TempDir()
+		log := filepath.Join(t.TempDir(), "commands")
+		fail := filepath.Join(t.TempDir(), "fail-defaults")
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("PWA_BUNDLE", bundle)
+		t.Setenv("COMMAND_LOG", log)
+		t.Setenv("FAIL_DEFAULTS", fail)
+		script := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$COMMAND_LOG"
+case "$*" in
+  *--skip*) test ! -e "$PWA_BUNDLE" ;;
+  *--only*) test -f "$PWA_BUNDLE/Contents/Info.plist"; test ! -e "$FAIL_DEFAULTS" ;;
+  *) exit 1 ;;
+esac
+`
+		if err := os.WriteFile(filepath.Join(bin, "mise"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "trash"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		applier, _ := testApplier(t, paths, machine, OSRunner{Dir: paths.Root})
+		applier.Mise = converged{}
+		if bootstrap {
+			progress := testRestoreProgress(t, paths, machine)
+			if err := os.WriteFile(fail, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := restorePending(applier, progress); err == nil {
+				t.Fatal("defaults failure was hidden")
+			}
+			if !progress.done(restoreMiseStep) || !progress.done("resource/"+chromePWAsID) || progress.done(restoreMiseDefaultsStep) {
+				t.Fatalf("incorrect partial restore: %v", progress.record.Completed)
+			}
+			if err := os.Remove(fail); err != nil {
+				t.Fatal(err)
+			}
+			if err := restorePending(applier, progress); err != nil {
+				t.Fatal(err)
+			}
+			if !progress.done(restoreMiseDefaultsStep) {
+				t.Fatal("defaults retry was not checkpointed")
+			}
+		} else if err := applier.Apply([]Selection{{ID: miseID, Action: Apply}, {ID: chromePWAsID, Action: Apply}}); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(data), "--skip ") != 1 || !strings.Contains(string(data), "--only macos-defaults,task,final-hook") {
+			t.Fatalf("Mise did not prepare once and apply defaults after the PWA: %s", data)
+		}
 	}
 }

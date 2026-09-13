@@ -119,7 +119,7 @@ func finderFavoritesApplier(paths Paths, store finderFavoritesStore) (Applier, *
 	machine.FinderFavorites = true
 	return Applier{
 		Paths: paths, Machine: machine, FinderFavorites: store,
-		Log: Logger{Out: &output}, Bidir: testBidirectional(paths, converged{}),
+		Log: Logger{Out: &output}, Bidir: testBidirectional(paths),
 	}, &output
 }
 
@@ -149,7 +149,7 @@ func TestFinderFavoritesCaptureUsesPortableTargets(t *testing.T) {
 		{ID: 4, Name: "Home", Path: paths.Home},
 		{ID: 3, Name: "Finder owned", Path: ""},
 	}}
-	bidir := testBidirectional(paths, converged{})
+	bidir := testBidirectional(paths)
 	if err := bidir.CaptureFinderFavorites(store); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestFinderFavoritesInspectionClassifiesOrderChanges(t *testing.T) {
 		{ID: 1, Name: "First", Path: first},
 		{ID: 2, Name: "Second", Path: second},
 	}}
-	bidir := testBidirectional(paths, converged{})
+	bidir := testBidirectional(paths)
 	if resource := bidir.InspectFinderFavorites(store); resource.State != Uncaptured || !slices.Equal(resource.Actions, []Action{Capture}) {
 		t.Fatalf("uncaptured resource = %+v", resource)
 	}
@@ -211,7 +211,7 @@ func TestFinderFavoritesInspectionClassifiesOrderChanges(t *testing.T) {
 }
 
 func TestFinderFavoritesInspectionReportsAnUnreadableNativeList(t *testing.T) {
-	resource := testBidirectional(testPaths(t), converged{}).InspectFinderFavorites(
+	resource := testBidirectional(testPaths(t)).InspectFinderFavorites(
 		&fakeFinderFavorites{listErr: errors.New("Finder unavailable")},
 	)
 	if resource.State != Unavailable || resource.Failed() != 1 || len(resource.Actions) != 0 {
@@ -230,7 +230,7 @@ func TestApplyFinderFavoritesRestoresSetNamesAndOrderAroundOpaqueItems(t *testin
 		{ID: 4, Name: "Finder owned second", Path: ""},
 		{ID: 1, Name: "First", Path: first},
 	}}
-	bidir := testBidirectional(paths, converged{})
+	bidir := testBidirectional(paths)
 	if err := bidir.CaptureFinderFavorites(store); err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestApplyFinderFavoritesRestoresTheOriginalListAfterFailure(t *testing.T) {
 	first := favoriteDir(t, paths, "First")
 	second := favoriteDir(t, paths, "Second")
 	store := &fakeFinderFavorites{nextID: 2, items: []finderFavoriteItem{{ID: 1, Name: "First", Path: first}}}
-	bidir := testBidirectional(paths, converged{})
+	bidir := testBidirectional(paths)
 	store.items = []finderFavoriteItem{{ID: 2, Name: "Second", Path: second}}
 	if err := bidir.CaptureFinderFavorites(store); err != nil {
 		t.Fatal(err)
@@ -355,7 +355,7 @@ func TestApplyFinderFavoritesRejectsWrongNativePlacementAndRestoresTheLayout(t *
 func TestFinderFavoritesRejectInvalidSnapshotsAndLiveDuplicates(t *testing.T) {
 	paths := testPaths(t)
 	target := favoriteDir(t, paths, "Target")
-	bidir := testBidirectional(paths, converged{})
+	bidir := testBidirectional(paths)
 	for _, invalid := range []string{
 		`{"schema":1,"favorites":[{"name":"Target","path":"Target"}]}`,
 		`{"schema":1,"favorites":[{"name":"Target","path":"~/../Target"}]}`,

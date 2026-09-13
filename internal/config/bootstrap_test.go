@@ -2,8 +2,6 @@ package config
 
 import (
 	"io"
-	"os"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -58,7 +56,7 @@ func completedPlatformRestoreSteps(machine Machine) []string {
 		steps = append(steps, restoreMacOSStep)
 	}
 	if machine.Mise {
-		steps = append(steps, restoreMiseStep)
+		steps = append(steps, restoreMiseStep, restoreMiseDefaultsStep)
 	}
 	return steps
 }
@@ -74,8 +72,7 @@ func TestFreshRestoreOmitsUndeclaredMise(t *testing.T) {
 }
 
 // A fresh Mac has no earlier state to fall back on, so one unreadable backup
-// must not cost the capabilities beside it. The Dock here is independent of
-// the Chrome PWA backup and would restore perfectly well without it.
+// must not cost the independent capabilities beside it.
 func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	paths := testPaths(t)
 	machine := testMachine()
@@ -85,20 +82,8 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	if err := AtomicWrite(chromePWASnapshotPath(paths), []byte("{not a manifest"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A Dock layout it can.
-	app := paths.InHome("Applications", "First.app")
-	if err := os.MkdirAll(app, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := AtomicWrite(dockSnapshotPath(paths), []byte(app+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	commands := fakeTools(t, fakeTool{name: "mise"}, fakeTool{name: "defaults"}, fakeTool{name: "killall"})
-	// Platform resources record their own checkpoints, then restore reads,
-	// verifies, and records the restored agreement explicitly.
-	runner := &sequencedDockRunner{listings: []string{dockDocument(), dockDocument(app), dockDocument(app)}}
-	applier, chatter := testApplier(t, paths, machine, runner)
+	commands := fakeTools(t, fakeTool{name: "mise"}, fakeTool{name: "defaults"})
+	applier, chatter := testApplier(t, paths, machine, converged{})
 	progress := testRestoreProgress(t, paths, machine)
 
 	err := restorePending(applier, progress)
@@ -108,12 +93,8 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	if !strings.Contains(err.Error(), chromePWAsName) {
 		t.Fatalf("the failure does not name the capability: %v", err)
 	}
-	issued := strings.Join(commands(), "\n")
-	if !strings.Contains(issued, "defaults write "+dockDomain+" "+dockKey) {
-		t.Fatalf("the Dock never restored past the unreadable PWA backup:\ncommands:[%s]\nlog:%s", issued, chatter.String())
-	}
 	if !progress.done(restoreMacOSStep) || !progress.done(restoreMiseStep) ||
-		!progress.done("resource/"+dockID) || progress.done("resource/"+chromePWAsID) {
+		progress.done("resource/"+chromePWAsID) {
 		t.Fatalf("restore progress after partial failure = %v", progress.record.Completed)
 	}
 	beforeRetry := strings.Join(commands(), "\n")
@@ -126,7 +107,7 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 		t.Fatal("retry hid the unreadable PWA backup")
 	}
 	if afterRetry := strings.Join(commands(), "\n"); afterRetry != beforeRetry {
-		t.Fatalf("retry repeated completed platform or Dock work:\nbefore:\n%s\nafter:\n%s", beforeRetry, afterRetry)
+		t.Fatalf("retry repeated completed platform work:\nbefore:\n%s\nafter:\n%s", beforeRetry, afterRetry)
 	}
 }
 
@@ -135,108 +116,23 @@ func TestPendingRestoreContinuesPastMiseFailure(t *testing.T) {
 	machine := testMachine()
 	machine.Preferences = nil
 	commands := fakeTools(t, fakeTool{name: "mise", exit: 1}, fakeTool{name: "defaults"})
-	applier, _ := testApplier(t, paths, machine, &sequencedDockRunner{listings: []string{dockDocument()}})
+	applier, _ := testApplier(t, paths, machine, converged{})
 	progress := testRestoreProgress(t, paths, machine)
 
 	if err := restorePending(applier, progress); err == nil {
 		t.Fatal("a failed Mise resource was reported as a successful restore")
 	}
-	if progress.done(restoreMiseStep) {
+	if progress.done(restoreMiseStep) || progress.done(restoreMiseDefaultsStep) {
 		t.Fatal("a failed Mise resource was recorded as complete")
 	}
-	if !progress.done(restoreMacOSStep) || !progress.done("resource/"+dockID) {
+	if !progress.done(restoreMacOSStep) {
 		t.Fatalf("Mise blocked independent resources: %v", progress.record.Completed)
 	}
-	if issued := strings.Join(commands(), "\n"); !strings.Contains(issued, "mise bootstrap --yes --skip-dirty") {
+	if strings.Contains(strings.Join(commands(), "\n"), "--only") {
+		t.Fatal("defaults or final hooks ran after failed Mise setup")
+	}
+	if issued := strings.Join(commands(), "\n"); !strings.Contains(issued, "mise bootstrap --yes --skip-dirty --skip macos-defaults,task,final-hook") {
 		t.Fatalf("the Mise failure was not exercised:\n%s", issued)
-	}
-}
-
-func TestPendingRestoreDoesNotCompleteDockWhenRestartFails(t *testing.T) {
-	paths := testPaths(t)
-	machine := testMachine()
-	machine.ChromePWAs = false
-	machine.Preferences = nil
-	desired := paths.InHome("Applications", "Desired.app")
-	if err := os.MkdirAll(desired, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := AtomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	progress := testRestoreProgress(t, paths, machine)
-	progress.record.Completed = completedPlatformRestoreSteps(machine)
-	if err := progress.save(); err != nil {
-		t.Fatal(err)
-	}
-	original := dockState{}
-	applied := dockState{Present: true, Tiles: []any{newDockAppTile(desired, 1_000_000_003)}}
-	store := &failedDockRestart{original: original, applied: applied}
-	commands := fakeTools(t, fakeTool{name: "killall", exit: 1})
-	applier, _ := testApplier(t, paths, machine, applyRunner{})
-	applier.Bidir.Dock = store
-
-	err := restorePending(applier, progress)
-	if err == nil || !strings.Contains(err.Error(), "restart Dock") {
-		t.Fatalf("restart failure = %v", err)
-	}
-	if progress.done("resource/" + dockID) {
-		t.Fatal("failed Dock restart was recorded as complete")
-	}
-	if len(store.writes) != 2 || !reflect.DeepEqual(store.writes[1], original) {
-		t.Fatalf("Dock rollback writes = %#v", store.writes)
-	}
-	if issued := commands(); len(issued) != 1 || issued[0] != "killall Dock" {
-		t.Fatalf("restart failure commands = %v", issued)
-	}
-}
-
-func TestPendingRestoreRetriesADockWhoseAppWasInitiallyUnavailable(t *testing.T) {
-	paths := testPaths(t)
-	machine := testMachine()
-	machine.ChromePWAs = false
-	machine.Preferences = nil
-	desired := paths.InHome("Applications", "Later.app")
-	if err := AtomicWrite(dockSnapshotPath(paths), []byte(desired+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	progress := testRestoreProgress(t, paths, machine)
-	progress.record.Completed = completedPlatformRestoreSteps(machine)
-	if err := progress.save(); err != nil {
-		t.Fatal(err)
-	}
-	store := &memoryDockStore{}
-	commands := fakeTools(t, fakeTool{name: "killall"})
-	applier, _ := testApplier(t, paths, machine, applyRunner{})
-	applier.Bidir.Dock = store
-
-	err := restorePending(applier, progress)
-	if err == nil || !strings.Contains(err.Error(), "Later.app is unavailable") {
-		t.Fatalf("missing app restore = %v", err)
-	}
-	if progress.done("resource/"+dockID) || len(store.writes) != 0 || len(commands()) != 0 {
-		t.Fatalf("missing app was checkpointed or mutated: completed=%v writes=%v commands=%v", progress.record.Completed, store.writes, commands())
-	}
-
-	if err := os.MkdirAll(desired, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := restorePending(applier, progress); err != nil {
-		t.Fatalf("retry after app installation: %v", err)
-	}
-	if !progress.done("resource/"+dockID) || !slices.Equal(dockAppPaths(store.state), []string{desired}) {
-		t.Fatalf("retry did not complete Dock restore: completed=%v state=%#v", progress.record.Completed, store.state)
-	}
-	if issued := commands(); len(issued) != 1 || issued[0] != "killall Dock" {
-		t.Fatalf("retry commands = %v", issued)
-	}
-	extra := paths.InHome("Applications", "Live edit.app")
-	store.state = dockState{Present: true, Tiles: []any{
-		newDockAppTile(desired, 1_000_000_003),
-		newDockAppTile(extra, 1_000_000_004),
-	}}
-	if resource := applier.Bidir.InspectDock(); resource.State != LiveChanged {
-		t.Fatalf("first live edit after restore = %s, want %s", resource.State, LiveChanged)
 	}
 }
 
@@ -245,7 +141,6 @@ func TestPendingRestoreRestoresFinderFavoritesAndEstablishesABaseline(t *testing
 	machine := testMachine()
 	machine.FinderFavorites = true
 	machine.ChromePWAs = false
-	machine.Dock = false
 	machine.Preferences = nil
 	first := favoriteDir(t, paths, "First")
 	second := favoriteDir(t, paths, "Second")

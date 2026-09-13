@@ -632,7 +632,7 @@ func (p Pruner) planConfigFiles(warnings []string) ([]pruneFile, []string, error
 		resource string
 		label    string
 	}{
-		{p.Machine.Dock, dockID, dockName + " baseline"},
+		{false, "dock", "Dock baseline"},
 		{p.Machine.ChromePWAs, chromePWAsID, chromePWAsName + " baseline"},
 		{p.Machine.FinderFavorites, finderFavoritesID, finderFavoritesName + " baseline"},
 	} {
@@ -703,7 +703,7 @@ func (p Pruner) planPendingMarkers() ([]pruneFile, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	declared := map[string]bool{dockRestartMarker: p.Machine.Dock}
+	declared := map[string]bool{}
 	for _, preference := range p.Machine.Preferences {
 		declared[relaunchMarker(preference.Bundle)] = true
 	}

@@ -60,9 +60,8 @@ Only the repository identity is required. Every capability is opt-in:
 
 ```toml
 kind = "azohra.config.machine"
-schema = 4
+schema = 5
 mise = true
-dock = true
 chrome_pwas = true
 finder_favorites = true
 
@@ -111,7 +110,7 @@ setting it could not read rather than writing over it.
 Current-host tap-to-click and Spotlight shortcuts now belong in native Mise
 configuration. Remove `macos.current_host_tap_to_click` and `[macos.spotlight]`
 from `config.toml`, enable `mise = true`, and move their values into
-`mise/conf.d/macos.toml` using the tested mise 2026.9.5 release:
+`mise/conf.d/macos.toml` using the tested mise 2026.9.6 release:
 
 ```toml
 [[bootstrap.macos.defaults_entries]]
@@ -142,7 +141,7 @@ Mise resource; without it Config neither inspects nor installs Mise. Mise keeps
 its native syntax under `mise/`:
 
 ```toml
-min_version = "2026.9.5"
+min_version = "2026.9.6"
 
 [tools]
 node = "24"
@@ -207,19 +206,45 @@ its file from memory after Config does; the next `config` run converges it
 again. Config records which names it wrote, so `config prune` removes an entry
 only when Config wrote it and it still reads as written.
 
+## Dock applications
+
+Declare pinned applications in native mise configuration:
+
+```toml
+[bootstrap.macos.dock]
+apps = [
+  "/System/Applications/Utilities/Terminal.app",
+  "/Applications/Firefox.app",
+]
+```
+
+Edit the list to add, remove, or reorder pins, then apply the Mise resource.
+Mise compares application identity and order, preserves existing tile metadata,
+and leaves non-application tiles alone. Dragging icons in Dock does not update
+this declaration; the next apply restores the declared order. An empty list
+removes application pins, while omitting `apps` leaves them unmanaged.
+
+Mise does not restart Dock itself. Relaunch it with `killall Dock`, or declare a
+`[bootstrap.hooks.post-defaults]` hook. Hooks run even when defaults already match.
+
+Schema 5 removes Config's `dock` toggle and Dock snapshot resource. To migrate
+from schema 4, copy the paths from `snapshots/dock.apps` into this `apps` list,
+remove `dock` from `config.toml`, and set `schema = 5`. After verifying the layout,
+remove the retired snapshot. Config's prune can reclaim the old local Dock
+baseline and restart marker. Machines without mise can leave Dock unmanaged.
+
 ## Native state
 
 Captured state has stable paths in the machine repository:
 
 ```text
-snapshots/dock.apps
 snapshots/chrome-pwas.json
 snapshots/chrome-pwas/<id>.icns
 snapshots/finder-favorites.json
 snapshots/preferences/<preference-id>.plist
 ```
 
-Finder Favorites, the Dock, and Chrome PWAs are bidirectional. Config compares
+Finder Favorites and Chrome PWAs are bidirectional. Config compares
 the saved snapshot, the live Mac, and a local last-agreement baseline. That
 distinguishes a repository edit from a live edit and stops for a choice when
 both changed. A declared capability with no snapshot is simply ready for its
@@ -233,9 +258,7 @@ macOS's native shared-file-list API. Pathless, unresolved, and non-directory
 sidebar entries remain outside Config's ownership. The complete layout is
 verified, and a failed change restores the original.
 
-Dock restore changes only application tiles, preserves their full existing
-dictionaries, verifies the result, and rolls back a failed write. Chrome PWA
-comparison tracks installed apps rather than bundle churn that Chrome owns;
+Chrome PWA comparison tracks installed apps rather than bundle churn that Chrome owns;
 replacements are built and signed in staging before live bundles change.
 
 Preferences are one-way backups on an established Mac. Existing backups are

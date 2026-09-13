@@ -9,14 +9,14 @@ import (
 func TestValidateSelections(t *testing.T) {
 	report := Report{Resources: []Resource{
 		{ID: "mise", Name: "Mise", State: Drift, Actions: []Action{Apply}},
-		{ID: "dock", Name: "Dock", State: LiveChanged, Bidirectional: true, Actions: []Action{Capture, Apply}},
+		{ID: "finder-favorites", Name: "Finder Favorites", State: LiveChanged, Bidirectional: true, Actions: []Action{Capture, Apply}},
 	}}
 	tests := []struct {
 		name       string
 		selections []Selection
 		wantError  bool
 	}{
-		{"valid", []Selection{{ID: "mise", Action: Apply}, {ID: "dock", Action: Capture}}, false},
+		{"valid", []Selection{{ID: "mise", Action: Apply}, {ID: "finder-favorites", Action: Capture}}, false},
 		{"duplicate", []Selection{{ID: "mise", Action: Apply}, {ID: "mise", Action: Apply}}, true},
 		{"unknown", []Selection{{ID: "missing", Action: Apply}}, true},
 		{"wrong direction", []Selection{{ID: "mise", Action: Capture}}, true},
@@ -55,15 +55,15 @@ func TestDecodeSelectionsRejectsMalformedPlans(t *testing.T) {
 		encoded   string
 		wantError bool
 	}{
-		{"apply", `[{"id":"dock","action":"apply"}]`, false},
-		{"capture", `[{"id":"dock","action":"capture"}]`, false},
+		{"apply", `[{"id":"finder-favorites","action":"apply"}]`, false},
+		{"capture", `[{"id":"finder-favorites","action":"capture"}]`, false},
 		{"empty plan", `[]`, false},
 		{"not JSON", `dock`, true},
 		{"missing id", `[{"action":"apply"}]`, true},
 		{"empty id", `[{"id":"","action":"apply"}]`, true},
-		{"skip is not an instruction", `[{"id":"dock","action":"skip"}]`, true},
-		{"unknown action", `[{"id":"dock","action":"delete"}]`, true},
-		{"one bad entry rejects the plan", `[{"id":"dock","action":"apply"},{"id":"x","action":""}]`, true},
+		{"skip is not an instruction", `[{"id":"finder-favorites","action":"skip"}]`, true},
+		{"unknown action", `[{"id":"finder-favorites","action":"delete"}]`, true},
+		{"one bad entry rejects the plan", `[{"id":"finder-favorites","action":"apply"},{"id":"x","action":""}]`, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestSelectionsSurviveTheProcessBoundary(t *testing.T) {
 func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 	clean := Report{Resources: []Resource{
 		{Name: "Example App", Checks: []Check{{Label: "Preference backup valid", OK: true}}},
-		{Name: "Dock", State: Current, Bidirectional: true},
+		{Name: "Finder Favorites", State: Current, Bidirectional: true},
 	}}
 	if err := clean.PreflightError(); err != nil {
 		t.Fatalf("a converged machine failed preflight: %v", err)
@@ -112,10 +112,10 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 	}
 
 	undecided := Report{Resources: []Resource{
-		{Name: "Dock", State: Conflict, Bidirectional: true, Actions: []Action{Apply, Capture}},
+		{Name: "Finder Favorites", State: Conflict, Bidirectional: true, Actions: []Action{Apply, Capture}},
 	}}
 	err = undecided.PreflightError()
-	if err == nil || !strings.Contains(err.Error(), "Dock: unresolved conflict") {
+	if err == nil || !strings.Contains(err.Error(), "Finder Favorites: unresolved conflict") {
 		t.Fatalf("unresolved choice preflight error = %v", err)
 	}
 }
@@ -123,13 +123,13 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 // A snapshot records Config-owned state. Mise converges live machine state
 // and writes nothing into the repository, so Mise needing attention
 // — a checkout behind its remote, a package not installed — must not stop a
-// backup of the Dock, the PWAs, and the saved preferences.
+// backup of the Finder Favorites, the PWAs, and the saved preferences.
 func TestPreflightErrorDoesNotLetMiseBlockASnapshot(t *testing.T) {
 	report := Report{Resources: []Resource{
 		authoritativeResource(miseID, miseName, []Check{
 			no("mise bootstrap state needs attention", "repos"),
 		}),
-		{ID: dockID, Name: dockName, State: Current, Bidirectional: true},
+		{ID: finderFavoritesID, Name: finderFavoritesName, State: Current, Bidirectional: true},
 	}}
 	if err := report.PreflightError(); err != nil {
 		t.Fatalf("Mise blocked a snapshot: %v", err)

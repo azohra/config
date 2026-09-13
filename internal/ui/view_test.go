@@ -115,14 +115,14 @@ func TestDashboardShowsBidirectionalAttentionWithoutRepeatingSnapshot(t *testing
 		report: config.Report{
 			Resources: []config.Resource{
 				{ID: "example-app", Name: "Example App", State: config.Current, Bidirectional: true},
-				{ID: "dock", Name: "Dock", State: config.LiveChanged, Summary: "this Mac changed", Bidirectional: true, Actions: []config.Action{config.Capture, config.Apply}},
+				{ID: "finder-favorites", Name: "Finder Favorites", State: config.LiveChanged, Summary: "this Mac changed", Bidirectional: true, Actions: []config.Action{config.Capture, config.Apply}},
 			},
 			Snapshot: config.SnapshotStatus{Dirty: 7, Upstream: "origin/main", Destination: "origin/main"},
 		},
 		width: 80, height: 24,
 	}
 	view := m.renderDashboard()
-	for _, present := range []string{"Your choice is needed", "Not current", "Dock", "Review changes", "Save snapshot"} {
+	for _, present := range []string{"Your choice is needed", "Not current", "Finder Favorites", "Review changes", "Save snapshot"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("dashboard missing %q:\n%s", present, view)
 		}
@@ -167,12 +167,12 @@ func TestInventoryShowsCombinedConcreteEvidence(t *testing.T) {
 		report: config.Report{Resources: []config.Resource{
 			{ID: "mise", Name: "Mise", State: config.Current, Summary: "12 checks current", Checks: []config.Check{{Label: "mise 2026.9.1", OK: true}, {Label: "mise bootstrap state", OK: true}}},
 			{ID: "example-app", Name: "Example App", State: config.Current, Summary: "this Mac matches the saved settings", Bidirectional: true},
-			{ID: "dock", Name: "Dock", State: config.Current, Summary: "this Mac matches the saved layout", Bidirectional: true},
+			{ID: "finder-favorites", Name: "Finder Favorites", State: config.Current, Summary: "this Mac matches the saved layout", Bidirectional: true},
 		}},
 		width: 100, height: 30,
 	}
 	view := m.renderInventory()
-	for _, present := range []string{"3 resources", "Mise", "mise 2026.9.1", "mise bootstrap state", "Example App", "Dock"} {
+	for _, present := range []string{"3 resources", "Mise", "mise 2026.9.1", "mise bootstrap state", "Example App", "Finder Favorites"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("inventory missing %q:\n%s", present, view)
 		}
@@ -188,7 +188,7 @@ func TestPlanShowsInlineChoiceAndEvidence(t *testing.T) {
 	m := Model{
 		choices: []planChoice{{
 			resource: config.Resource{
-				ID: "dock", Name: "Dock", Bidirectional: true, Details: []string{"Only on this Mac: Signal.app"},
+				ID: "finder-favorites", Name: "Finder Favorites", Bidirectional: true, Details: []string{"Only on this Mac: Projects"},
 				ActionLabels: map[config.Action]string{config.Capture: "Save this Mac's layout", config.Apply: "Restore the saved layout"},
 			},
 			options: []config.Action{config.Skip, config.Capture, config.Apply},
@@ -196,7 +196,7 @@ func TestPlanShowsInlineChoiceAndEvidence(t *testing.T) {
 		width: 80, height: 24,
 	}
 	view := m.renderPlan()
-	for _, present := range []string{"Dock", "Decide later", "Only on this Mac: Signal.app", "←/→ choose"} {
+	for _, present := range []string{"Finder Favorites", "Decide later", "Only on this Mac: Projects", "←/→ choose"} {
 		if !strings.Contains(view, present) {
 			t.Fatalf("plan missing %q:\n%s", present, view)
 		}

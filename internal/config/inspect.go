@@ -322,8 +322,8 @@ func (i Inspector) Inspect() Report { return i.inspect(true) }
 func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
 
 func (i Inspector) inspect(allResources bool) Report {
-	bidir := newBidirectional(i.Paths, i.Runner)
-	var mise, agentSkills, mcpServers, macOS, chromePWAs, dock, finderFavorites, repositoryHooks Resource
+	bidir := newBidirectional(i.Paths)
+	var mise, agentSkills, mcpServers, macOS, chromePWAs, finderFavorites, repositoryHooks Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
@@ -369,9 +369,6 @@ func (i Inspector) inspect(allResources bool) Report {
 	if i.Machine.ChromePWAs {
 		tasks = append(tasks, func() { chromePWAs = bidir.InspectChromePWAs() })
 	}
-	if i.Machine.Dock {
-		tasks = append(tasks, func() { dock = bidir.InspectDock() })
-	}
 	for index, preference := range i.Machine.Preferences {
 		tasks = append(tasks, func() { preferences[index] = preference.Inspect(i.Paths) })
 	}
@@ -410,9 +407,6 @@ func (i Inspector) inspect(allResources bool) Report {
 	}
 	if i.Machine.ChromePWAs {
 		resources = append(resources, chromePWAs)
-	}
-	if i.Machine.Dock {
-		resources = append(resources, dock)
 	}
 	return Report{Resources: resources, Snapshot: snapshot}
 }

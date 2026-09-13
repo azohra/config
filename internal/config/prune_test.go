@@ -126,7 +126,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	}
 
 	baselines := Baselines{Dir: paths.StateDir}
-	if err := baselines.Save(dockID, json.RawMessage(`["/Applications/Example.app"]`)); err != nil {
+	if err := baselines.Save("dock", json.RawMessage(`["/Applications/Example.app"]`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := baselines.Save(chromePWAsID, json.RawMessage(`["abcdefghijklmnopabcdefghijklmnop"]`)); err != nil {
@@ -183,7 +183,6 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	live := &pruneCommandRecorder{}
 	var output bytes.Buffer
 	machine := testMachine()
-	machine.Dock = false
 	machine.ChromePWAs = false
 	machine.RepositoryHooks = nil
 	pruner := Pruner{
@@ -192,7 +191,7 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	}
 	return pruneFixture{
 		pruner: pruner, live: live,
-		dockBaseline:   filepath.Join(paths.StateDir, dockID+".json"),
+		dockBaseline:   filepath.Join(paths.StateDir, "dock.json"),
 		chromeBaseline: filepath.Join(paths.StateDir, chromePWAsID+".json"),
 		finderBaseline: filepath.Join(paths.StateDir, finderFavoritesID+".json"),
 		oldRestore:     restoreStatePath(paths, oldID), currentRestore: restoreStatePath(paths, currentID),
@@ -399,7 +398,7 @@ func TestPruneApplyRejectsAChangedPlanBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (Baselines{Dir: fixture.pruner.Paths.StateDir}).Save(dockID, json.RawMessage(`[]`)); err != nil {
+	if err := (Baselines{Dir: fixture.pruner.Paths.StateDir}).Save("dock", json.RawMessage(`[]`)); err != nil {
 		t.Fatal(err)
 	}
 	err = fixture.pruner.Apply(plan)
@@ -752,13 +751,12 @@ func TestPruneReclaimsOnlyTheMarkersNothingWillActOn(t *testing.T) {
 	// removes it.
 	fixture := newPruneFixture(t)
 	pruner := fixture.pruner
-	pruner.Machine.Dock = true
 	pruner.Machine.Preferences = []PreferenceBackup{{
 		ID: "example-app", Name: "Example App",
 		Bundle: "com.example.ExampleApp", Domain: "com.example.ExampleApp",
 	}}
 	for _, name := range []string{
-		dockRestartMarker,
+		"dock-restart",
 		relaunchMarker("com.example.ExampleApp"),
 		relaunchMarker("com.example.Retired"),
 	} {
@@ -773,16 +771,21 @@ func TestPruneReclaimsOnlyTheMarkersNothingWillActOn(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
-	if len(planned) != 1 || filepath.Base(planned[0].Path) != relaunchMarker("com.example.Retired") {
-		t.Fatalf("planned = %+v, want only the undeclared relaunch", planned)
+	if len(planned) != 2 {
+		t.Fatalf("planned = %+v, want the retired Dock restart and undeclared relaunch", planned)
 	}
-	if err := applyPruneFile(planned[0]); err != nil {
-		t.Fatal(err)
+	for _, file := range planned {
+		if err := applyPruneFile(file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if markerSet(pruner.Paths, "dock-restart") {
+		t.Fatal("retired Dock marker survived prune")
 	}
 	if markerSet(pruner.Paths, relaunchMarker("com.example.Retired")) {
 		t.Fatal("the undeclared marker survived the prune")
 	}
-	for _, kept := range []string{dockRestartMarker, relaunchMarker("com.example.ExampleApp")} {
+	for _, kept := range []string{relaunchMarker("com.example.ExampleApp")} {
 		if !markerSet(pruner.Paths, kept) {
 			t.Fatalf("prune removed %s, which the machine still declares", kept)
 		}

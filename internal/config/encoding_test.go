@@ -20,7 +20,7 @@ func TestTrackedArtifactsAreDecodedStrictly(t *testing.T) {
 		if err := AtomicWrite(chromePWASnapshotPath(paths), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		bidir := testBidirectional(paths, dockRunner{})
+		bidir := testBidirectional(paths)
 		if _, _, _, err := bidir.chromePWASaved(); err == nil {
 			t.Errorf("a saved PWA snapshot with %s was accepted", name)
 		}
@@ -28,7 +28,7 @@ func TestTrackedArtifactsAreDecodedStrictly(t *testing.T) {
 	if err := os.WriteFile(chromePWASnapshotPath(paths), []byte(valid), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := testBidirectional(paths, dockRunner{}).chromePWASaved(); err != nil {
+	if _, _, _, err := testBidirectional(paths).chromePWASaved(); err != nil {
 		t.Fatalf("a well-formed snapshot was refused: %v", err)
 	}
 }
@@ -43,7 +43,7 @@ func TestEveryTrackedArtifactDecoderIsTheStrictOne(t *testing.T) {
 		trailing(`{"schema":1,"favorites":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := testBidirectional(paths, dockRunner{}).finderFavoritesSaved(); err == nil {
+	if _, _, _, _, err := testBidirectional(paths).finderFavoritesSaved(); err == nil {
 		t.Error("a saved Finder Favorites snapshot with trailing data was accepted")
 	}
 

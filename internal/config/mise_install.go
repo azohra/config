@@ -31,12 +31,12 @@ func testedMiseInstallerAt(destination string) miseInstaller {
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "darwin/arm64":
 		asset = "mise-v" + testedMiseVersion + "-macos-arm64"
-		checksum = "6274b68122a837c514374e96dabb18a9e3562bdd28528b4b3feea9d8eb615d98"
-		size = 99889824
+		checksum = "6ea391f2994d614d794fd751738ec3c375bf1638fd77116a16914038f065fdde"
+		size = 100460720
 	case "darwin/amd64":
 		asset = "mise-v" + testedMiseVersion + "-macos-x64"
-		checksum = "d60e503346188a6e3cbeb9c6a3dd55c1376869c8f19667604f7978e19a56f77c"
-		size = 119731792
+		checksum = "7be52c287cbdf4e2b62c19ca9dfe6990eb663e78c1f48ca11446bd126de67f30"
+		size = 120397056
 	}
 	return miseInstaller{
 		Destination: destination,
