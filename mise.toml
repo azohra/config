@@ -9,8 +9,8 @@ min_version = "2026.9.5"
 # result instead of running again, on a laptop and on a runner alike.
 experimental = true
 
-# Every Go file is the program; bootstrap.sh and site/ are the site. A file
-# that belongs to neither invalidates neither. The platform is part of every
+# Shared inputs cover Go source and modules, or bootstrap.sh and site/.
+# The Go check also reads testdata fixtures. The platform is part of every
 # key, because the checks run on two of them.
 [task_config]
 global_inputs = ["mise.toml"]
@@ -55,7 +55,7 @@ run = "bash -n bootstrap.sh && shellcheck -s bash bootstrap.sh && node --test si
 
 [tasks."check:go"]
 description = "Formatting, vet and the race-detected test suite"
-sources = ["@group:go"]
+sources = ["@group:go", "**/testdata/**"]
 outputs = []
 run = """
 #!/usr/bin/env bash
