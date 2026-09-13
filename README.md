@@ -339,9 +339,9 @@ For implementation details and trust boundaries, see
 
 ## Publishing a release
 
-See [Conventional PR](https://github.com/azohra/conventional-pr) for the change-record
-format and shared presentation. `mise run changelog -- --json` exports structured
-history; `mise.toml` follows the shared preset on main.
+The PR title and body become the squash commit and the release notes.
+`mise run changelog -- --json` exports structured history; `mise.toml` names the
+shared git-cliff config.
 
 Run `mise run release` from clean, current main, or dispatch the Release workflow.
 Git-cliff derives the next version from Conventional commits since the previous
