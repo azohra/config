@@ -9,8 +9,6 @@ import (
 // run killed between the two halves of an operation can be finished by the
 // next one. Markers describe this Mac mid-operation rather than its
 // configuration, so they live beside the baselines, outside the repository.
-const dockRestartMarker = "dock-restart"
-
 func relaunchMarker(bundle string) string { return "relaunch-" + bundle }
 
 func markerPath(paths Paths, name string) string {

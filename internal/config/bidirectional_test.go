@@ -5,26 +5,26 @@ import (
 	"testing"
 )
 
-// The Dock and Chrome PWAs answer the same question about the same three
+// The Finder Favorites and Chrome PWAs answer the same question about the same three
 // sources, so a state has to permit the same actions in the same order
 // whichever one is asked. They used to decide that separately, where a change
 // to one could leave the other behind with nothing to notice.
 func TestBidirectionalCapabilitiesAgreeOnEveryState(t *testing.T) {
 	for _, state := range []State{Current, SavedChanged, LiveChanged, Conflict, Unknown} {
-		var dock, pwas Resource
-		dockWords.offer(&dock, state)
+		var favorites, pwas Resource
+		finderFavoritesWords.offer(&favorites, state)
 		chromePWAWords.offer(&pwas, state)
 
-		if dock.State != state || pwas.State != state {
-			t.Fatalf("%s: states = %s and %s", state, dock.State, pwas.State)
+		if favorites.State != state || pwas.State != state {
+			t.Fatalf("%s: states = %s and %s", state, favorites.State, pwas.State)
 		}
-		if !slices.Equal(dock.Actions, pwas.Actions) {
-			t.Fatalf("%s: Dock offers %v, PWAs offer %v", state, dock.Actions, pwas.Actions)
+		if !slices.Equal(favorites.Actions, pwas.Actions) {
+			t.Fatalf("%s: Finder Favorites offers %v, PWAs offer %v", state, favorites.Actions, pwas.Actions)
 		}
-		if dock.Summary == "" || pwas.Summary == "" {
-			t.Fatalf("%s: an unreadable state: %q and %q", state, dock.Summary, pwas.Summary)
+		if favorites.Summary == "" || pwas.Summary == "" {
+			t.Fatalf("%s: an unreadable state: %q and %q", state, favorites.Summary, pwas.Summary)
 		}
-		if (len(dock.ActionLabels) == 0) != (len(pwas.ActionLabels) == 0) {
+		if (len(favorites.ActionLabels) == 0) != (len(pwas.ActionLabels) == 0) {
 			t.Fatalf("%s: one capability labelled its actions and the other did not", state)
 		}
 	}
@@ -34,9 +34,9 @@ func TestBidirectionalCapabilitiesAgreeOnEveryState(t *testing.T) {
 // offered first. Every other divergence leads with the restore.
 func TestALiveEditIsOfferedTheCaptureFirst(t *testing.T) {
 	var live, conflicted, current Resource
-	dockWords.offer(&live, LiveChanged)
-	dockWords.offer(&conflicted, Conflict)
-	dockWords.offer(&current, Current)
+	finderFavoritesWords.offer(&live, LiveChanged)
+	finderFavoritesWords.offer(&conflicted, Conflict)
+	finderFavoritesWords.offer(&current, Current)
 
 	if !slices.Equal(live.Actions, []Action{Capture, Apply}) {
 		t.Fatalf("a live edit offers %v", live.Actions)
@@ -53,14 +53,14 @@ func TestALiveEditIsOfferedTheCaptureFirst(t *testing.T) {
 // moved rather than only that something did.
 func TestEachStateReadsAsWhichSideMoved(t *testing.T) {
 	for state, want := range map[State]string{
-		Current:      "this Mac matches the saved layout",
-		SavedChanged: "the saved layout changed",
-		LiveChanged:  "the Dock on this Mac changed",
-		Conflict:     "the saved layout and this Mac both changed",
-		Unknown:      "this Mac and the saved layout differ",
+		Current:      "this Mac matches the saved Favorites",
+		SavedChanged: "the saved Favorites changed",
+		LiveChanged:  "Finder Favorites on this Mac changed",
+		Conflict:     "the saved Favorites and this Mac both changed",
+		Unknown:      "this Mac and the saved Favorites differ",
 	} {
 		var resource Resource
-		dockWords.offer(&resource, state)
+		finderFavoritesWords.offer(&resource, state)
 		if resource.Summary != want {
 			t.Errorf("%s reads %q, want %q", state, resource.Summary, want)
 		}

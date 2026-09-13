@@ -32,7 +32,7 @@ func buildConfigVersion(t *testing.T, version string) string {
 	return binary
 }
 
-// fixtureHome is a machine with a valid document and an empty, readable Dock,
+// fixtureHome is a machine with a valid document and an empty Chrome PWA collection,
 // so the report is the same on every platform that runs this.
 func fixtureHome(t *testing.T) string {
 	t.Helper()
@@ -41,19 +41,13 @@ func fixtureHome(t *testing.T) string {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	defaults := `#!/bin/sh
-printf '%s\n' '<?xml version="1.0"?><plist version="1.0"><dict><key>persistent-apps</key><array/></dict></plist>'
-`
-	if err := os.WriteFile(filepath.Join(bin, "defaults"), []byte(defaults), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	document := `kind = "azohra.config.machine"
-schema = 4
-dock = true
+schema = 5
+chrome_pwas = true
 
 [repository]
 branch = "main"
@@ -207,7 +201,7 @@ func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
 	binary, home := buildConfigVersion(t, "v0.4.0"), t.TempDir()
 	writeMainTestReleaseMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.9.5\n'
+  printf '2026.9.6\n'
   exit 0
 fi
 exit 1
@@ -262,7 +256,7 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document = bytes.Replace(document, []byte("dock = true"), []byte("dock = true\nmise = true"), 1)
+	document = bytes.Replace(document, []byte("chrome_pwas = true"), []byte("chrome_pwas = true\nmise = true"), 1)
 	if err := os.WriteFile(filepath.Join(root, "config.toml"), document, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +277,7 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	}
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
-if [ "$1" = --version ]; then printf '2026.9.5\n'; fi
+if [ "$1" = --version ]; then printf '2026.9.6\n'; fi
 if [ "$1" = outdated ]; then printf '{}\n'; fi
 if [ "$1 $2 $3" = "bootstrap packages status" ]; then printf '{"brew":{"packages":[{}]}}\n'; fi
 `
@@ -350,7 +344,7 @@ func TestBootstrapInstallsTheCommandBeforeAResourceFailure(t *testing.T) {
 	binary, home := buildConfig(t), t.TempDir()
 	writeMainTestMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.9.5\n'
+  printf '2026.9.6\n'
   exit 0
 fi
 exit 1
@@ -367,7 +361,7 @@ exit 1
 	git("config", "user.name", "Config Test")
 	git("config", "user.email", "config@example.invalid")
 	document := `kind = "azohra.config.machine"
-schema = 4
+schema = 5
 mise = true
 
 [repository]
@@ -450,14 +444,14 @@ func TestApplyRefusesAPlanTheCurrentStateDoesNotAllow(t *testing.T) {
 	}
 
 	// A real resource, and an action its current state does not allow.
-	stale, code := runConfig(t, binary, home, "--apply", `[{"id":"dock","action":"apply"}]`)
+	stale, code := runConfig(t, binary, home, "--apply", `[{"id":"chrome-pwas","action":"apply"}]`)
 	if code != 1 || !strings.Contains(stale, "no longer allows apply") {
 		t.Fatalf("config --apply accepted a stale plan (exit %d):\n%s", code, stale)
 	}
 
 	// The same resource twice, which a forged plan can carry and the terminal
 	// interface never produces.
-	repeated, code := runConfig(t, binary, home, "--apply", `[{"id":"dock","action":"capture"},{"id":"dock","action":"capture"}]`)
+	repeated, code := runConfig(t, binary, home, "--apply", `[{"id":"chrome-pwas","action":"capture"},{"id":"chrome-pwas","action":"capture"}]`)
 	if code != 1 || !strings.Contains(repeated, "appears more than once") {
 		t.Fatalf("config --apply accepted a repeated selection (exit %d):\n%s", code, repeated)
 	}

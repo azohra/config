@@ -51,7 +51,6 @@ func testMachine() Machine {
 			Branch: "main",
 			URL:    "https://github.com/example/machine.git",
 		},
-		Dock:       true,
 		ChromePWAs: true,
 		MacOS:      MachineMacOS{ClearUserKeyMapping: true},
 		Preferences: []PreferenceBackup{{
@@ -109,15 +108,15 @@ func testApplier(t *testing.T, paths Paths, machine Machine, runner Runner) (App
 		MiseLive: live,
 		Log:      Logger{Out: &chatter},
 		Bidir: Bidirectional{
-			Paths: paths, Dock: defaultsDockStore{Runner: runner, Live: live},
+			Paths:     paths,
 			Baselines: Baselines{Dir: paths.StateDir},
 		},
 	}, &chatter
 }
 
-func testBidirectional(paths Paths, runner Runner) Bidirectional {
+func testBidirectional(paths Paths) Bidirectional {
 	return Bidirectional{
-		Paths: paths, Dock: defaultsDockStore{Runner: runner},
+		Paths:     paths,
 		Baselines: Baselines{Dir: paths.StateDir},
 	}
 }

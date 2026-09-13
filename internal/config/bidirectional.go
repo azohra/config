@@ -2,14 +2,12 @@ package config
 
 type Bidirectional struct {
 	Paths     Paths
-	Dock      dockStore
 	Baselines Baselines
 }
 
-func newBidirectional(paths Paths, runner Runner) Bidirectional {
+func newBidirectional(paths Paths) Bidirectional {
 	return Bidirectional{
 		Paths:     paths,
-		Dock:      defaultsDockStore{Runner: runner, Live: newMachineLiveRunner(paths)},
 		Baselines: Baselines{Dir: paths.StateDir},
 	}
 }
@@ -20,7 +18,7 @@ func newBidirectional(paths Paths, runner Runner) Bidirectional {
 // here rather than once per capability.
 type bidirectionalWords struct {
 	saved   string // "the saved layout"
-	live    string // "the Dock on this Mac"
+	live    string // "the Favorites on this Mac"
 	capture string // "Save this Mac's layout"
 	restore string // "Restore the saved layout"
 }

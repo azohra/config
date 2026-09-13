@@ -36,22 +36,22 @@ func TestClassify(t *testing.T) {
 func TestBaselinesRoundTrip(t *testing.T) {
 	store := Baselines{Dir: t.TempDir()}
 	want := json.RawMessage(`{"value":["one","two"]}`)
-	if err := store.Save("dock", want); err != nil {
+	if err := store.Save("finder-favorites", want); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := store.Load("dock")
+	got, ok, err := store.Load("finder-favorites")
 	if err != nil || !ok {
 		t.Fatalf("Load() ok=%v err=%v", ok, err)
 	}
 	if string(got.Content) != string(want) {
 		t.Fatalf("content = %s, want %s", got.Content, want)
 	}
-	path := filepath.Join(store.Dir, "dock.json")
+	path := filepath.Join(store.Dir, "finder-favorites.json")
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save("dock", want); err != nil {
+	if err := store.Save("finder-favorites", want); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(path)

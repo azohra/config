@@ -10,9 +10,8 @@ import (
 func validMachineTOML() string {
 	return `
 kind = "azohra.config.machine"
-schema = 4
+schema = 5
 mise = true
-dock = true
 chrome_pwas = true
 finder_favorites = true
 
@@ -58,7 +57,7 @@ func TestLoadMachineReadsStrictContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Repository.Destination() != "origin/main" || !machine.Mise || machine.AgentSkills == nil || !machine.Dock || !machine.ChromePWAs || !machine.FinderFavorites {
+	if machine.Repository.Destination() != "origin/main" || !machine.Mise || machine.AgentSkills == nil || !machine.ChromePWAs || !machine.FinderFavorites {
 		t.Fatalf("unexpected machine contract: %+v", machine)
 	}
 	if len(machine.Preferences) != 1 {
@@ -107,9 +106,11 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 	}{
 		{"empty contract", "", "kind is"},
 		{"wrong kind", strings.Replace(validMachineTOML(), MachineKind, "another.machine", 1), "kind is"},
-		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 4", "schema = 1", 1), "schema is 1"},
-		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 4", "schema = 2", 1), "schema is 2"},
-		{"unknown field", strings.Replace(validMachineTOML(), "schema = 4", "schema = 4\ntyop = true", 1), "strict mode"},
+		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 5", "schema = 1", 1), "schema is 1"},
+		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 5", "schema = 2", 1), "schema is 2"},
+		{"removed Dock toggle", "dock = true\n" + validMachineTOML(), "strict mode"},
+		{"previous schema", strings.Replace(validMachineTOML(), "schema = 5", "schema = 4", 1), "schema is 4"},
+		{"unknown field", strings.Replace(validMachineTOML(), "schema = 5", "schema = 5\ntyop = true", 1), "strict mode"},
 		{"removed singular favorite", strings.Replace(validMachineTOML(), "finder_favorites = true", "[finder_favorite]\nname = \"Machine config\"", 1), "strict mode"},
 		{"invalid hook name", strings.Replace(validMachineTOML(), `name = "post-checkout"`, `name = "../post-checkout"`, 1), "repository_hooks name"},
 		{"absolute hook source", strings.Replace(validMachineTOML(), `source = "hooks/post-checkout"`, `source = "/tmp/post-checkout"`, 1), "relative file path"},
@@ -127,7 +128,7 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 func TestLoadMachineAcceptsOnlyRepositoryIdentity(t *testing.T) {
 	content := `
 kind = "azohra.config.machine"
-schema = 4
+schema = 5
 
 [repository]
 branch = "main"
@@ -137,7 +138,7 @@ url = "https://example.com/owner/machine.git"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if machine.Mise || machine.Dock || machine.ChromePWAs || machine.FinderFavorites || len(machine.RepositoryHooks) != 0 || len(machine.Preferences) != 0 {
+	if machine.Mise || machine.ChromePWAs || machine.FinderFavorites || len(machine.RepositoryHooks) != 0 || len(machine.Preferences) != 0 {
 		t.Fatalf("undeclared capabilities were enabled: %+v", machine)
 	}
 }
@@ -145,7 +146,6 @@ url = "https://example.com/owner/machine.git"
 func TestUndeclaredCapabilitiesDoNotBecomeResources(t *testing.T) {
 	machine := testMachine()
 	machine.Mise = false
-	machine.Dock = false
 	machine.ChromePWAs = false
 	machine.Preferences = nil
 	machine.RepositoryHooks = nil
@@ -181,14 +181,12 @@ func TestConfigOwnsSnapshotPaths(t *testing.T) {
 	paths := testPaths(t)
 	preference := testMachine().Preferences[0]
 	tests := map[string]string{
-		"Dock":             dockSnapshotPath(paths),
 		"Chrome PWAs":      chromePWASnapshotPath(paths),
 		"Chrome PWA icons": chromePWAIconDir(paths),
 		"Finder Favorites": finderFavoritesSnapshotPath(paths),
 		"preference":       preference.snapshotPath(paths),
 	}
 	want := map[string]string{
-		"Dock":             paths.InRoot("snapshots", "dock.apps"),
 		"Chrome PWAs":      paths.InRoot("snapshots", "chrome-pwas.json"),
 		"Chrome PWA icons": paths.InRoot("snapshots", "chrome-pwas"),
 		"Finder Favorites": paths.InRoot("snapshots", "finder-favorites.json"),
@@ -247,7 +245,7 @@ func TestMiseEnvironmentNamesTheGlobalRootWithoutMutatingTheProcess(t *testing.T
 func TestMachineRefusesAPreferenceIdConfigAlreadyAnswersTo(t *testing.T) {
 	// Reports, selections, and baselines are all keyed by resource id, so a
 	// preference borrowing a capability's id collides with that capability.
-	for _, id := range []string{"mise", "macos", "dock", "chrome-pwas", "finder-favorites", "repository-hooks"} {
+	for _, id := range []string{"mise", "macos", "chrome-pwas", "finder-favorites", "repository-hooks"} {
 		machine := testMachine()
 		machine.Preferences[0].ID = id
 		if err := machine.Validate(); err == nil {

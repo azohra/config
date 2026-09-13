@@ -53,7 +53,7 @@ func TestPlanConfirmsInlineChoiceAndRunsExplicitSelection(t *testing.T) {
 	m := Model{
 		screen: screenPlan,
 		choices: []planChoice{{
-			resource: config.Resource{ID: "dock", Bidirectional: true},
+			resource: config.Resource{ID: "finder-favorites", Bidirectional: true},
 			options:  []config.Action{config.Skip, config.Capture, config.Apply},
 		}},
 		executable: "/bin/true",
@@ -310,7 +310,7 @@ func TestDashboardCursorSurvivesARebuiltActionList(t *testing.T) {
 		screen: screenDashboard,
 		report: config.Report{
 			Snapshot:  config.SnapshotStatus{Upstream: "origin/main", Dirty: 1},
-			Resources: []config.Resource{{ID: "dock", Name: "Dock", Bidirectional: true, Actions: []config.Action{config.Apply}}},
+			Resources: []config.Resource{{ID: "finder-favorites", Name: "Finder Favorites", Bidirectional: true, Actions: []config.Action{config.Apply}}},
 		},
 	}
 	m.dashboardCursor = len(m.dashboardActions()) - 1
@@ -332,7 +332,7 @@ func TestScrollStopsWhereTheContentDoes(t *testing.T) {
 	m := Model{
 		screen: screenInventory,
 		height: 40,
-		report: config.Report{Resources: []config.Resource{{ID: "dock", Name: "Dock"}}},
+		report: config.Report{Resources: []config.Resource{{ID: "finder-favorites", Name: "Finder Favorites"}}},
 	}
 	bound := m.scrollBound()
 	for range 20 {

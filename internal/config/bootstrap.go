@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	restoreMacOSStep       = "resource/" + macOSID
-	restoreMiseStep        = "resource/" + miseID
-	restoreAgentSkillsStep = "resource/" + agentSkillsID
-	restoreMCPServersStep  = "resource/" + mcpServersID
+	restoreMacOSStep        = "resource/" + macOSID
+	restoreMiseStep         = "resource/" + miseID
+	restoreMiseDefaultsStep = "resource/mise-defaults"
+	restoreAgentSkillsStep  = "resource/" + agentSkillsID
+	restoreMCPServersStep   = "resource/" + mcpServersID
 )
 
 type freshRestoreStep struct {
@@ -47,6 +48,9 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 		if progress.done(step.id) {
 			continue
 		}
+		if step.id == restoreMiseDefaultsStep && !progress.done(restoreMiseStep) {
+			continue
+		}
 		if err := step.run(); err != nil {
 			var advisory advisoryError
 			if errors.As(err, &advisory) {
@@ -64,8 +68,8 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 }
 
 // freshRestoreSteps is the ordered extension point for Config-owned restore
-// capabilities. Chrome PWAs precede the Dock so saved shortcuts exist before
-// a declared Dock layout is rebuilt.
+// capabilities. Mise prepares tools first and applies defaults after native
+// resources, so declared Dock shortcuts exist before the layout is applied.
 func freshRestoreSteps(applier Applier) []freshRestoreStep {
 	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+6)
 	if len(macOSFacts(applier.Machine)) > 0 {
@@ -83,7 +87,7 @@ func freshRestoreSteps(applier Applier) []freshRestoreStep {
 			id: restoreMiseStep, name: miseName,
 			run: func() error {
 				applier.Log.Section(miseName)
-				return applier.applyMise()
+				return applier.prepareMise()
 			},
 		})
 	}
@@ -156,23 +160,12 @@ func freshRestoreSteps(applier Applier) []freshRestoreStep {
 			},
 		})
 	}
-	if applier.Machine.Dock {
+	if applier.Machine.Mise {
 		steps = append(steps, freshRestoreStep{
-			id:   "resource/" + dockID,
-			name: dockName,
+			id: restoreMiseDefaultsStep, name: "Mise defaults",
 			run: func() error {
-				applier.Log.Section(dockName)
-				_, _, _, hasSaved, err := applier.Bidir.dockSaved()
-				if err != nil {
-					return err
-				}
-				if !hasSaved {
-					return nil
-				}
-				if err := applier.applyDock(); err != nil {
-					return err
-				}
-				return applier.Bidir.MarkDockIfCurrent()
+				applier.Log.Section("Mise defaults")
+				return applier.finishMise()
 			},
 		})
 	}

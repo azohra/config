@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"reflect"
-	"slices"
 	"time"
 )
 
@@ -100,7 +97,7 @@ func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 		InstallMise:     installer.Install,
 		FinderFavorites: newFinderFavoritesStore(),
 		Log:             Logger{Out: out},
-		Bidir:           newBidirectional(paths, runner),
+		Bidir:           newBidirectional(paths),
 	}
 }
 
@@ -121,6 +118,7 @@ func (e Applier) Apply(selections []Selection) error {
 		fn   func(Action) error
 	}
 	var steps []step
+	miseReady := false
 	if len(e.Machine.RepositoryHooks) > 0 {
 		steps = append(steps, step{repositoryHooksID, repositoryHooksName, e.reconcileRepositoryHooks})
 	}
@@ -131,7 +129,11 @@ func (e Applier) Apply(selections []Selection) error {
 		}})
 	}
 	if e.Machine.Mise {
-		steps = append(steps, step{miseID, miseName, func(Action) error { return e.applyMise() }})
+		steps = append(steps, step{miseID, miseName, func(Action) error {
+			err := e.prepareMise()
+			miseReady = err == nil
+			return err
+		}})
 	}
 	if e.Machine.AgentSkills != nil {
 		steps = append(steps, step{agentSkillsID, agentSkillsName, func(Action) error {
@@ -154,8 +156,13 @@ func (e Applier) Apply(selections []Selection) error {
 	if e.Machine.ChromePWAs {
 		steps = append(steps, step{chromePWAsID, chromePWAsName, e.reconcileChromePWAs})
 	}
-	if e.Machine.Dock {
-		steps = append(steps, step{dockID, dockName, e.reconcileDock})
+	if e.Machine.Mise {
+		steps = append(steps, step{miseID, "Mise defaults", func(Action) error {
+			if !miseReady {
+				return advisoryError{"Mise setup did not finish; defaults remain pending"}
+			}
+			return e.finishMise()
+		}})
 	}
 	var failures []error
 	converged := make(map[string]bool)
@@ -193,9 +200,6 @@ func (e Applier) Apply(selections []Selection) error {
 	}
 	if e.Machine.ChromePWAs {
 		baselines = append(baselines, baselineStep{chromePWAsID, chromePWAsName, e.Bidir.MarkChromePWAsIfCurrent})
-	}
-	if e.Machine.Dock {
-		baselines = append(baselines, baselineStep{dockID, dockName, e.Bidir.MarkDockIfCurrent})
 	}
 	for _, baseline := range baselines {
 		if err := baseline.mark(); err != nil && converged[baseline.id] {
@@ -296,7 +300,7 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 	return nil
 }
 
-func (e Applier) applyMise() error {
+func (e Applier) prepareMise() error {
 	if err := ensureTestedMise(e.Mise, e.InstallMise); err != nil {
 		return err
 	}
@@ -314,7 +318,7 @@ func (e Applier) applyMise() error {
 	if len(e.Machine.RepositoryHooks) > 0 {
 		live.Environment = append(live.Environment, repositoryHookTemplateEnvironment(e.Paths)...)
 	}
-	if err := live.Command("mise", "bootstrap", "--yes", "--skip-dirty"); err != nil {
+	if err := live.Command("mise", "bootstrap", "--yes", "--skip-dirty", "--skip", "macos-defaults,task,final-hook"); err != nil {
 		return err
 	}
 	if len(e.Machine.RepositoryHooks) > 0 {
@@ -326,89 +330,7 @@ func (e Applier) applyMise() error {
 			e.Log.OK(FormatCount(changed, "hook copy refreshed", "hook copies refreshed"))
 		}
 	}
-	e.Log.OK("mise bootstrap state current")
-	return nil
-}
-
-func (e Applier) reconcileDock(action Action) error {
-	switch action {
-	case Capture:
-		if err := e.Bidir.CaptureDock(); err != nil {
-			return err
-		}
-		e.Log.OK("live layout captured")
-		return nil
-	case Apply:
-		return e.applyDock()
-	default:
-		return nil
-	}
-}
-
-func (e Applier) applyDock() error {
-	_, all, _, hasSaved, err := e.Bidir.dockSaved()
-	if err != nil {
-		return err
-	}
-	if !hasSaved {
-		return advisoryError{"no saved Dock layout; Dock left untouched"}
-	}
-	for _, app := range all {
-		if info, statErr := os.Stat(app); statErr != nil || !info.IsDir() {
-			return advisoryError{fmt.Sprintf("%s is unavailable; Dock left untouched", filepath.Base(app))}
-		}
-	}
-	store := e.Bidir.Dock
-	original, err := store.Read()
-	if err != nil {
-		return fmt.Errorf("read Dock layout: %w", err)
-	}
-	liveApps := dockAppPaths(original)
-	if slices.Equal(all, liveApps) {
-		// The domain can match while the running Dock does not, because a
-		// previous run was killed between the write and the restart. Nothing
-		// else would ever notice: the layout is current, so there is no work
-		// left for a later apply to find.
-		if markerSet(e.Paths, dockRestartMarker) {
-			if err := e.Live.Command("killall", "Dock"); err != nil {
-				return fmt.Errorf("restart Dock: %w", err)
-			}
-			clearMarker(e.Paths, dockRestartMarker)
-			e.Log.OK("Dock restarted to pick up the saved layout")
-			return nil
-		}
-		e.Log.OK("layout already current")
-		return nil
-	}
-	updated, err := reconcileDockTiles(original, all)
-	if err != nil {
-		return err
-	}
-	// Record the restart before the write that makes it necessary. A marker
-	// left behind by a failure costs one extra Dock restart; the other order
-	// costs a Dock that never picks up the layout.
-	if err := setMarker(e.Paths, dockRestartMarker); err != nil {
-		return err
-	}
-	if err := store.Write(updated); err != nil {
-		return fmt.Errorf("write Dock layout: %w", err)
-	}
-	verified, err := store.Read()
-	if err != nil {
-		return restoreDockAfterFailure(store, original, fmt.Errorf("read applied Dock layout: %w", err))
-	}
-	if actual := dockAppPaths(verified); !slices.Equal(actual, all) {
-		verification := fmt.Errorf("applied Dock apps are %v; expected %v", actual, all)
-		return restoreDockAfterFailure(store, original, verification)
-	}
-	if opaque := dockOpaqueTiles(verified); !reflect.DeepEqual(opaque, dockOpaqueTiles(original)) {
-		return restoreDockAfterFailure(store, original, errors.New("applied Dock layout changed non-app tiles"))
-	}
-	if err := e.Live.Command("killall", "Dock"); err != nil {
-		return restoreDockAfterFailure(store, original, fmt.Errorf("restart Dock: %w", err))
-	}
-	clearMarker(e.Paths, dockRestartMarker)
-	e.Log.OK("saved layout restored")
+	e.Log.OK("mise tools and resources prepared")
 	return nil
 }
 
@@ -423,4 +345,20 @@ func (e Applier) convergeMacOS() {
 	if err != nil {
 		e.Log.Warn(err.Error())
 	}
+}
+
+// finishMise applies defaults after native app restoration, so Dock declarations
+// can refer to Chrome PWA bundles. Keep the bootstrap task and final hook last.
+func (e Applier) finishMise() error {
+	if err := requireTestedMise(e.Mise); err != nil {
+		return err
+	}
+	if err := requireMiseConfigBinding(e.Paths); err != nil {
+		return err
+	}
+	if err := e.MiseLive.Command("mise", "bootstrap", "--yes", "--only", "macos-defaults,task,final-hook"); err != nil {
+		return err
+	}
+	e.Log.OK("mise defaults and final hooks applied")
+	return nil
 }

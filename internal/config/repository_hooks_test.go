@@ -314,7 +314,7 @@ printf '%s\n%s\n%s\n%s\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_V
 		Paths: fixture.paths, Machine: fixture.machine, Runner: fixture.runner, Mise: fixture.runner,
 		MiseLive: LiveRunner{Stdout: io.Discard, Stderr: io.Discard}, Log: Logger{Out: io.Discard},
 	}
-	if err := applier.applyMise(); err != nil {
+	if err := applier.prepareMise(); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(log)
@@ -322,7 +322,7 @@ printf '%s\n%s\n%s\n%s\n' "$GIT_CONFIG_COUNT" "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_V
 		t.Fatal(err)
 	}
 	want := strings.Join([]string{
-		"1", "init.templateDir", repositoryHookTemplateDir(fixture.paths), "bootstrap --yes --skip-dirty", "",
+		"1", "init.templateDir", repositoryHookTemplateDir(fixture.paths), "bootstrap --yes --skip-dirty --skip macos-defaults,task,final-hook", "",
 	}, "\n")
 	if string(data) != want {
 		t.Fatalf("mise environment = %q, want %q", data, want)

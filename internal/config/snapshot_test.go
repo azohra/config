@@ -237,7 +237,7 @@ func TestSnapshotValidationSkipsLivePlatformResources(t *testing.T) {
 		}
 	}
 	// The resources it does gate on still have to be there.
-	for _, id := range []string{finderFavoritesID, dockID, chromePWAsID, machine.Preferences[0].ID} {
+	for _, id := range []string{finderFavoritesID, chromePWAsID, machine.Preferences[0].ID} {
 		if _, found := report.Resource(id); !found {
 			t.Fatalf("%s is missing from the snapshot gate: %+v", id, report.Resources)
 		}

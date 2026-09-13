@@ -13,7 +13,7 @@ import (
 
 const (
 	MachineKind   = "azohra.config.machine"
-	MachineSchema = 4
+	MachineSchema = 5
 	managedRemote = "origin"
 )
 
@@ -25,7 +25,6 @@ type Machine struct {
 	Mise            bool               `toml:"mise"`
 	AgentSkills     *AgentSkills       `toml:"agent_skills"`
 	MCPServers      *MCPServers        `toml:"mcp_servers"`
-	Dock            bool               `toml:"dock"`
 	ChromePWAs      bool               `toml:"chrome_pwas"`
 	FinderFavorites bool               `toml:"finder_favorites"`
 	RepositoryHooks []RepositoryHook   `toml:"repository_hooks"`
@@ -50,7 +49,7 @@ type MachineMacOS struct {
 // A preference that borrowed one would collide with that capability wherever a
 // report, a selection, or a baseline is keyed by resource id.
 var reservedResourceIDs = []string{
-	miseID, agentSkillsID, mcpServersID, macOSID, dockID, chromePWAsID, finderFavoritesID, repositoryHooksID,
+	miseID, agentSkillsID, mcpServersID, macOSID, chromePWAsID, finderFavoritesID, repositoryHooksID,
 }
 
 var (

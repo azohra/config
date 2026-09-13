@@ -128,7 +128,7 @@ it stages, and the next run sweeps it.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
-capabilities. A capability is absent unless schema 4 declares it. The document
+capabilities. A capability is absent unless schema 5 declares it. The document
 opts into a capability and supplies personal values or payloads; Config owns
 where and how those declarations converge.
 
@@ -229,8 +229,19 @@ linking it to the machine declarations; a foreign file, directory, or symlink
 is reported and preserved. Config then delegates machine convergence with:
 
 ```text
-mise bootstrap --yes --skip-dirty
+mise bootstrap --yes --skip-dirty --skip macos-defaults,task,final-hook
 ```
+
+After restoring native resources, Config finishes the Mise resource with:
+
+```text
+mise bootstrap --yes --only macos-defaults,task,final-hook
+```
+
+This keeps defaults after Chrome PWA restoration: a fresh machine needs its app
+bundles before mise can pin them. Bootstrap checkpoints preparation and defaults
+separately, so a missing app leaves defaults pending without repeating successful
+setup. The bootstrap task and final hook run after defaults.
 
 Applying agent skills asks the pinned npx adapter for one global inventory that
 includes every installed agent placement. An existing skill from the declared
@@ -303,7 +314,7 @@ redirect is reported and preserved. Config resolves common directories through
 Git, so linked worktrees share the same hook without a path back into the
 machine repository.
 
-Finder Favorites, Dock, and Chrome PWAs use three-way reconciliation:
+Finder Favorites and Chrome PWAs use three-way reconciliation:
 
 ```text
 saved snapshot + live state + last agreement -> current, saved changed,
@@ -319,20 +330,16 @@ move desired entries before removing extras, and restores the original layout
 if the result cannot be verified. Config loads the API at runtime and
 reports the resource unavailable if macOS no longer exposes it.
 
-Each side reduces to the fact Config tracks before it is compared: the apps
-in the Dock, the PWAs installed, and the ordered path-backed Finder Favorites.
+Each side reduces to the fact Config tracks before it is compared: the PWAs
+installed and the ordered path-backed Finder Favorites.
 A PWA's name, URL, icon, and schemes are
 kept because a restore rebuilds the bundle from them, but Chrome owns that
 content and rewrites it on its own schedule, so comparing it would report
 Chrome's churn as a choice.
 
-Dock inspection exports the current user's `com.apple.dock` domain and decodes
-`persistent-apps` without writing. Restore reorders only application tiles,
-reuses their complete existing dictionaries, and carries non-app tiles through
-unchanged. Missing applications receive a minimal file tile with a unique
-identifier. Config writes only the `persistent-apps` key, rereads its app paths,
-and restores the original key when verification fails. The Dock restarts once,
-after a verified change.
+Dock applications belong to native mise declarations. Config does not capture,
+compare, or write Dock tiles. The Mise resource applies the ordered `apps` list,
+and any post-defaults restart hook is machine policy.
 
 Baselines live outside the repository under `~/.cache/config/state`, and are
 written only when saved and live state agree. That path comes from the home
