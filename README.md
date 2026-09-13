@@ -339,13 +339,15 @@ For implementation details and trust boundaries, see
 
 ## Publishing a release
 
-release-drafter keeps one draft release on GitHub. Labels derived from the
-Conventional title group features under Added and fixes under Fixed. `feat`
-advances the minor version and `fix` advances the patch.
+release-drafter keeps one draft release on GitHub. The `skip-changelog` label
+excludes a pull request from both release notes and version calculation,
+including titles with a `!` marker. `build`, `chore`, `ci`, `docs`, `style`
+and `test` titles receive that label automatically; it can also exclude other
+changes that do not belong in the installed application's release.
 
-Non-breaking `build`, `chore`, `ci`, `docs`, `style` and `test` titles stay out
-of the draft. A `!` breaking marker always keeps the change in the notes,
-regardless of its type, and advances the minor version while below v1.
+For included changes, labels group features under Added and fixes under Fixed.
+`feat` advances the minor version, `fix` advances the patch, and a `!` breaking
+marker advances the minor version while below v1. Exclusion is decided first.
 Moving to v1 is an explicit decision. Change the breaking version resolver to
 `major` in `.github/release-drafter.yml` when making that transition.
 
