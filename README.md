@@ -339,24 +339,26 @@ For implementation details and trust boundaries, see
 
 ## Publishing a release
 
-The PR title and body become the squash commit and the release notes.
-`mise run changelog -- --json` exports structured history; `mise.toml` names the
-shared git-cliff config.
+release-drafter keeps one draft release on GitHub. Every merge to main adds the
+pull request's title under Added or Fixed, from labels the Conventional title
+sets on its own, and resolves the next version: a breaking title is a major,
+`feat` a minor, `fix` a patch. `build`, `chore`, `ci`, `docs`, `style` and
+`test` titles stay out of the draft. The draft is the answer to "what is
+unreleased", and editing it is where release notes get written. Before v1.0.0,
+moving to v1.0.0 is an explicit decision, not a computed one.
 
-Run `mise run release` from clean, current main, or dispatch the Release workflow.
-Git-cliff derives the next version from Conventional commits since the previous
-release. The task publishes an Apple Silicon archive containing Config and its
-licence material, plus checksums, a matching tag and generated release notes.
-Intel Macs are no longer supported.
+Publishing the draft creates the tag. That runs the Release workflow, which is
+`mise run release`: goreleaser builds the Apple Silicon archive with the
+version from the tag, bundles the licence material, writes `checksums.txt`,
+attaches them to the release, and opens a pull request in homebrew-tools with
+the generated cask using a token minted from the Bosun app. Assets appear a
+minute or two after publishing; if the build fails, the release returns to
+draft so the previous one stays latest. Intel Macs are not supported.
 
-Before v1.0.0, breaking changes increment the minor version. Moving to v1.0.0
-is an explicit stability decision.
-Use `mise run changelog` to view the accumulated change history.
-The preset is fetched for every invocation, including version calculation.
-
-Pull requests run the checks and build release assets. Main requires passing
-checks against the current base, so merging does not repeat that work.
+`mise run dist` runs the same build as a snapshot on every pull request.
+`mise run changelog` renders the history from the shared git-cliff config.
 
 Config downloads releases over HTTPS through mise, which verifies GitHub's asset
 digest. It checks the executable's version before installation and refuses a
 downgrade. Releases do not require attestations.
+

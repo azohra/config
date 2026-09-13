@@ -2,6 +2,7 @@
 
 /.build/
 /dist/
+/third-party-licenses/
 
 /mise.local.toml
 mise*.lock

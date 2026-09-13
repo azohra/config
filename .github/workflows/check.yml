@@ -2,6 +2,8 @@ name: Check
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -9,7 +11,7 @@ permissions:
 
 concurrency:
   group: check-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -42,14 +44,30 @@ jobs:
           key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-${{ hashFiles('go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}-
+      # mise's task artifact cache: a task whose inputs match an entry replays
+      # instead of running. Pull requests read what main has proven; only main
+      # writes, so a pull request can never seed an entry main relies on.
+      - id: task-cache
+        run: echo "dir=$(mise cache path)/task-artifacts" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ steps.task-cache.outputs.dir }}
+          key: mise-tasks-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            mise-tasks-${{ runner.os }}-${{ runner.arch }}-
       - name: Check
         run: mise run check
-      - name: Build release assets
-        if: runner.os == 'macOS'
-        run: mise run build:dist
+      - name: Release snapshot
+        if: runner.os == 'Linux'
+        run: mise run dist
       - name: Finder Favorites canary
         if: runner.os == 'macOS'
         run: mise run check:darwin-native
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ steps.task-cache.outputs.dir }}
+          key: mise-tasks-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
   required-check:
     name: Check

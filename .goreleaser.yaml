@@ -1,0 +1,65 @@
+version: 2
+project_name: config
+
+before:
+  hooks:
+    - rm -rf third-party-licenses
+    - go-licenses save ./cmd/config --ignore github.com/azohra/config --save_path third-party-licenses
+
+builds:
+  - main: ./cmd/config
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
+    goos: [darwin]
+    goarch: [arm64]
+
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - third-party-licenses/**
+
+checksum:
+  name_template: checksums.txt
+
+# goreleaser opens the cask update as a pull request in homebrew-tools, whose
+# own checks gate it. The token is minted per run from the Bosun app.
+homebrew_casks:
+  - name: config
+    repository:
+      owner: azohra
+      name: homebrew-tools
+      token: "{{ .Env.HOMEBREW_TOOLS_TOKEN }}"
+      branch: "config-{{ .Version }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: azohra
+          name: homebrew-tools
+          branch: main
+    directory: Casks
+    commit_author:
+      name: azohra-bosun[bot]
+      email: 325107280+azohra-bosun[bot]@users.noreply.github.com
+    commit_msg_template: "chore(deps): update config to {{ .Tag }}"
+    homepage: https://github.com/azohra/config
+    description: Converge machine configuration from a Git repository
+    binaries:
+      - config
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/config"]
+
+# Notes come from the draft release-drafter kept; goreleaser attaches the
+# artifacts to the release the published draft became.
+release:
+  use_existing_draft: true
+  mode: keep-existing
+
+changelog:
+  disable: true

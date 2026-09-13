@@ -4,6 +4,25 @@
 # anything. Move this line, the workflow pins, and testedMiseVersion together.
 min_version = "2026.9.5"
 
+[settings]
+# The task artifact cache: a task whose inputs are unchanged replays its
+# result instead of running again, on a laptop and on a runner alike.
+experimental = true
+
+# Every Go file is the program; bootstrap.sh and site/ are the site. A file
+# that belongs to neither invalidates neither. The platform is part of every
+# key, because the checks run on two of them.
+[task_config]
+global_inputs = ["mise.toml"]
+
+[task_config.cache]
+enabled = true
+command_inputs = ["uname -sm"]
+
+[task_config.input_groups]
+go = ["**/*.go", "go.mod", "go.sum"]
+site = ["bootstrap.sh", "site/**", "!site/.wrangler/**"]
+
 [vars]
 changelog_config = "https://gist.githubusercontent.com/azohra/2bf7f60736469fa8a81ffcb67214e572/raw/cliff.toml"
 
@@ -11,6 +30,7 @@ changelog_config = "https://gist.githubusercontent.com/azohra/2bf7f60736469fa8a8
 go = "1.27.1"
 git-cliff = "2.14.1"
 gitleaks = "8.30.0"
+goreleaser = "2.18.1"
 node = "24"
 shellcheck = "0.11.0"
 wrangler = "4.129.0"
@@ -24,16 +44,19 @@ run = "gofmt -w cmd internal"
 [tasks.build]
 description = "Build Config for the current platform"
 run = "mkdir -p .build && go build -trimpath -o .build/config ./cmd/config"
-sources = ["go.mod", "go.sum", "cmd/**/*.go", "internal/**/*.go"]
+sources = ["@group:go"]
 outputs = [".build/config"]
 
 [tasks."test:site"]
 description = "Lint and prove the bootstrap script"
+sources = ["@group:site"]
+outputs = []
 run = "bash -n bootstrap.sh && shellcheck -s bash bootstrap.sh && node --test site/bootstrap.test.mjs"
 
-[tasks.check]
-description = "Prove formatting, behavior, dependencies, and repository safety"
-depends = ["test:site"]
+[tasks."check:go"]
+description = "Formatting, vet and the race-detected test suite"
+sources = ["@group:go"]
+outputs = []
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -41,14 +64,29 @@ unformatted=$(gofmt -l cmd internal)
 [[ -z $unformatted ]] || { printf 'Run gofmt on:\n%s\n' "$unformatted" >&2; exit 1; }
 go vet ./...
 go test -race ./...
-govulncheck ./...
-go mod verify
+"""
+
+# Reads the vulnerability database of the day; never cached.
+[tasks."check:deps"]
+description = "Known vulnerabilities and module integrity"
+run = "govulncheck ./... && go mod verify"
+
+# Reads the whole history; never cached.
+[tasks."check:secrets"]
+description = "No secret in the tree or anywhere in history"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
 gitleaks dir --no-banner --redact .
 # gitleaks dir reads the working tree, and gitleaks git scans nothing at all
 # from a worktree, where .git is a file. History is permanent, so it is scanned
 # from the log itself.
 git log --all -p | gitleaks stdin --no-banner --redact
 """
+
+[tasks.check]
+description = "The definition of green"
+depends = ["check:go", "check:deps", "check:secrets", "test:site"]
 
 [tasks."check:darwin-native"]
 description = "Read Finder Favorites through the native macOS integration"
@@ -85,25 +123,12 @@ passed=$(grep -c -- '--- PASS: TestChromePWA' <<<"$output" || true)
 }
 """
 
-[tasks."build:dist"]
-description = "Build the Apple Silicon archive and checksums"
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-version="${RELEASE_VERSION:-v0.0.0-dev}"
-rm -rf dist
-mkdir -p dist/package
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-  go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$version" \
-  -o dist/package/config ./cmd/config
-cp LICENSE dist/package/
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
-  go-licenses save ./cmd/config --ignore github.com/azohra/config \
-    --save_path dist/package/third-party-licenses
-COPYFILE_DISABLE=1 tar -czf dist/config_darwin_arm64.tar.gz \
-  -C dist/package config LICENSE third-party-licenses
-(cd dist && shasum -a 256 config_darwin_arm64.tar.gz > checksums.txt)
-'''
+[tasks.dist]
+description = "Build the release archive, checksums and cask into dist/ without publishing"
+sources = ["@group:go", ".goreleaser.yaml", "LICENSE"]
+outputs = []
+env = { HOMEBREW_TOOLS_TOKEN = "snapshot" }
+run = "goreleaser release --snapshot --clean"
 
 [tasks.changelog]
 description = "Render change history or export structured records"
@@ -118,32 +143,19 @@ git cliff --config-url "{{vars.changelog_config}}"
 '''
 
 [tasks.release]
-description = "Build and publish a release from current main"
-tools = { gh = "2.100.0" }
-run = '''
-#!/usr/bin/env bash
-set -euo pipefail
-[ -z "$(git status --porcelain)" ] || { echo 'release: commit changes first' >&2; exit 1; }
-git fetch -q origin main --tags
-head=$(git rev-parse HEAD)
-[ "$head" = "$(git rev-parse origin/main)" ] || { echo 'release: check out current main first' >&2; exit 1; }
-tag=$(git cliff --config-url "{{vars.changelog_config}}" --offline --unreleased --bumped-version)
-[[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]
-[ "$tag" != "$(git describe --tags --abbrev=0 --match 'v[0-9]*')" ] || { echo 'No new Conventional changes to release'; exit 0; }
-RELEASE_VERSION="$tag" mise run build:dist
-git cliff --config-url "{{vars.changelog_config}}" --unreleased --tag "$tag" > dist/notes.md
-gh release create "$tag" dist/config_darwin_arm64.tar.gz dist/checksums.txt \
-  --repo azohra/config --target "$head" \
-  --title "Config $tag" --notes-file dist/notes.md
-'''
+description = "Publish the release for the checked-out tag"
+run = "goreleaser release --clean"
 
 [tasks."env:contract"]
 hide = true
 description = "Every variable this repository needs, and whether it is a secret"
 run = """
 cat <<'CONTRACT'
-secret  CLOUDFLARE_API_TOKEN
+secret  BOSUN_PRIVATE_KEY
 secret  CLOUDFLARE_ACCOUNT_ID
+secret  CLOUDFLARE_API_TOKEN
+secret  GITHUB_TOKEN
+value   BOSUN_CLIENT_ID
 CONTRACT
 """
 
