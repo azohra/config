@@ -18,16 +18,20 @@ autolabeler:
       - '/^fix(\(.+\))?!?:/'
   - label: skip-changelog
     title:
-      - '/^(build|chore|ci|docs|style|test)(\(.+\))?!?:/'
+      - '/^(build|chore|ci|docs|style|test)(\(.+\))?:/'
 
 categories:
   - type: pre-exclude
     when:
-      label: skip-changelog
+      conventional:
+        types: [build, chore, ci, docs, style, test]
+        breaking: false
+  # Before v1, breaking changes advance the minor. Switch to major with v1.
   - type: version-resolver
-    semver-increment: major
+    semver-increment: minor
     when:
-      label: breaking
+      conventional:
+        breaking: true
   - title: Added
     semver-increment: minor
     when:

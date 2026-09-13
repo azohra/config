@@ -339,13 +339,17 @@ For implementation details and trust boundaries, see
 
 ## Publishing a release
 
-release-drafter keeps one draft release on GitHub. Every merge to main adds the
-pull request's title under Added or Fixed, from labels the Conventional title
-sets on its own, and resolves the next version: a breaking title is a major,
-`feat` a minor, `fix` a patch. `build`, `chore`, `ci`, `docs`, `style` and
-`test` titles stay out of the draft. The draft is the answer to "what is
-unreleased", and editing it is where release notes get written. Before v1.0.0,
-moving to v1.0.0 is an explicit decision, not a computed one.
+release-drafter keeps one draft release on GitHub. Labels derived from the
+Conventional title group features under Added and fixes under Fixed. `feat`
+advances the minor version and `fix` advances the patch.
+
+Non-breaking `build`, `chore`, `ci`, `docs`, `style` and `test` titles stay out
+of the draft. A `!` breaking marker always keeps the change in the notes,
+regardless of its type, and advances the minor version while below v1.
+Moving to v1 is an explicit decision. Change the breaking version resolver to
+`major` in `.github/release-drafter.yml` when making that transition.
+
+The draft records what is unreleased and is where release notes are edited.
 
 Publishing the draft creates the tag. That runs the Release workflow, which is
 `mise run release`: goreleaser builds the Apple Silicon archive with the
