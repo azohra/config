@@ -354,13 +354,14 @@ func TestMisePhasesCoverEveryBootstrapPhase(t *testing.T) {
 }
 
 func TestTestedMiseVersionIsTheOnlyOneTheRepositoryNames(t *testing.T) {
-	// The version Config accepts at runtime is restated by hand in the
-	// workflows and the README. Nothing proved they agree, and they drift.
+	// The version Config accepts at runtime is restated in the workflows,
+	// README and CLI fixtures. Keep every consumer on the tested release.
 	for _, file := range []string{
 		"../../.github/workflows/check.yml",
 		"../../.github/workflows/release.yml",
 		"../../.github/workflows/deploy.yml",
 		"../../README.md",
+		"../../cmd/config/main_test.go",
 	} {
 		data, err := os.ReadFile(file)
 		if err != nil {

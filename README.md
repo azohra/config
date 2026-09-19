@@ -110,7 +110,7 @@ setting it could not read rather than writing over it.
 Current-host tap-to-click and Spotlight shortcuts now belong in native Mise
 configuration. Remove `macos.current_host_tap_to_click` and `[macos.spotlight]`
 from `config.toml`, enable `mise = true`, and move their values into
-`mise/conf.d/macos.toml` using the tested mise 2026.9.6 release:
+`mise/conf.d/macos.toml` using the tested mise 2026.9.11 release:
 
 ```toml
 [[bootstrap.macos.defaults_entries]]
@@ -141,7 +141,7 @@ Mise resource; without it Config neither inspects nor installs Mise. Mise keeps
 its native syntax under `mise/`:
 
 ```toml
-min_version = "2026.9.6"
+min_version = "2026.9.11"
 
 [tools]
 node = "24"
