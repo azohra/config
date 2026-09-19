@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -49,8 +51,7 @@ func macOSFacts(machine Machine) []setupFact {
 				if err != nil {
 					return false, err
 				}
-				normalized := strings.Join(strings.Fields(mapping), "")
-				return normalized == "()" || normalized == "(null)", nil
+				return userKeyMappingClear(mapping), nil
 			},
 			fix: func(e Applier) error {
 				return e.Live.Command("hidutil", "property", "--set", `{"UserKeyMapping":[]}`)
@@ -58,6 +59,34 @@ func macOSFacts(machine Machine) []setupFact {
 		})
 	}
 	return facts
+}
+
+// hidutil reports either one value or a table of per-device values.
+func userKeyMappingClear(output string) bool {
+	fields := strings.Fields(output)
+	if len(fields) < 3 || !slices.Equal(fields[:3], []string{"RegistryID", "Key", "Value"}) {
+		value := strings.Join(fields, "")
+		return value == "()" || value == "(null)"
+	}
+	fields = fields[3:]
+	for len(fields) > 0 {
+		if len(fields) < 3 || fields[1] != "UserKeyMapping" {
+			return false
+		}
+		if _, err := strconv.ParseUint(fields[0], 16, 64); err != nil {
+			return false
+		}
+		fields = fields[2:]
+		switch {
+		case fields[0] == "()" || fields[0] == "(null)":
+			fields = fields[1:]
+		case len(fields) >= 2 && fields[0] == "(" && fields[1] == ")":
+			fields = fields[2:]
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func setupChecks(paths Paths, runner Runner, facts []setupFact) []Check {
