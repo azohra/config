@@ -87,6 +87,36 @@ func TestConvergeClearsHardwareKeyMapping(t *testing.T) {
 	}
 }
 
+func TestHardwareKeyMappingReadsEveryDevice(t *testing.T) {
+	for _, test := range []struct {
+		name, output string
+		clear        bool
+	}{
+		{"legacy empty", "(\n)", true},
+		{"legacy unset", "(null)", true},
+		{"empty devices", "RegistryID Key Value\n100000abc UserKeyMapping (\n)\n100000def UserKeyMapping (null)", true},
+		{"mapped later device", "RegistryID Key Value\n100000abc UserKeyMapping ()\n100000def UserKeyMapping ( { HIDKeyboardModifierMappingSrc = 30064771129; HIDKeyboardModifierMappingDst = 30064771113; } )", false},
+		{"incomplete device", "RegistryID Key Value\n100000abc UserKeyMapping (", false},
+		{"unrecognized output", "property unavailable", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := userKeyMappingClear(test.output); got != test.clear {
+				t.Fatalf("clear = %v, want %v", got, test.clear)
+			}
+		})
+	}
+}
+
+func TestConvergeLeavesEmptyDeviceMappingsAlone(t *testing.T) {
+	applier, commands := setupFixture(t, setupRunner{answers: map[string]string{
+		"hidutil": "RegistryID Key Value\n100000abc UserKeyMapping (\n)\n100000def UserKeyMapping (null)",
+	}})
+	changed, err := applier.converge(macOSFacts(applier.Machine))
+	if err != nil || changed != 0 || len(commands()) != 0 {
+		t.Fatalf("empty mappings changed: %d, %v, %v", changed, err, commands())
+	}
+}
+
 func TestMacOSFactsDoNotDependOnMise(t *testing.T) {
 	// Hardware key mapping uses hidutil independently of Mise.
 	paths := testPaths(t)
