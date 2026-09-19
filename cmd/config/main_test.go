@@ -201,7 +201,7 @@ func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
 	binary, home := buildConfigVersion(t, "v0.4.0"), t.TempDir()
 	writeMainTestReleaseMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.9.6\n'
+  printf '2026.9.11\n'
   exit 0
 fi
 exit 1
@@ -277,7 +277,7 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	}
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
-if [ "$1" = --version ]; then printf '2026.9.6\n'; fi
+if [ "$1" = --version ]; then printf '2026.9.11\n'; fi
 if [ "$1" = outdated ]; then printf '{}\n'; fi
 if [ "$1 $2 $3" = "bootstrap packages status" ]; then printf '{"brew":{"packages":[{}]}}\n'; fi
 `
@@ -344,7 +344,7 @@ func TestBootstrapInstallsTheCommandBeforeAResourceFailure(t *testing.T) {
 	binary, home := buildConfig(t), t.TempDir()
 	writeMainTestMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.9.6\n'
+  printf '2026.9.11\n'
   exit 0
 fi
 exit 1
