@@ -297,60 +297,75 @@ func TestMisePhasesCoverEveryBootstrapPhase(t *testing.T) {
 		t.Fatalf("this guard needs mise %s on PATH, but found %s; the toolchain pin and testedMiseVersion have drifted apart",
 			testedMiseVersion, found)
 	}
-	help, err := exec.Command(mise, "bootstrap", "--help").CombinedOutput()
-	if err != nil {
-		t.Fatalf("mise bootstrap --help: %v\n%s", err, help)
-	}
-	commands, inCommands := map[string]bool{}, false
-	for _, line := range strings.Split(string(help), "\n") {
-		if strings.HasPrefix(line, "Commands:") {
-			inCommands = true
-			continue
+	// Walk command groups until their status verb covers the whole group.
+	// macos has nested phases; checking only its top-level name misses additions.
+	offered := map[string]bool{}
+	var visit func([]string)
+	visit = func(path []string) {
+		args := append([]string{"bootstrap"}, path...)
+		help, err := exec.Command(mise, append(args, "--help")...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("mise %s --help: %v\n%s", strings.Join(args, " "), err, help)
 		}
-		if inCommands {
-			if strings.HasPrefix(line, "Flags:") || strings.HasPrefix(line, "Global flags:") {
-				break
+		commands := miseHelpCommands(string(help))
+		if len(path) > 0 && slices.Contains(commands, "status") {
+			offered[strings.Join(path, " ")] = true
+			return
+		}
+		for _, command := range commands {
+			if command == "help" || command == "status" {
+				continue
 			}
-			fields := strings.Fields(line)
-			// A description continues on its own indented line; only a line
-			// whose first field is flush with the command column names one.
-			if len(fields) > 1 && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "     ") {
-				commands[fields[0]] = true
+			// Config manages the local Mac. Remote hosts and Linux resources
+			// are separate mise capabilities, not missing Mac status probes.
+			if len(path) == 0 && (command == "remote" || command == "linux") {
+				continue
 			}
+			visit(append(slices.Clone(path), command))
 		}
 	}
-	if len(commands) == 0 {
-		t.Fatalf("no bootstrap subcommands parsed from:\n%s", help)
+	visit(nil)
+	if len(offered) == 0 {
+		t.Fatal("no bootstrap status commands discovered")
 	}
 
 	covered := map[string]bool{"repos": true}
 	for _, phase := range misePhases {
-		covered[phase[0]] = true
+		covered[strings.Join(phase, " ")] = true
 	}
-	for command := range commands {
-		if covered[command] || command == "help" {
-			continue
+	for phase := range offered {
+		if !covered[phase] {
+			t.Errorf("mise bootstrap %s offers a status verb that misePhases does not cover", phase)
 		}
-		// A command that takes arguments swallows "status" instead of
-		// running it, so only a real status verb names itself in its usage.
-		usage, err := exec.Command(mise, "bootstrap", command, "status", "--help").CombinedOutput()
-		if err != nil || !strings.Contains(string(usage), "Usage: mise bootstrap "+command+" status") {
-			continue
-		}
-		t.Errorf("mise bootstrap %s offers a status verb that misePhases does not cover", command)
 	}
+	for phase := range covered {
+		if !offered[phase] {
+			t.Errorf("Config probes %q, which mise %s no longer offers", phase, testedMiseVersion)
+		}
+	}
+}
 
-	// The other direction. Covering what mise offers still holds when mise
-	// removes or renames a phase, and Config would go on asking for one that
-	// no longer exists.
-	for _, phase := range misePhases {
-		if !commands[phase[0]] {
-			t.Errorf("misePhases names %q, which mise %s no longer offers", phase[0], testedMiseVersion)
+func miseHelpCommands(help string) []string {
+	var commands []string
+	inCommands := false
+	for _, line := range strings.Split(help, "\n") {
+		if line == "Commands:" {
+			inCommands = true
+			continue
+		}
+		if !inCommands {
+			continue
+		}
+		if strings.HasPrefix(line, "Flags:") || strings.HasPrefix(line, "Global flags:") {
+			break
+		}
+		fields := strings.Fields(line)
+		// Description continuations are indented beyond the command column.
+		if len(fields) > 1 && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "     ") {
+			commands = append(commands, fields[0])
 		}
 	}
-	if !commands["repos"] {
-		t.Errorf("mise %s no longer offers the repos phase Config probes itself", testedMiseVersion)
-	}
+	return commands
 }
 
 func TestTestedMiseVersionIsTheOnlyOneTheRepositoryNames(t *testing.T) {

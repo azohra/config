@@ -324,11 +324,12 @@ stays untouched; Config-owned cleanup still proceeds. Config deletes only
 artifacts whose ownership it can prove: unchanged agent-skill placements, MCP
 server entries it wrote and no longer declares, unchanged hook copies,
 baselines for disabled capabilities, and completed
-restore records from older managed checkouts. It also reclaims the Homebrew
-installers Mise leaves cached for thirty days, reporting the bytes each holds
-first. Ambiguous items stay put. A terminal asks for
-confirmation; redirected output remains preview-only unless `--yes` is
-explicit. The plan is recomputed before the first write.
+restore records from older managed checkouts. Mise owns its cache retention
+and automatically expires unused entries according to `cache_prune_age`, which
+defaults to thirty days. Config leaves those caches alone, including recent
+Homebrew downloads that can speed up another install. Ambiguous items stay put.
+A terminal asks for confirmation; redirected output remains preview-only unless
+`--yes` is explicit. The plan is recomputed before the first write.
 
 Snapshot saves stage the whole managed repository, use the fixed commit subject
 `Update machine snapshot`, honor repository hooks, and push only to the

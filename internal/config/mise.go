@@ -88,8 +88,8 @@ func supportsTestedMise(version string) bool {
 // which costs a round trip each and belongs to the repository update scope.
 // Config asks for the rest by name and checks repository presence itself.
 //
-// TestMisePhasesCoverEveryBootstrapPhase pins this list to what mise offers,
-// so a phase added upstream fails the build instead of going unreported.
+// TestMisePhasesCoverEveryBootstrapPhase compares this list with mise's local
+// Mac status commands, including nested phases added upstream.
 var misePhases = [][]string{
 	{"accounts"},
 	{"compose"},
