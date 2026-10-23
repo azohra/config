@@ -27,7 +27,7 @@ site = ["bootstrap.sh", "site/**", "!site/.wrangler/**"]
 changelog_config = "https://raw.githubusercontent.com/azohra/.github/main/cliff.toml"
 
 [tools]
-go = "1.27.1"
+go = "1.27.3"
 git-cliff = "2.14.1"
 gitleaks = "8.30.0"
 goreleaser = "2.18.1"
