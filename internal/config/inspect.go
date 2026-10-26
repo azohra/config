@@ -127,8 +127,8 @@ func (i Inspector) bootstrapChecks() []Check {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			args := append(append([]string{"bootstrap"}, phase...), "status", "--missing")
-			outcomes[index] = outcome{strings.Join(phase, " "), run(i.miseRunner(), "mise", args...)}
+			args := append(slices.Clone(phase), "status", "--missing")
+			outcomes[index] = outcome{misePhaseName(phase), run(i.miseRunner(), "mise", args...)}
 		}()
 	}
 	wg.Wait()

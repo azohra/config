@@ -235,7 +235,7 @@ func TestMiseRunnerAndOrdinaryMiseReadTheSameGlobalConfiguration(t *testing.T) {
 		if len(checks) != 1 || checks[0].OK || checks[0].Detail != "dotfiles" {
 			t.Fatalf("expected only dotfile drift before apply: %+v", checks)
 		}
-		if applied := run(runner, "mise", "bootstrap", "dotfiles", "apply", "--yes"); applied.Err != nil {
+		if applied := run(runner, "mise", "dotfiles", "apply", "--yes"); applied.Err != nil {
 			t.Fatal(applied.Failure())
 		}
 		actual, err := os.ReadFile(paths.InHome(".config", "config-contract"))
