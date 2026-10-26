@@ -86,8 +86,8 @@ func (r *miseStubRunner) Run(_ context.Context, name string, args ...string) Res
 			return Result{Err: exec.Command("/usr/bin/false").Run()}
 		}
 		return Result{Stdout: origin + "\n"}
-	case name == "mise" && len(args) > 2 && args[0] == "bootstrap" && args[len(args)-2] == "status":
-		return r.phase[strings.Join(args[1:len(args)-2], " ")]
+	case name == "mise" && len(args) > 2 && args[len(args)-2] == "status":
+		return r.phase[misePhaseName(args[:len(args)-2])]
 	default:
 		return Result{Err: fmt.Errorf("unexpected command: %s %v", name, args)}
 	}
@@ -331,7 +331,16 @@ func TestMisePhasesCoverEveryBootstrapPhase(t *testing.T) {
 
 	covered := map[string]bool{"repos": true}
 	for _, phase := range misePhases {
-		covered[strings.Join(phase, " ")] = true
+		if phase[0] == "bootstrap" {
+			covered[misePhaseName(phase)] = true
+			continue
+		}
+		// A probe outside bootstrap is not in its listing; ask for it directly.
+		args := append(slices.Clone(phase), "status", "--help")
+		if help, err := exec.Command(mise, args...).CombinedOutput(); err != nil {
+			t.Errorf("Config probes %q, which mise %s no longer offers: %v\n%s",
+				strings.Join(phase, " "), testedMiseVersion, err, help)
+		}
 	}
 	for phase := range offered {
 		if !covered[phase] {
@@ -477,7 +486,7 @@ func TestAnUnreadableMachineDocumentIsNamedOnceNotAsPhaseDrift(t *testing.T) {
 	failure := pruneExitError(t)
 	runner := &miseStubRunner{documentErr: failure, phase: map[string]Result{}}
 	for _, phase := range misePhases {
-		runner.phase[phase[0]] = Result{Err: failure}
+		runner.phase[misePhaseName(phase)] = Result{Err: failure}
 	}
 	checks := miseChecks(t, Inspector{Paths: testPaths(t), Machine: testMachine(), Runner: runner})
 
@@ -490,7 +499,7 @@ func TestAnUnreadableMachineDocumentIsNamedOnceNotAsPhaseDrift(t *testing.T) {
 			}
 		}
 		for _, phase := range misePhases {
-			if strings.Contains(check.Label, phase[0]) {
+			if strings.Contains(check.Label, misePhaseName(phase)) {
 				t.Errorf("an unreadable document was reported as %q", check.Label)
 			}
 		}

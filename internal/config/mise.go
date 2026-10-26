@@ -14,7 +14,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const testedMiseVersion = "2026.9.11"
+const testedMiseVersion = "2026.10.18"
 
 const (
 	miseID   = "mise"
@@ -82,28 +82,35 @@ func supportsTestedMise(version string) bool {
 	return version == testedMiseVersion
 }
 
-// misePhases are the bootstrap categories Config probes. mise offers no way
-// to ask for the aggregate without repos, and repos is the one phase that
-// reaches the network: it answers whether a checkout matches its remote,
-// which costs a round trip each and belongs to the repository update scope.
-// Config asks for the rest by name and checks repository presence itself.
+// misePhases are the mise commands whose status Config probes, one per
+// bootstrap phase. mise offers no way to ask for the aggregate without repos,
+// and repos is the one phase that reaches the network: it answers whether a
+// checkout matches its remote, which costs a round trip each and belongs to
+// the repository update scope. Config asks for the rest by name and checks
+// repository presence itself. Dotfiles is still a bootstrap phase, but its
+// status lives under `mise dotfiles`, not `mise bootstrap`.
 //
 // TestMisePhasesCoverEveryBootstrapPhase compares this list with mise's local
 // Mac status commands, including nested phases added upstream.
 var misePhases = [][]string{
-	{"accounts"},
-	{"compose"},
+	{"bootstrap", "accounts"},
+	{"bootstrap", "compose"},
 	{"dotfiles"},
-	{"files"},
-	{"firewall"},
-	{"mise-shell-activate"},
-	{"packages"},
-	{"plugins"},
-	{"secrets"},
-	{"services"},
-	{"user"},
-	{"macos", "defaults"},
-	{"macos", "launchd-agents"},
+	{"bootstrap", "files"},
+	{"bootstrap", "firewall"},
+	{"bootstrap", "mise-shell-activate"},
+	{"bootstrap", "packages"},
+	{"bootstrap", "plugins"},
+	{"bootstrap", "secrets"},
+	{"bootstrap", "services"},
+	{"bootstrap", "user"},
+	{"bootstrap", "macos", "defaults"},
+	{"bootstrap", "macos", "launchd-agents"},
+}
+
+// misePhaseName names a probed phase the way bootstrap names its parts.
+func misePhaseName(phase []string) string {
+	return strings.TrimPrefix(strings.Join(phase, " "), "bootstrap ")
 }
 
 // miseRepository is one checkout mise declares: where it belongs, and which
