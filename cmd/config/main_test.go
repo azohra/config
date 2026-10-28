@@ -46,7 +46,7 @@ func fixtureHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	document := `kind = "azohra.config.machine"
-schema = 6
+schema = 7
 chrome_pwas = true
 
 [repository]
@@ -391,7 +391,7 @@ exit 1
 	git("config", "user.name", "Config Test")
 	git("config", "user.email", "config@example.invalid")
 	document := `kind = "azohra.config.machine"
-schema = 6
+schema = 7
 chrome_pwas = true
 
 [repository]

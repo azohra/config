@@ -10,16 +10,13 @@ import (
 func validMachineTOML() string {
 	return `
 kind = "azohra.config.machine"
-schema = 6
+schema = 7
 chrome_pwas = true
 finder_favorites = true
 
 [repository]
 branch = "main"
 url = "https://example.com/owner/machine.git"
-
-[macos]
-clear_user_key_mapping = true
 
 [[preferences]]
 id = "example-app"
@@ -62,15 +59,16 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 	}{
 		{"empty contract", "", "kind is"},
 		{"wrong kind", strings.Replace(validMachineTOML(), MachineKind, "another.machine", 1), "kind is"},
-		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 6", "schema = 1", 1), "schema is 1"},
-		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 6", "schema = 2", 1), "schema is 2"},
+		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 7", "schema = 1", 1), "schema is 1"},
+		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 7", "schema = 2", 1), "schema is 2"},
 		{"removed Mise resource", "mise = true\n" + validMachineTOML(), "strict mode"},
 		{"removed skills", validMachineTOML() + "\n[agent_skills]\nagents = [\"codex\"]\n", "strict mode"},
 		{"removed MCP", validMachineTOML() + "\n[mcp_servers]\nagents = [\"codex\"]\n", "strict mode"},
 		{"removed hooks", validMachineTOML() + "\n[[repository_hooks]]\nname = \"post-checkout\"\nsource = \"hook\"\n", "strict mode"},
 		{"removed Dock toggle", "dock = true\n" + validMachineTOML(), "strict mode"},
-		{"previous schema", strings.Replace(validMachineTOML(), "schema = 6", "schema = 4", 1), "schema is 4"},
-		{"unknown field", strings.Replace(validMachineTOML(), "schema = 6", "schema = 6\ntyop = true", 1), "strict mode"},
+		{"previous schema", strings.Replace(validMachineTOML(), "schema = 7", "schema = 6", 1), "schema is 6"},
+		{"removed key mappings", validMachineTOML() + "\n[macos]\nclear_user_key_mapping = true\n", "strict mode"},
+		{"unknown field", strings.Replace(validMachineTOML(), "schema = 7", "schema = 7\ntyop = true", 1), "strict mode"},
 		{"removed singular favorite", strings.Replace(validMachineTOML(), "finder_favorites = true", "[finder_favorite]\nname = \"Machine config\"", 1), "strict mode"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -84,7 +82,7 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 func TestLoadMachineAcceptsOnlyRepositoryIdentity(t *testing.T) {
 	content := `
 kind = "azohra.config.machine"
-schema = 6
+schema = 7
 
 [repository]
 branch = "main"
@@ -105,7 +103,6 @@ func TestUndeclaredCapabilitiesDoNotBecomeResources(t *testing.T) {
 	machine.ChromePWAs = false
 	machine.Preferences = nil
 
-	machine.MacOS = MachineMacOS{}
 	report := NewInspector(testPaths(t), machine, converged{}).Inspect()
 	if len(report.Resources) != 0 {
 		t.Fatalf("undeclared capabilities became resources: %+v", report.Resources)
@@ -156,7 +153,7 @@ func TestLoadMachineRefusesAManagedRootSymlink(t *testing.T) {
 func TestMachineRefusesAPreferenceIdConfigAlreadyAnswersTo(t *testing.T) {
 	// Reports, selections, and baselines are all keyed by resource id, so a
 	// preference borrowing a capability's id collides with that capability.
-	for _, id := range []string{"macos", "chrome-pwas", "finder-favorites"} {
+	for _, id := range []string{"chrome-pwas", "finder-favorites"} {
 		machine := testMachine()
 		machine.Preferences[0].ID = id
 		if err := machine.Validate(); err == nil {
@@ -167,17 +164,5 @@ func TestMachineRefusesAPreferenceIdConfigAlreadyAnswersTo(t *testing.T) {
 	machine.Preferences[0].ID = "example-app"
 	if err := machine.Validate(); err != nil {
 		t.Fatalf("an ordinary preference id was refused: %v", err)
-	}
-}
-
-func TestLoadMachineRejectsPreferencesMovedToMise(t *testing.T) {
-	for _, entry := range []string{
-		"current_host_tap_to_click = true",
-		"[macos.spotlight]\nid = 64\nenabled = false\nparameters = [32, 49, 1048576]\ntype = \"standard\"",
-	} {
-		content := strings.Replace(validMachineTOML(), "clear_user_key_mapping = true", "clear_user_key_mapping = true\n"+entry, 1)
-		if _, err := LoadMachine(writeMachineTOML(t, content)); err == nil {
-			t.Fatalf("removed field accepted: %s", entry)
-		}
 	}
 }

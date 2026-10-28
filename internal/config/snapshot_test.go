@@ -215,43 +215,29 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) Re
 
 func (*recordingRunner) Exists(string) bool { return true }
 
-// Save gates on the resources a snapshot records. Computing live platform
-// resources anyway makes every save wait on probes whose answers are then
-// thrown away.
-func TestSnapshotValidationSkipsLivePlatformResources(t *testing.T) {
+// Inspection covers the saved capabilities without consulting tool inventory.
+func TestInspectionReportsSnapshotResources(t *testing.T) {
 	runner := &recordingRunner{}
 	machine := testMachine()
 	machine.FinderFavorites = true
 	inspector := NewInspector(testPaths(t), machine, runner)
 	inspector.FinderFavorites = &fakeFinderFavorites{}
-	report := inspector.InspectSnapshot()
+	report := inspector.Inspect()
 
-	for _, id := range []string{macOSID} {
-		if _, found := report.Resource(id); found {
-			t.Fatalf("the snapshot gate inspected %s: %+v", id, report.Resources)
-		}
-	}
 	for _, command := range runner.commands {
-		if strings.HasPrefix(command, "mise ") {
-			t.Fatalf("the snapshot gate ran %q", command)
+		if strings.HasPrefix(command, "mise ") || strings.HasPrefix(command, "hidutil ") {
+			t.Fatalf("inspection ran %q", command)
 		}
 	}
 	// The resources it does gate on still have to be there.
 	for _, id := range []string{finderFavoritesID, chromePWAsID, machine.Preferences[0].ID} {
 		if _, found := report.Resource(id); !found {
-			t.Fatalf("%s is missing from the snapshot gate: %+v", id, report.Resources)
-		}
-	}
-	// A full inspection still reports everything.
-	for _, id := range []string{macOSID} {
-		if _, found := inspector.Inspect().Resource(id); !found {
-			t.Fatalf("a full inspection dropped %s", id)
+			t.Fatalf("%s is missing from inspection: %+v", id, report.Resources)
 		}
 	}
 }
 
-// The gate NewSnapshotter installs is the one Save runs, so the choice of
-// inspection has to hold there and not only in InspectSnapshot.
+// The gate NewSnapshotter installs inspects captured state without mise.
 func TestNewSnapshotterGateNeverReachesForMise(t *testing.T) {
 	paths := testPaths(t)
 	canonical := paths.InHome(".local", "bin", "mise")

@@ -22,33 +22,8 @@ func NewInspector(paths Paths, machine Machine, runner Runner) Inspector {
 	}
 }
 
-func yes(label string) Check {
-	return Check{Label: label, OK: true}
-}
-
 func no(label, detail string) Check {
 	return Check{Label: label, Detail: detail}
-}
-
-func authoritativeResource(id, name string, checks []Check) Resource {
-	resource := Resource{ID: id, Name: name, Checks: checks, Authoritative: true}
-	switch {
-	case resource.Failed() > 0:
-		resource.State = Drift
-		resource.Summary = FormatCount(resource.Failed(), "issue", "issues")
-	default:
-		resource.State = Current
-		resource.Summary = FormatCount(len(checks), "check current", "checks current")
-	}
-	if resource.State != Current {
-		resource.Actions = []Action{Apply}
-	}
-	return resource
-}
-
-func (i Inspector) macOS() Resource {
-	return authoritativeResource(macOSID, macOSName,
-		setupChecks(i.Paths, i.Runner, macOSFacts(i.Machine)))
 }
 
 // snapshotStatus is the one derivation of repository snapshot facts; the
@@ -121,26 +96,13 @@ func snapshotPolicyError(paths Paths, machine Machine, runner Runner, status Sna
 	return ""
 }
 
-func (i Inspector) Inspect() Report { return i.inspect(true) }
-
-// InspectSnapshot reports only the resources whose state the repository
-// snapshot records. Save's gate discards authoritative live resources, so a
-// save does not wait for native macOS probes it cannot use.
-func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
-
-func (i Inspector) inspect(allResources bool) Report {
+func (i Inspector) Inspect() Report {
 	bidir := newBidirectional(i.Paths)
-	var macOS, chromePWAs, finderFavorites Resource
+	var chromePWAs, finderFavorites Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
 	tasks := []func(){
 		func() { snapshot = snapshotStatus(i.Paths, i.Machine, i.Runner) },
-	}
-	if allResources {
-		if len(macOSFacts(i.Machine)) > 0 {
-			tasks = append(tasks, func() { macOS = i.macOS() })
-		}
-
 	}
 	if i.Machine.FinderFavorites {
 		store := i.FinderFavorites
@@ -166,12 +128,7 @@ func (i Inspector) inspect(allResources bool) Report {
 		}(task)
 	}
 	wg.Wait()
-	resources := make([]Resource, 0, len(preferences)+6)
-	if allResources {
-		if len(macOSFacts(i.Machine)) > 0 {
-			resources = append(resources, macOS)
-		}
-	}
+	resources := make([]Resource, 0, len(preferences)+2)
 	resources = append(resources, preferences...)
 	if i.Machine.FinderFavorites {
 		resources = append(resources, finderFavorites)

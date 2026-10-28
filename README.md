@@ -1,7 +1,7 @@
 # Config
 
 Config restores and backs up native Mac state from a Git repository: Finder
-Favorites, Chrome PWAs, application preferences and hardware key mappings.
+Favorites, Chrome PWAs and application preferences.
 Mise owns tools, packages, repositories, dotfiles, services and their lifecycle.
 
 You choose the machine repository and keep control of its authentication.
@@ -51,16 +51,13 @@ capability is optional:
 
 ```toml
 kind = "azohra.config.machine"
-schema = 6
+schema = 7
 chrome_pwas = true
 finder_favorites = true
 
 [repository]
 branch = "main"
 url = "https://github.com/owner/machine.git"
-
-[macos]
-clear_user_key_mapping = true
 
 [[preferences]]
 id = "example-app"
@@ -69,9 +66,7 @@ bundle = "com.example.ExampleApp"
 domain = "com.example.ExampleApp"
 ```
 
-The booleans belong before the first TOML table. Hardware key mappings are
-cleared through `hidutil`; omitting that setting leaves the mapping alone.
-Config reports a setting it could not read rather than writing over it.
+The booleans belong before the first TOML table.
 
 Each preference captures the complete `defaults` domain, unfiltered, into the
 repository that Config commits and pushes. Declare a domain only if everything
@@ -127,10 +122,31 @@ repository declarations. Mutable client settings require explicit merge or
 tracking semantics; linking a file does not make all its runtime state safe to
 commit.
 
+## Migrate from schema 6
+
+Install the schema-7 Config release before changing `config.toml`. Set
+`schema = 7` and remove the `[macos]` table. If `clear_user_key_mapping` was
+enabled, put its macOS command before Config restoration in the native hook:
+
+```toml
+[bootstrap.hooks.pre-defaults]
+run = [
+  "hidutil property --set '{\"UserKeyMapping\":[]}'",
+  'config restore',
+]
+```
+
+The native hook clears mappings each time full bootstrap or its
+`--only macos-defaults` phase runs. A failing command stops the phase before
+restoration and defaults. Config no longer inspects key mappings or offers a
+macOS settings resource. Snapshot validation still checks the saved native
+resources and unresolved choices.
+
 ## Migrate from schema 5
 
 Remove `mise`, `agent_skills`, `mcp_servers` and `repository_hooks` from
-`config.toml` and set `schema = 6`. These fields are rejected, not ignored.
+`config.toml` and set `schema = 7`. These fields are rejected, not ignored.
+Apply the schema-6 migration above as well.
 Before removing them, transfer their declarations to native mise and verify
 existing placements as well as cold clones. Preserve client state and unrelated
 skills and repository-owned hooks. Archive the retired ownership ledgers and

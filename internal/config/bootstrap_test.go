@@ -50,20 +50,17 @@ func testRestoreProgress(t *testing.T, paths Paths, machine Machine) *restorePro
 	return progress
 }
 
-func completedPlatformRestoreSteps(machine Machine) []string {
-	var steps []string
-	if len(macOSFacts(machine)) > 0 {
-		steps = append(steps, restoreMacOSStep)
-	}
-	return steps
-}
-
 // A fresh Mac has no earlier state to fall back on, so one unreadable backup
 // must not cost the independent capabilities beside it.
 func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	paths := testPaths(t)
 	machine := testMachine()
 	machine.Preferences = nil
+	machine.FinderFavorites = true
+	favorite := favoriteDir(t, paths, "Independent")
+	writeFinderFavoritesSnapshot(t, paths, []finderFavoriteSnapshotItem{
+		snapshotFinderFavorite(paths, finderFavorite{Name: "Independent", Path: favorite}),
+	})
 
 	// A PWA manifest Config cannot read.
 	if err := AtomicWrite(chromePWASnapshotPath(paths), []byte("{not a manifest"), 0o644); err != nil {
@@ -71,6 +68,8 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	}
 	commands := fakeTools(t, fakeTool{name: "mise"}, fakeTool{name: "defaults"})
 	applier, chatter := testApplier(t, paths, machine, converged{})
+	store := &fakeFinderFavorites{}
+	applier.FinderFavorites = store
 	progress := testRestoreProgress(t, paths, machine)
 
 	err := restorePending(applier, progress)
@@ -80,11 +79,12 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	if !strings.Contains(err.Error(), chromePWAsName) {
 		t.Fatalf("the failure does not name the capability: %v", err)
 	}
-	if !progress.done(restoreMacOSStep) ||
+	if !progress.done("resource/"+finderFavoritesID) ||
 		progress.done("resource/"+chromePWAsID) {
 		t.Fatalf("restore progress after partial failure = %v", progress.record.Completed)
 	}
 	beforeRetry := strings.Join(commands(), "\n")
+	operations := slices.Clone(store.operations)
 	reloaded, pending, err := pendingRestore(paths, machine, io.Discard)
 	if err != nil || !pending {
 		t.Fatalf("reload restore progress = pending %t, %v", pending, err)
@@ -93,8 +93,11 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	if err := restorePending(applier, progress); err == nil {
 		t.Fatal("retry hid the unreadable PWA backup")
 	}
+	if !slices.Equal(store.operations, operations) {
+		t.Fatalf("retry repeated completed Finder restoration: %v", store.operations)
+	}
 	if afterRetry := strings.Join(commands(), "\n"); afterRetry != beforeRetry {
-		t.Fatalf("retry repeated completed platform work:\nbefore:\n%s\nafter:\n%s", beforeRetry, afterRetry)
+		t.Fatalf("retry repeated completed restoration:\nbefore:\n%s\nafter:\n%s", beforeRetry, afterRetry)
 	}
 }
 
@@ -111,10 +114,6 @@ func TestPendingRestoreRestoresFinderFavoritesAndEstablishesABaseline(t *testing
 		snapshotFinderFavorite(paths, finderFavorite{Name: "Second", Path: second}),
 	})
 	progress := testRestoreProgress(t, paths, machine)
-	progress.record.Completed = completedPlatformRestoreSteps(machine)
-	if err := progress.save(); err != nil {
-		t.Fatal(err)
-	}
 	store := &fakeFinderFavorites{}
 	applier, _ := testApplier(t, paths, machine, converged{})
 	applier.FinderFavorites = store

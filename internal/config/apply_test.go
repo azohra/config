@@ -10,8 +10,7 @@ import (
 	"time"
 )
 
-// converged answers every macOSFacts probe as already-correct, so prepareMise
-// reaches its one live command and stops: nothing to fix, no restarts.
+// converged answers the platform probes used by isolated resource tests.
 type converged struct{}
 
 func (converged) Run(_ context.Context, name string, args ...string) Result {
@@ -20,8 +19,6 @@ func (converged) Run(_ context.Context, name string, args ...string) Result {
 		return Result{Stdout: releaseMiseVersion}
 	case name == "plutil":
 		return Result{Stdout: "0\n"}
-	case name == "hidutil":
-		return Result{Stdout: "()\n"}
 	}
 	return Result{}
 }

@@ -112,7 +112,7 @@ func TestExplicitRestoreAdoptsANativeCheckoutOnce(t *testing.T) {
 	paths := managedTestPaths(t)
 	source := filepath.Join(t.TempDir(), "machine.git")
 	document := `kind = "azohra.config.machine"
-schema = 6
+schema = 7
 [repository]
 branch = "main"
 url = "` + source + `"
