@@ -24,9 +24,10 @@ Usage:
   config --status
   config --version
   config path
-  config update [software | repositories] [--dry-run | --yes]
+  config update [--dry-run | --yes]
   config prune [--dry-run | --yes]
   config bootstrap <repository>
+  config restore
 
 Config inspects first, proposes a plan, requires explicit choices for app state,
 then offers to commit and push the resulting snapshot.
@@ -35,16 +36,15 @@ Bootstrap clones an authenticated Git repository into Config's managed storage,
 installs the permanent Config command, and resumes restore until every declared
 step has completed. Path prints the managed repository's canonical location.
 
-Update previews what can be discovered before making changes. Without a
-terminal it is preview-only; --yes applies after checking again. Config updates
-itself through a separate cache-owned adapter before reading the machine
-contract. With no selection it updates declared tools, packages, agent skills,
-and clean repositories. Software omits repositories; repositories runs only
-that phase.
+Restore starts or resumes native restoration in a clean managed checkout
+acquired by another setup tool. Completed restores are not repeated.
 
-Prune previews stale Mise inventory, spent Mise downloads, and Config-owned
-local state. Without a terminal it is preview-only; --yes applies the exact
-plan after checking it again.`
+Update previews the latest Config release. Without a terminal it is
+preview-only; --yes installs the verified release. Manage tools, packages,
+repositories, skills and dotfiles through their native mise commands.
+
+Prune previews Config-owned local state. Without a terminal it is preview-only;
+--yes applies the exact plan after checking it again.`
 
 var version = "dev"
 
@@ -104,7 +104,7 @@ func run(out io.Writer) error {
 	// install as a child, so contending here would deadlock the update
 	// against itself.
 	if len(args) > 0 && slices.Contains(
-		[]string{"update", "bootstrap", "prune", "--apply", "--snapshot", "--run-update"}, args[0]) {
+		[]string{"update", "bootstrap", "restore", "prune", "--apply", "--snapshot", "--run-update"}, args[0]) {
 		release, lockErr := config.LockCheckout(paths)
 		if lockErr != nil {
 			return lockErr
@@ -148,6 +148,8 @@ func run(out io.Writer) error {
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "restore":
+			return config.Restore(paths, machine, out)
 		case "prune":
 			return prune(paths, machine, args[1:], out)
 		case "--status":
@@ -200,42 +202,36 @@ func appendWithoutEnvironment(environment []string, name string) []string {
 }
 
 type updateOptions struct {
-	scope  config.UpdateScope
 	dryRun bool
 	yes    bool
 }
 
 func parseUpdateOptions(args []string) (updateOptions, error) {
-	options := updateOptions{scope: config.UpdateAll}
-	scopeSeen := false
+	var options updateOptions
 	for _, argument := range args {
 		switch argument {
 		case "software", "repositories":
-			if scopeSeen {
-				return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
-			}
-			scopeSeen = true
-			if argument == "software" {
-				options.scope = config.UpdateSoftware
-			} else {
-				options.scope = config.UpdateRepositories
+			// Releases before schema 6 forward their selected machine scope after
+			// installing the new binary. Only that version-bound handoff accepts it.
+			if os.Getenv(config.UpdateReexecEnv) != version {
+				return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
 			}
 		case "--dry-run":
 			if options.dryRun {
-				return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+				return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
 			}
 			options.dryRun = true
 		case "--yes":
 			if options.yes {
-				return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+				return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
 			}
 			options.yes = true
 		default:
-			return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+			return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
 		}
 	}
 	if options.dryRun && options.yes {
-		return updateOptions{}, errors.New("usage: config update [software | repositories] [--dry-run | --yes]")
+		return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
 	}
 	return options, nil
 }
@@ -246,7 +242,7 @@ func update(paths config.Paths, args []string, out io.Writer) error {
 		return err
 	}
 	updater := config.NewUpdater(paths, out, version)
-	plan, err := updater.Plan(options.scope)
+	plan, err := updater.Plan()
 	if err != nil {
 		return err
 	}
@@ -260,12 +256,6 @@ func update(paths config.Paths, args []string, out io.Writer) error {
 	if !options.yes {
 		if !terminal(os.Stdin) || !terminal(os.Stdout) {
 			command := "config update"
-			switch options.scope {
-			case config.UpdateSoftware:
-				command += " software"
-			case config.UpdateRepositories:
-				command += " repositories"
-			}
 			fmt.Fprintf(out, "\nNo changes made; run %s --yes to apply this plan.\n", command)
 			return nil
 		}
@@ -282,19 +272,15 @@ func update(paths config.Paths, args []string, out io.Writer) error {
 }
 
 func runConfirmedUpdate(paths config.Paths, args []string, out io.Writer) error {
-	if len(args) != 2 {
+	if len(args) != 1 {
 		return errors.New("invalid internal update request")
 	}
-	options, err := parseUpdateOptions([]string{args[0]})
-	if err != nil || options.scope == config.UpdateAll {
-		return errors.New("invalid internal update scope")
-	}
 	updater := config.NewUpdater(paths, out, version)
-	plan, err := updater.Plan(options.scope)
+	plan, err := updater.Plan()
 	if err != nil {
 		return err
 	}
-	if plan.Fingerprint() != args[1] {
+	if plan.Fingerprint() != args[0] {
 		return errors.New("update plan changed; return to the review screen and check again")
 	}
 	return updater.Apply(plan)
@@ -404,7 +390,7 @@ func checkArguments(args []string) error {
 		return nil
 	}
 	switch args[0] {
-	case "path", "install", "--status", "--snapshot":
+	case "path", "install", "restore", "--status", "--snapshot":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: config %s", args[0])
 		}
@@ -420,7 +406,7 @@ func checkArguments(args []string) error {
 			return errors.New("usage: config --apply <plan>")
 		}
 	case "--run-update":
-		if len(args) != 3 {
+		if len(args) != 2 {
 			return errors.New("invalid internal update request")
 		}
 	case "prune":

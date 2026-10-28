@@ -55,20 +55,7 @@ func completedPlatformRestoreSteps(machine Machine) []string {
 	if len(macOSFacts(machine)) > 0 {
 		steps = append(steps, restoreMacOSStep)
 	}
-	if machine.Mise {
-		steps = append(steps, restoreMiseStep, restoreMiseDefaultsStep)
-	}
 	return steps
-}
-
-func TestFreshRestoreOmitsUndeclaredMise(t *testing.T) {
-	machine := testMachine()
-	machine.Mise = false
-	for _, step := range freshRestoreSteps(Applier{Machine: machine}) {
-		if step.id == restoreMiseStep {
-			t.Fatal("an undeclared Mise resource entered the restore plan")
-		}
-	}
 }
 
 // A fresh Mac has no earlier state to fall back on, so one unreadable backup
@@ -93,7 +80,7 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	if !strings.Contains(err.Error(), chromePWAsName) {
 		t.Fatalf("the failure does not name the capability: %v", err)
 	}
-	if !progress.done(restoreMacOSStep) || !progress.done(restoreMiseStep) ||
+	if !progress.done(restoreMacOSStep) ||
 		progress.done("resource/"+chromePWAsID) {
 		t.Fatalf("restore progress after partial failure = %v", progress.record.Completed)
 	}
@@ -108,31 +95,6 @@ func TestPendingRestoreKeepsGoingPastAnUnreadableBackup(t *testing.T) {
 	}
 	if afterRetry := strings.Join(commands(), "\n"); afterRetry != beforeRetry {
 		t.Fatalf("retry repeated completed platform work:\nbefore:\n%s\nafter:\n%s", beforeRetry, afterRetry)
-	}
-}
-
-func TestPendingRestoreContinuesPastMiseFailure(t *testing.T) {
-	paths := testPaths(t)
-	machine := testMachine()
-	machine.Preferences = nil
-	commands := fakeTools(t, fakeTool{name: "mise", exit: 1}, fakeTool{name: "defaults"})
-	applier, _ := testApplier(t, paths, machine, converged{})
-	progress := testRestoreProgress(t, paths, machine)
-
-	if err := restorePending(applier, progress); err == nil {
-		t.Fatal("a failed Mise resource was reported as a successful restore")
-	}
-	if progress.done(restoreMiseStep) || progress.done(restoreMiseDefaultsStep) {
-		t.Fatal("a failed Mise resource was recorded as complete")
-	}
-	if !progress.done(restoreMacOSStep) {
-		t.Fatalf("Mise blocked independent resources: %v", progress.record.Completed)
-	}
-	if strings.Contains(strings.Join(commands(), "\n"), "--only") {
-		t.Fatal("defaults or final hooks ran after failed Mise setup")
-	}
-	if issued := strings.Join(commands(), "\n"); !strings.Contains(issued, "mise bootstrap --yes --skip-dirty --skip macos-defaults,task,final-hook") {
-		t.Fatalf("the Mise failure was not exercised:\n%s", issued)
 	}
 }
 

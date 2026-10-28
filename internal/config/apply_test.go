@@ -1,10 +1,8 @@
 package config
 
 import (
-	"bytes"
 	"context"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -19,7 +17,7 @@ type converged struct{}
 func (converged) Run(_ context.Context, name string, args ...string) Result {
 	switch {
 	case name == "mise" && slices.Equal(args, []string{"--version"}):
-		return Result{Stdout: testedMiseVersion}
+		return Result{Stdout: releaseMiseVersion}
 	case name == "plutil":
 		return Result{Stdout: "0\n"}
 	case name == "hidutil":
@@ -29,57 +27,6 @@ func (converged) Run(_ context.Context, name string, args ...string) Result {
 }
 
 func (converged) Exists(string) bool { return true }
-
-// One dirty checkout must not block the rest of machine reconciliation.
-func TestADirtyCheckoutDoesNotBlockApply(t *testing.T) {
-	fakeBin := t.TempDir()
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	commandLog := filepath.Join(t.TempDir(), "commands")
-	t.Setenv("COMMAND_LOG", commandLog)
-	mise := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$COMMAND_LOG\"\nfor arg in \"$@\"; do [ \"$arg\" = --skip-dirty ] && exit 0; done\n" +
-		"echo 'repos: ~/Projects/example has local changes' >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(fakeBin, "mise"), []byte(mise), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	var chatter bytes.Buffer
-	applier := Applier{
-		Paths:    testPaths(t),
-		Machine:  testMachine(),
-		Mise:     converged{},
-		MiseLive: LiveRunner{Stdout: &chatter, Stderr: &chatter},
-		Log:      Logger{Out: &chatter},
-	}
-	if err := applier.prepareMise(); err != nil {
-		t.Fatalf("a dirty checkout blocked apply: %v", err)
-	}
-	commands, err := os.ReadFile(commandLog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "bootstrap --yes --skip-dirty --skip macos-defaults,task,final-hook\n"
-	if string(commands) != want {
-		t.Fatalf("mise order = %q, want %q", commands, want)
-	}
-}
-
-func TestApplyMiseRefusesAnUnsupportedVersionBeforeMutation(t *testing.T) {
-	commands := fakeTools(t, fakeTool{name: "mise"})
-	unsupported := unsupportedMiseVersions()[1]
-	applier := Applier{
-		Mise:     &miseStubRunner{version: unsupported},
-		MiseLive: LiveRunner{},
-		Log:      Logger{Out: &bytes.Buffer{}},
-	}
-
-	err := applier.prepareMise()
-	if err == nil || !strings.Contains(err.Error(), unsupported+" is unsupported") {
-		t.Fatalf("prepareMise() error = %v, want unsupported mise version", err)
-	}
-	if issued := commands(); len(issued) != 0 {
-		t.Fatalf("unsupported mise executed mutations: %v", issued)
-	}
-}
 
 // applyRunner answers the probes an Applier makes while reconciling, so a
 // test can drive apply without a real Mac.
@@ -325,18 +272,5 @@ func TestPreferenceRelaunchSurvivesAKillAfterTheQuit(t *testing.T) {
 	}
 	if markerSet(paths, relaunchMarker(preference.Bundle)) {
 		t.Fatal("the relaunch marker outlived the relaunch")
-	}
-}
-
-func TestApplyDoesNotFinishMiseAfterPreparationFails(t *testing.T) {
-	paths := testPaths(t)
-	machine := testMachine()
-	commands := fakeTools(t, fakeTool{name: "mise", exit: 1})
-	applier, _ := testApplier(t, paths, machine, converged{})
-	if err := applier.Apply([]Selection{{ID: miseID, Action: Apply}}); err == nil {
-		t.Fatal("Mise setup failure was hidden")
-	}
-	if issued := commands(); len(issued) != 1 || strings.Contains(issued[0], "--only") {
-		t.Fatalf("failed setup reached defaults or final hooks: %v", issued)
 	}
 }

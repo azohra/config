@@ -22,7 +22,23 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 	}
-	os.Exit(m.Run())
+	// Fixture repositories must not execute hooks from the caller's Git template.
+	emptyTemplates, err := os.MkdirTemp("", "config-git-template-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(filepath.Join(emptyTemplates, "hooks"), 0755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := os.Setenv("GIT_TEMPLATE_DIR", emptyTemplates); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(emptyTemplates)
+	os.Exit(code)
 }
 
 func testPaths(t *testing.T) Paths {
@@ -30,15 +46,6 @@ func testPaths(t *testing.T) Paths {
 	root := t.TempDir()
 	home := t.TempDir()
 	paths := Paths{Root: root, Home: home, StateDir: filepath.Join(t.TempDir(), "state")}
-	if err := os.Mkdir(filepath.Join(root, "mise"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(root, "mise"), filepath.Join(home, ".config", "mise")); err != nil {
-		t.Fatal(err)
-	}
 	return paths
 }
 
@@ -46,7 +53,7 @@ func testMachine() Machine {
 	return Machine{
 		Kind:   MachineKind,
 		Schema: MachineSchema,
-		Mise:   true,
+
 		Repository: MachineRepository{
 			Branch: "main",
 			URL:    "https://github.com/example/machine.git",
@@ -100,13 +107,12 @@ func testApplier(t *testing.T, paths Paths, machine Machine, runner Runner) (App
 	var chatter bytes.Buffer
 	live := LiveRunner{Dir: paths.Root, Stdout: &chatter, Stderr: &chatter}
 	return Applier{
-		Paths:    paths,
-		Machine:  machine,
-		Runner:   runner,
-		Live:     live,
-		Mise:     runner,
-		MiseLive: live,
-		Log:      Logger{Out: &chatter},
+		Paths:   paths,
+		Machine: machine,
+		Runner:  runner,
+		Live:    live,
+
+		Log: Logger{Out: &chatter},
 		Bidir: Bidirectional{
 			Paths:     paths,
 			Baselines: Baselines{Dir: paths.StateDir},

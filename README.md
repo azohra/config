@@ -1,8 +1,8 @@
 # Config
 
-Config turns a Git repository into a reproducible Mac setup. It inspects,
-plans, and reconciles resources such as Mise, agent skills, MCP servers,
-native macOS settings, Finder Favorites, application state, and the Dock.
+Config restores and backs up native Mac state from a Git repository: Finder
+Favorites, Chrome PWAs, application preferences and hardware key mappings.
+Mise owns tools, packages, repositories, dotfiles, services and their lifecycle.
 
 You choose the machine repository and keep control of its authentication.
 
@@ -46,48 +46,14 @@ Config rejects repository URLs containing credentials.
 
 ## Configure
 
-Every machine repository has a strict Config contract. A repository that opts
-into Mise also carries the native declarations Config connects to Mise's global
-configuration:
-
-```text
-config.toml       required Config contract
-mise/config.toml  optional native Mise configuration
-mise/conf.d/*.toml
-```
-
-Only the repository identity is required. Every capability is opt-in:
+The machine repository has a strict `config.toml` contract. Each native
+capability is optional:
 
 ```toml
 kind = "azohra.config.machine"
-schema = 5
-mise = true
+schema = 6
 chrome_pwas = true
 finder_favorites = true
-
-[agent_skills]
-agents = ["claude-code", "codex"]
-
-[[agent_skills.sources]]
-source = "https://github.com/owner/skills.git"
-skills = ["orca-cli", "orchestration"]
-
-[mcp_servers]
-agents = ["claude-code", "codex"]
-
-[mcp_servers.servers.blender]
-command = "uvx"
-args = ["blender-mcp"]
-env = { BLENDER_HOST = "localhost" }
-
-[mcp_servers.servers.docs]
-url = "https://mcp.example.com/mcp"
-headers = { X-Region = "us-east-1" }
-agents = ["codex"]
-
-[[repository_hooks]]
-name = "post-checkout"
-source = "hooks/post-checkout"
 
 [repository]
 branch = "main"
@@ -103,135 +69,80 @@ bundle = "com.example.ExampleApp"
 domain = "com.example.ExampleApp"
 ```
 
-`[macos].clear_user_key_mapping = true` clears hardware key mappings through
-`hidutil`. Leave it out and the Mac keeps its own mapping. Config reports a
-setting it could not read rather than writing over it.
+The booleans belong before the first TOML table. Hardware key mappings are
+cleared through `hidutil`; omitting that setting leaves the mapping alone.
+Config reports a setting it could not read rather than writing over it.
 
-Current-host tap-to-click and Spotlight shortcuts now belong in native Mise
-configuration. Remove `macos.current_host_tap_to_click` and `[macos.spotlight]`
-from `config.toml`, enable `mise = true`, and move their values into
-`mise/conf.d/macos.toml` using the tested mise 2026.10.18 release:
+Each preference captures the complete `defaults` domain, unfiltered, into the
+repository that Config commits and pushes. Declare a domain only if everything
+in it belongs there. Empty domains are refused.
 
-```toml
-[[bootstrap.macos.defaults_entries]]
-domain = "NSGlobalDomain"
-key = "com.apple.mouse.tapBehavior"
-host = "current"
-value = 1
+## Native mise setup
 
-[[bootstrap.macos.defaults_entries]]
-domain = "com.apple.symbolichotkeys"
-key = "AppleSymbolicHotKeys"
-path = ["64"]
-value = { enabled = false, value = { parameters = [32, 49, 1048576], type = "standard" } }
+Config does not install or select the machine's mise, parse its declarations,
+or wrap its status, upgrade and prune commands. Run those commands directly:
+
+```sh
+mise bootstrap status
+mise bootstrap
+mise outdated --global
+mise upgrade --global
+mise bootstrap packages upgrade
+mise bootstrap repos update
+mise prune --dry-run
 ```
 
-Use `value = 0` for disabled tap-to-click. For a different shortcut, carry its
-id into `path` and preserve its enabled state, parameters, and type. The nested
-entry replaces only that shortcut and preserves the other symbolic hotkeys.
-The removed Config fields are rejected rather than silently ignored.
+With mise 2026.10.21 or newer, a repository can retain its native configuration
+under `mise/`. After verified mise acquisition, native bootstrap can clone it
+to Config's managed location and select that nested directory:
 
-Each `[[preferences]]` entry captures the complete `defaults` domain it names,
-byte for byte and unfiltered, into the machine repository, which Config then
-commits and pushes. Declare a domain only if everything in it belongs there.
-A domain that holds nothing is refused rather than captured.
-
-The booleans belong before the first TOML table. `mise = true` enables the
-Mise resource; without it Config neither inspects nor installs Mise. Mise keeps
-its native syntax under `mise/`:
-
-```toml
-min_version = "2026.10.18"
-
-[tools]
-node = "24"
-
-[dotfiles]
-"~/.gitconfig" = "gitconfig"
+```sh
+mise bootstrap --from https://github.com/owner/machine.git \
+  --from-dir "$HOME/Library/Application Support/Config/repository" \
+  --config-dir mise
 ```
 
-Mise is a first-class Config resource. When enabled, its inspection reports the
-exact tested version, bootstrap phases, declared tools, and repository
-presence. Apply installs the pinned standalone binary at
-`~/.local/bin/mise` when necessary, safely connects the repository's `mise/`
-directory at `~/.config/mise`, then delegates convergence to `mise bootstrap`.
-An absent or empty global directory can be adopted; existing configuration is
-reported and left untouched. Config's Mise commands explicitly select that
-global directory while native resources and Git operations receive none of
-its authority. Repository-local Mise files layer on top in ordinary Mise
-precedence, and Mise considers that shared inventory when pruning tools and
-packages.
-
-Agent skills are a separate user-wide resource. Global selects user scope, not
-exclusive visibility. Every global skill has one
-canonical copy under `~/.agents/skills`, which Codex and other universal agents
-read directly. `agents` requests targets from the skills CLI; agents with their
-own directory, such as Claude Code, receive a link to that canonical copy.
-Config deliberately does not encode those paths. Project-local skills remain
-part of their own repositories.
-
-Config runs its exact tested `skills@1.5.23` package through `npx` with a
-Config-owned npm cache. Node 22.20 or newer and `npx` must already be available;
-when Mise is enabled, its tool declaration can provide them before the skill
-resource converges. The private cache pins Config's adapter, but the adapter and
-an ordinary `npx skills` command intentionally share the same global skill
-store. An unreadable or incompatible shared lock makes the resource unavailable
-rather than letting the pinned adapter rewrite it. Apply adopts compatible
-installs or updates from the declared source without rewriting them. Update and
-prune refuse content that has changed since that adoption, and a different
-source is always left untouched. The machine repository should not also install
-a global `skills` package or run its own reconciler.
-
-MCP servers are a third user-wide resource, and one that needs neither Mise
-nor Node. The document declares each server once, and Config converges it into
-the user-scope configuration of every declared harness: the top-level
-`mcpServers` object of `~/.claude.json` for Claude Code, and the
-`[mcp_servers.<name>]` tables of `~/.codex/config.toml` for Codex. A stdio
-server carries `command`, `args`, and `env`; an http server carries `url` and
-`headers`. A server may name its own `agents` to reach fewer harnesses than
-the resource default. Config owns the whole entry for a declared name, so a
-key the harness added to it, such as a timeout, reads as drift and is
-replaced on apply.
-
-Both files are harness state, and Config treats them that way. It never
-creates either one: a harness that has not run yet is reported as not present
-and converges on the first run after its file exists. Config rewrites only the
-declared entries and leaves every other key, table, comment, and undeclared
-server byte for byte. It writes only when a declared entry actually differs.
-A harness file that is a link into the managed checkout, which is how
-a dotfile declaration usually places `~/.codex/config.toml`, is written
-through the link so the next snapshot records the result. A link that points
-anywhere else is reported and left alone. A running harness may still rewrite
-its file from memory after Config does; the next `config` run converges it
-again. Config records which names it wrote, so `config prune` removes an entry
-only when Config wrote it and it still reads as written.
-
-## Dock applications
-
-Declare pinned applications in native mise configuration:
+Install Config through its verified release path before its restoration hook
+runs. In the native mise declarations, restore Config's retained capabilities
+before applying defaults that depend on them:
 
 ```toml
+[bootstrap.hooks.pre-defaults]
+run = 'config restore'
+
 [bootstrap.macos.dock]
-apps = [
-  "/System/Applications/Utilities/Terminal.app",
-  "/Applications/Firefox.app",
-]
+apps = ["~/Applications/Chrome Apps.localized/Example.app"]
 ```
 
-Edit the list to add, remove, or reorder pins, then apply the Mise resource.
-Mise compares application identity and order, preserves existing tile metadata,
-and leaves non-application tiles alone. Dragging icons in Dock does not update
-this declaration; the next apply restores the declared order. An empty list
-removes application pins, while omitting `apps` leaves them unmanaged.
+Starting or resuming `config restore` requires a clean, declared `origin/main`
+checkout. A completed restore remains complete, including after later local
+configuration changes. A failed restoration stops the hook before Dock defaults. Git
+repository acquisition, credentials, package installation and shell activation
+remain the native setup's responsibility. The genesis script remains a way to
+acquire Config and restore its capabilities; it does not install mise.
 
-Mise does not restart Dock itself. Relaunch it with `killall Dock`, or declare a
-`[bootstrap.hooks.post-defaults]` hook. Hooks run even when defaults already match.
+Native Git templates must be installed before repositories are cloned. Native
+MCP fragments and source-backed skill links belong in mise's dotfiles and
+repository declarations. Mutable client settings require explicit merge or
+tracking semantics; linking a file does not make all its runtime state safe to
+commit.
 
-Schema 5 removes Config's `dock` toggle and Dock snapshot resource. To migrate
-from schema 4, copy the paths from `snapshots/dock.apps` into this `apps` list,
-remove `dock` from `config.toml`, and set `schema = 5`. After verifying the layout,
-remove the retired snapshot. Config's prune can reclaim the old local Dock
-baseline and restart marker. Machines without mise can leave Dock unmanaged.
+## Migrate from schema 5
+
+Remove `mise`, `agent_skills`, `mcp_servers` and `repository_hooks` from
+`config.toml` and set `schema = 6`. These fields are rejected, not ignored.
+Before removing them, transfer their declarations to native mise and verify
+existing placements as well as cold clones. Preserve client state and unrelated
+skills and repository-owned hooks. Archive the retired ownership ledgers and
+accepted hook copies outside the snapshot tree; Config no longer reads or
+prunes them.
+
+`config update` now updates Config only. The `software` and `repositories`
+selectors are removed. Older Config releases may forward one of those
+selectors during their version-bound install handoff; that handoff completes
+without running the removed machine updater. Use native mise for subsequent
+machine operations. Config's private, checksummed release transport is separate
+from the machine's mise installation.
 
 ## Native state
 
@@ -264,83 +175,45 @@ replacements are built and signed in staging before live bundles change.
 Preferences are one-way backups on an established Mac. Existing backups are
 restored only during a pending bootstrap for that exact checkout. A missing
 application leaves its step pending without blocking independent resources.
-Repository hooks are one-way desired state: Config refreshes only copies it
-previously installed and reports a repository-owned hook as a conflict.
 
 ## Use
 
-Run the terminal interface:
+Run `config` for the terminal interface. It inspects native capabilities,
+requires choices for application state, and can save the resulting snapshot.
+Inspection is read-only.
 
-```bash
-config
-```
-
-It inspects first, shows drift and conflicts, applies only selected actions,
-then offers to commit and push the resulting repository snapshot. Inspection
-is read-only.
-
-Useful non-interactive commands:
-
-```bash
+```sh
 config --status
 config path
-config update software --dry-run
-config update repositories --yes
+config restore
+config update --dry-run
 config update --yes
 config prune --dry-run
 config prune --yes
 config --version
 ```
 
-`config update software` previews declared tool, package, and agent-skill
-updates without checking repository remotes. `config update repositories`
-previews clean declared repositories. The unqualified command covers both
-scopes. A terminal asks before running the plan; redirected output remains
-preview-only unless `--yes` is explicit. Config shows exact versions where a
-provider exposes them and labels checks that can only happen while the provider
-runs. A released build updates Config first when necessary and continues from
-the installed binary; a development build skips that release transition. When
-Mise is not declared, the machine portion has no Mise work to perform.
+Update and prune are preview-only without a terminal unless `--yes` is
+explicit. Their plans are recomputed before mutation; a changed plan requires
+a new review. Prune removes only verified Config baselines, completed restore
+records from older checkouts, and markers for capabilities no longer declared.
+Mise and retired skill/MCP/hook state remain outside that plan.
 
-The terminal interface checks the software scope in the background without
-starting the slower repository scan. Selecting software reuses a completed
-check or promotes the same in-flight request to the review screen; selecting
-another scope cancels it and starts only the requested check. Before applying,
-the child command recomputes the selected plan and refuses to continue if its
-identity changed.
+Operations show typed progress and a current provider activity line. Press `d`
+for details. Failed operations open the final context, and a self-update
+reopens the persisted result from the installed binary.
 
-Operations show typed Config progress and one current provider activity line.
-Press `d` to inspect the bounded provider details; failed operations open that
-final context automatically. Terminal control sequences and split UTF-8 cannot
-change the meaning of a status line. A completed result stays open while
-machine status refreshes and records how long the operation took. If Config
-replaces itself, the parent interface restarts from the installed binary and
-reopens that persisted result. Results remain in Config's private state until
-a later operation replaces them.
-
-`config prune` previews Mise's shared inventory decisions alongside Config's
-own stale state. A declared but unavailable Mise is reported and its state
-stays untouched; Config-owned cleanup still proceeds. Config deletes only
-artifacts whose ownership it can prove: unchanged agent-skill placements, MCP
-server entries it wrote and no longer declares, unchanged hook copies,
-baselines for disabled capabilities, and completed
-restore records from older managed checkouts. Mise owns its cache retention
-and automatically expires unused entries according to `cache_prune_age`, which
-defaults to thirty days. Config leaves those caches alone, including recent
-Homebrew downloads that can speed up another install. Ambiguous items stay put.
-A terminal asks for confirmation; redirected output remains preview-only unless
-`--yes` is explicit. The plan is recomputed before the first write.
-
-Snapshot saves stage the whole managed repository, use the fixed commit subject
-`Update machine snapshot`, honor repository hooks, and push only to the
-declared branch and upstream. A rejected push leaves the local commit intact.
+Snapshot saves stage the whole managed tree, use `Update machine snapshot`,
+honor repository hooks, and push only to the declared branch and upstream.
+A rejected push leaves the local commit intact. Config never pulls, rebases or
+force-pushes a snapshot.
 
 ## Develop
 
 ```bash
 mise install
 mise run check
-mise run build:dist
+mise run dist
 ```
 
 `mise run build` writes `.build/config`. `mise run check` is the same proof CI

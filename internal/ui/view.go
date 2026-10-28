@@ -214,10 +214,8 @@ func (m Model) dashboardActionText(action dashboardAction) (string, string) {
 		return "Publish snapshot", "→ " + destination
 	case dashboardInspect:
 		return "Inspect configuration", config.FormatCount(len(m.report.Resources), "resource", "resources")
-	case dashboardUpdateSoftware:
-		return "Update software", m.updateActionSummary(config.UpdateSoftware, "select to check software")
-	case dashboardUpdateRepositories:
-		return "Update repositories", m.updateActionSummary(config.UpdateRepositories, "select to check repositories")
+	case dashboardUpdateConfig:
+		return "Update Config", m.updateActionSummary("select to check Config")
 	case dashboardLastResult:
 		detail := m.last.label
 		if !m.last.finishedAt.IsZero() {
@@ -225,29 +223,26 @@ func (m Model) dashboardActionText(action dashboardAction) (string, string) {
 		}
 		return "View last operation", detail
 	case dashboardCleanup:
-		return "Clean up", "preview unused tools and Config state"
+		return "Clean up", "preview retired Config state"
 	default:
 		return "Quit", ""
 	}
 }
 
-func (m Model) updateActionSummary(scope config.UpdateScope, fallback string) string {
+func (m Model) updateActionSummary(fallback string) string {
 	if m.checkingOverview && !m.overviewReady {
 		return "checking for updates…"
 	}
 	if m.overviewError != nil {
 		return "update check unavailable"
 	}
-	if !m.overviewReady || (m.updateOverview.Scope != config.UpdateAll && m.updateOverview.Scope != scope) {
+	if !m.overviewReady {
 		return fallback
 	}
-	available, pending, unavailable := m.updateOverview.Counts(scope)
+	available, unavailable := m.updateOverview.Counts()
 	var parts []string
 	if available > 0 {
 		parts = append(parts, config.FormatCount(available, "available update", "available updates"))
-	}
-	if pending > 0 {
-		parts = append(parts, config.FormatCount(pending, "checked when run", "checked when run"))
 	}
 	if unavailable > 0 {
 		parts = append(parts, config.FormatCount(unavailable, "unavailable check", "unavailable checks"))
@@ -443,16 +438,13 @@ func (m Model) renderPrune() string {
 }
 
 func (m Model) renderUpdate() string {
-	label := "SOFTWARE UPDATE"
-	if m.updateScope == config.UpdateRepositories {
-		label = "REPOSITORY UPDATE"
-	}
+	label := "CONFIG UPDATE"
 	if m.checkingUpdate {
 		return frame(
 			m.width,
 			title.Render(label),
 			m.spinner.View()+" Checking for updates…",
-			muted.Render("Declared machine state does not change during this check."),
+			muted.Render("Checking the published Config release."),
 			keyHints("esc back"),
 		)
 	}
@@ -474,16 +466,7 @@ func (m Model) renderUpdate() string {
 	action := "Back to dashboard"
 	hints := []string{"enter back", "r refresh", "esc back"}
 	if m.updatePreview.HasWork() {
-		action = "Run software update"
-		if m.updateScope == config.UpdateRepositories {
-			action = "Run repository update"
-		}
-		if m.updatePreview.HasDeferredWork() {
-			action = "Check and update software"
-			if m.updateScope == config.UpdateRepositories {
-				action = "Check and update repositories"
-			}
-		}
+		action = "Update Config"
 		hints[0] = "enter run"
 	}
 	if scrollable {
@@ -496,7 +479,7 @@ func (m Model) renderUpdate() string {
 	return frame(
 		m.width,
 		title.Render(label)+"  "+checked,
-		muted.Render("Review first. Providers recheck their state before changing the Mac."),
+		muted.Render("The selected release is verified before installation."),
 		strings.Join(lines, "\n"),
 		focusRow(true, accent.Render(action)),
 		keyHints(hints...),

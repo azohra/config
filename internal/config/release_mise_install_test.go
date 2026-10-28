@@ -12,7 +12,7 @@ import (
 )
 
 func TestMiseInstallerVerifiesAndAtomicallyInstallsTheRelease(t *testing.T) {
-	content := []byte("#!/bin/sh\nprintf '%s\\n' '" + testedMiseVersion + "'\n")
+	content := []byte("#!/bin/sh\nprintf '%s\\n' '" + releaseMiseVersion + "'\n")
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		_, _ = response.Write(content)
 	}))
@@ -30,7 +30,7 @@ func TestMiseInstallerVerifiesAndAtomicallyInstallsTheRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(content)
-	installer := miseInstaller{
+	installer := releaseMiseInstaller{
 		Destination: destination,
 		URL:         server.URL,
 		SHA256:      fmt.Sprintf("%x", sum),
@@ -61,7 +61,7 @@ func TestMiseInstallerRefusesUnverifiedBytes(t *testing.T) {
 	if err := os.WriteFile(destination, []byte("preserve"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	installer := miseInstaller{Destination: destination, URL: server.URL,
+	installer := releaseMiseInstaller{Destination: destination, URL: server.URL,
 		SHA256: fmt.Sprintf("%064x", 0), Size: int64(len("not the pinned release")), Client: server.Client()}
 	if err := installer.Install(); err == nil {
 		t.Fatal("unverified Mise release was installed")
@@ -82,7 +82,7 @@ func TestMiseInstallerRefusesAnUnexpectedReleaseSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(content)
-	installer := miseInstaller{Destination: destination, URL: server.URL,
+	installer := releaseMiseInstaller{Destination: destination, URL: server.URL,
 		SHA256: fmt.Sprintf("%x", sum), Size: int64(len(content) - 1), Client: server.Client()}
 	if err := installer.Install(); err == nil {
 		t.Fatal("unexpected Mise release size was installed")
@@ -98,7 +98,7 @@ type installingMiseRunner struct {
 
 func (r *installingMiseRunner) Run(_ context.Context, name string, args ...string) Result {
 	if name == "mise" && len(args) == 1 && args[0] == "--version" && r.installed {
-		return Result{Stdout: testedMiseVersion}
+		return Result{Stdout: releaseMiseVersion}
 	}
 	return Result{}
 }
@@ -113,10 +113,10 @@ func TestEnsureTestedMiseInstallsOnlyWhenNeeded(t *testing.T) {
 		runner.installed = true
 		return nil
 	}
-	if err := ensureTestedMise(runner, install); err != nil {
+	if err := ensureReleaseMise(runner, install); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTestedMise(runner, install); err != nil {
+	if err := ensureReleaseMise(runner, install); err != nil {
 		t.Fatal(err)
 	}
 	if installed != 1 {

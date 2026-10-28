@@ -1,11 +1,8 @@
 package config
 
 import (
-	"bytes"
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -20,33 +17,6 @@ var hostileMiseSelectors = []string{
 	"MISE_GLOBAL_CONFIG_FILE",
 	"MISE_SYSTEM_CONFIG_FILE",
 	"MISE_IGNORED_CONFIG_PATHS",
-}
-
-func TestMiseChildIgnoresAnAmbientConfigurationSelection(t *testing.T) {
-	paths := testPaths(t)
-	for _, name := range hostileMiseSelectors {
-		t.Setenv(name, "/tmp/somebody-elses.toml")
-	}
-	environment := childEnvironment(miseEnvironment(paths), nil)
-	for _, name := range hostileMiseSelectors {
-		var selections []string
-		for _, entry := range environment {
-			if value, ok := strings.CutPrefix(entry, name+"="); ok {
-				selections = append(selections, value)
-			}
-		}
-		if len(selections) != 1 {
-			t.Errorf("%s appears %d times in the child environment: %v", name, len(selections), selections)
-			continue
-		}
-		if selections[0] != "" {
-			t.Errorf("%s reached the mise child as %q", name, selections[0])
-		}
-	}
-	// The scoping Config does set still has to survive the overlay.
-	if !slices.Contains(environment, "MISE_CONFIG_DIR="+miseConfigDir(paths)) {
-		t.Error("the child lost the canonical global configuration directory")
-	}
 }
 
 func TestReleaseRunnerDisablesProvenance(t *testing.T) {
@@ -70,44 +40,6 @@ func TestReleaseRunnerDisablesProvenance(t *testing.T) {
 		if len(values) != 1 || values[0] != want {
 			t.Errorf("%s reached the release child as %v, want [%s]", name, values, want)
 		}
-	}
-}
-
-func TestMiseRunnersUseOnlyTheCanonicalMise(t *testing.T) {
-	paths := testPaths(t)
-	canonical := misePath(paths)
-	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(canonical, []byte("#!/bin/sh\nprintf canonical"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fallback := t.TempDir()
-	if err := os.WriteFile(filepath.Join(fallback, "mise"), []byte("#!/bin/sh\nprintf wrong"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", fallback+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	runner := NewMiseRunner(paths)
-	if runner.Dir != paths.Home {
-		t.Fatalf("Mise runner directory = %q, want home %q", runner.Dir, paths.Home)
-	}
-	result := runner.Run(context.Background(), "mise")
-	if result.Err != nil || result.Stdout != "canonical" {
-		t.Fatalf("Mise runner = %+v", result)
-	}
-
-	var output bytes.Buffer
-	live := newMiseLiveRunner(paths)
-	if live.Dir != paths.Home {
-		t.Fatalf("Mise live runner directory = %q, want home %q", live.Dir, paths.Home)
-	}
-	live.Stdout, live.Stderr = &output, &output
-	if err := live.Command("mise"); err != nil {
-		t.Fatal(err)
-	}
-	if output.String() != "canonical" {
-		t.Fatalf("Mise live runner used %q", output.String())
 	}
 }
 

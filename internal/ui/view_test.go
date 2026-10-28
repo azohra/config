@@ -26,12 +26,12 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 	for _, present := range []string{
 		"Configuration matches",
 		"cleanup runs on demand",
-		"Update software",
-		"select to check software",
-		"Update repositories",
-		"select to check repositories",
+		"Update Config",
+		"select to check Config",
+
+		"select to check Config",
 		"Clean up",
-		"unused tools and Config state",
+		"retired Config state",
 		"Inspect configuration",
 		"Quit",
 	} {
@@ -61,18 +61,13 @@ func TestDashboardSummarizesBackgroundUpdateDiscovery(t *testing.T) {
 		report:        config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}},
 		overviewReady: true,
 		updateOverview: config.UpdatePlan{
-			Scope: config.UpdateAll, CheckedAt: time.Date(2026, 9, 2, 15, 4, 0, 0, time.Local),
-			Groups: []config.UpdateGroup{
-				{Name: "Config", Scope: config.UpdateAll, State: config.UpdateCurrent},
-				{Name: "Tools", Scope: config.UpdateSoftware, State: config.UpdateAvailable},
-				{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending},
-				{Name: "Repositories", Scope: config.UpdateRepositories, State: config.UpdatePending},
-			},
+			CheckedAt: time.Date(2026, 9, 2, 15, 4, 0, 0, time.Local),
+			Groups:    []config.UpdateGroup{{Name: "Config", State: config.UpdateAvailable}},
 		},
 		width: 100, height: 24,
 	}
 	view := ansi.Strip(m.renderDashboard())
-	for _, want := range []string{"1 available update · 1 checked when run · 3:04 PM", "1 checked when run · 3:04 PM"} {
+	for _, want := range []string{"1 available update · 3:04 PM"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard missing %q:\n%s", want, view)
 		}
@@ -81,32 +76,19 @@ func TestDashboardSummarizesBackgroundUpdateDiscovery(t *testing.T) {
 
 func TestUpdatePreviewMakesTheMutationExplicit(t *testing.T) {
 	m := Model{
-		screen:      screenUpdate,
-		updateScope: config.UpdateSoftware,
+		screen: screenUpdate,
+
 		updatePreview: config.UpdatePlan{
-			Scope:  config.UpdateSoftware,
-			Groups: []config.UpdateGroup{{Name: "Packages", Scope: config.UpdateSoftware, State: config.UpdatePending, Summary: "checked when run"}},
+
+			Groups: []config.UpdateGroup{{Name: "Config", State: config.UpdateAvailable, Summary: "v0.25.0 → v0.26.0"}},
 		},
 		width: 80, height: 24,
 	}
 	view := ansi.Strip(m.renderUpdate())
-	for _, want := range []string{"Review first", "Packages", "checked when run", "Check and update software", "enter run"} {
+	for _, want := range []string{"verified before installation", "v0.25.0 → v0.26.0", "Update Config", "enter run"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("update preview missing %q:\n%s", want, view)
 		}
-	}
-}
-
-func TestSoftwareOverviewDoesNotClaimRepositoryFreshness(t *testing.T) {
-	m := Model{
-		overviewReady: true,
-		updateOverview: config.UpdatePlan{
-			Scope:  config.UpdateSoftware,
-			Groups: []config.UpdateGroup{{Name: "Config", Scope: config.UpdateAll, State: config.UpdateCurrent}},
-		},
-	}
-	if summary := m.updateActionSummary(config.UpdateRepositories, "select to check repositories"); summary != "select to check repositories" {
-		t.Fatalf("repository summary = %q", summary)
 	}
 }
 

@@ -226,7 +226,7 @@ func TestSnapshotValidationSkipsLivePlatformResources(t *testing.T) {
 	inspector.FinderFavorites = &fakeFinderFavorites{}
 	report := inspector.InspectSnapshot()
 
-	for _, id := range []string{miseID, macOSID} {
+	for _, id := range []string{macOSID} {
 		if _, found := report.Resource(id); found {
 			t.Fatalf("the snapshot gate inspected %s: %+v", id, report.Resources)
 		}
@@ -243,7 +243,7 @@ func TestSnapshotValidationSkipsLivePlatformResources(t *testing.T) {
 		}
 	}
 	// A full inspection still reports everything.
-	for _, id := range []string{miseID, macOSID} {
+	for _, id := range []string{macOSID} {
 		if _, found := inspector.Inspect().Resource(id); !found {
 			t.Fatalf("a full inspection dropped %s", id)
 		}
@@ -254,7 +254,7 @@ func TestSnapshotValidationSkipsLivePlatformResources(t *testing.T) {
 // inspection has to hold there and not only in InspectSnapshot.
 func TestNewSnapshotterGateNeverReachesForMise(t *testing.T) {
 	paths := testPaths(t)
-	canonical := misePath(paths)
+	canonical := paths.InHome(".local", "bin", "mise")
 	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
 		t.Fatal(err)
 	}

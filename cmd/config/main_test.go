@@ -46,7 +46,7 @@ func fixtureHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	document := `kind = "azohra.config.machine"
-schema = 5
+schema = 6
 chrome_pwas = true
 
 [repository]
@@ -201,7 +201,7 @@ func TestUpdateRunsBeforeReadingTheMachineDocument(t *testing.T) {
 	binary, home := buildConfigVersion(t, "v0.4.0"), t.TempDir()
 	writeMainTestReleaseMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.10.18\n'
+  printf '2026.10.21\n'
   exit 0
 fi
 exit 1
@@ -214,7 +214,7 @@ exit 1
 		t.Fatal(err)
 	}
 
-	for _, args := range [][]string{{"update"}, {"update", "software"}, {"update", "repositories"}} {
+	for _, args := range [][]string{{"update"}, {"update", "--dry-run"}, {"update", "--yes"}} {
 		output, code := runConfig(t, binary, home, args...)
 		if code != 1 || !strings.Contains(output, "Config:") || strings.Contains(output, "config.toml") {
 			t.Fatalf("config %s read the machine document before updating itself (exit %d):\n%s", strings.Join(args, " "), code, output)
@@ -224,8 +224,38 @@ exit 1
 
 func TestUpdateRejectsAnUnknownScope(t *testing.T) {
 	output, code := runConfig(t, buildConfig(t), t.TempDir(), "update", "everything")
-	if code != 1 || !strings.Contains(output, "usage: config update [software | repositories]") {
+	if code != 1 || !strings.Contains(output, "usage: config update") {
 		t.Fatalf("unknown update scope exited %d:\n%s", code, output)
+	}
+}
+
+func TestOlderReleaseScopeCompletesOnlyItsBoundHandoff(t *testing.T) {
+	binary, home := buildConfigVersion(t, "v0.26.0"), fixtureHome(t)
+	canonical := filepath.Join(home, ".local", "bin", "config")
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonical, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("unreadable-machine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.UpdateReexecEnv, "v0.26.0")
+	for _, scope := range []string{"software", "repositories"} {
+		output, code := runConfig(t, canonical, home, "update", scope, "--yes")
+		if code != 0 || !strings.Contains(output, "installed for this update") {
+			t.Fatalf("older release handoff = %q (exit %d)", output, code)
+		}
+	}
+	output, code := runConfig(t, binary, home, "update", "software", "--yes")
+	if code == 0 || !strings.Contains(output, "outside the canonical command") {
+		t.Fatalf("foreign executable completed the handoff = %q (exit %d)", output, code)
 	}
 }
 
@@ -235,9 +265,9 @@ func TestUpdateOptionsRequireOneExplicitApplyMode(t *testing.T) {
 		want updateOptions
 		ok   bool
 	}{
-		{nil, updateOptions{scope: config.UpdateAll}, true},
-		{[]string{"software", "--dry-run"}, updateOptions{scope: config.UpdateSoftware, dryRun: true}, true},
-		{[]string{"--yes", "repositories"}, updateOptions{scope: config.UpdateRepositories, yes: true}, true},
+		{nil, updateOptions{}, true},
+		{[]string{"--dry-run"}, updateOptions{dryRun: true}, true},
+		{[]string{"--yes"}, updateOptions{yes: true}, true},
 		{[]string{"--dry-run", "--yes"}, updateOptions{}, false},
 		{[]string{"software", "repositories"}, updateOptions{}, false},
 		{[]string{"--force"}, updateOptions{}, false},
@@ -256,7 +286,7 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document = bytes.Replace(document, []byte("chrome_pwas = true"), []byte("chrome_pwas = true\nmise = true"), 1)
+	document = bytes.Replace(document, []byte("chrome_pwas = true"), []byte("chrome_pwas = true"), 1)
 	if err := os.WriteFile(filepath.Join(root, "config.toml"), document, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -277,19 +307,19 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	}
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
-if [ "$1" = --version ]; then printf '2026.10.18\n'; fi
+if [ "$1" = --version ]; then printf '2026.10.21\n'; fi
 if [ "$1" = outdated ]; then printf '{}\n'; fi
 if [ "$1 $2 $3" = "bootstrap packages status" ]; then printf '{"brew":{"packages":[{}]}}\n'; fi
 `
 	if err := os.WriteFile(mise, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	output, code := runConfig(t, binary, home, "update", "software")
-	if code != 0 || !strings.Contains(output, "Update plan · software") || !strings.Contains(output, "No changes made; run config update software --yes") {
+	output, code := runConfig(t, binary, home, "update")
+	if code != 0 || !strings.Contains(output, "Config update") {
 		t.Fatalf("redirected update exited %d:\n%s", code, output)
 	}
 	commands, err := os.ReadFile(log)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(commands), "upgrade --yes") || strings.Contains(string(commands), "packages upgrade") {
@@ -344,7 +374,7 @@ func TestBootstrapInstallsTheCommandBeforeAResourceFailure(t *testing.T) {
 	binary, home := buildConfig(t), t.TempDir()
 	writeMainTestMise(t, home, `#!/bin/sh
 if [ "$1" = --version ]; then
-  printf '2026.10.18\n'
+  printf '2026.10.21\n'
   exit 0
 fi
 exit 1
@@ -361,8 +391,8 @@ exit 1
 	git("config", "user.name", "Config Test")
 	git("config", "user.email", "config@example.invalid")
 	document := `kind = "azohra.config.machine"
-schema = 5
-mise = true
+schema = 6
+chrome_pwas = true
 
 [repository]
 branch = "main"
@@ -371,11 +401,17 @@ url = "` + source + `"
 	if err := os.WriteFile(filepath.Join(source, "config.toml"), []byte(document), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git("add", "config.toml")
+	if err := os.MkdirAll(filepath.Join(source, "snapshots"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "snapshots/chrome-pwas.json"), []byte("{invalid"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "config.toml", "snapshots")
 	git("commit", "--quiet", "-m", "Add machine contract")
 
 	output, code := runConfig(t, binary, home, "bootstrap", source)
-	if code != 1 || !strings.Contains(output, "Mise") {
+	if code != 1 || !strings.Contains(output, "Chrome PWAs") {
 		t.Fatalf("bootstrap with a failed resource = %q (exit %d)", output, code)
 	}
 	installed := filepath.Join(home, ".local", "bin", "config")
@@ -485,7 +521,7 @@ func TestOperationEventModeFramesCommandErrors(t *testing.T) {
 
 func TestInternalUpdateRefusesAChangedPlanBeforeApply(t *testing.T) {
 	binary, home := buildConfig(t), fixtureHome(t)
-	output, code := runConfig(t, binary, home, "--run-update", "software", "sha256:stale")
+	output, code := runConfig(t, binary, home, "--run-update", "sha256:stale")
 	if code != 1 || !strings.Contains(output, "update plan changed") {
 		t.Fatalf("changed update plan exited %d:\n%s", code, output)
 	}
