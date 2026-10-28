@@ -108,6 +108,67 @@ func TestExistingCheckoutWithoutMatchingRestoreStateIsNeverRestored(t *testing.T
 	})
 }
 
+func TestExplicitRestoreAdoptsANativeCheckoutOnce(t *testing.T) {
+	paths := managedTestPaths(t)
+	source := filepath.Join(t.TempDir(), "machine.git")
+	document := `kind = "azohra.config.machine"
+schema = 6
+[repository]
+branch = "main"
+url = "` + source + `"
+`
+	repositoryFixtureAt(t, source, document)
+	if err := os.MkdirAll(filepath.Dir(paths.Root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, filepath.Dir(paths.Root), "clone", "--quiet", source, paths.Root)
+	machine, err := LoadMachine(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(paths, machine, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	progress, pending, err := pendingRestore(paths, machine, io.Discard)
+	if err != nil || pending || progress.record.Status != restoreCompleteState {
+		t.Fatalf("native restore = %+v, pending %t, %v", progress.record, pending, err)
+	}
+	before, err := os.ReadFile(restoreStatePath(paths, progress.record.Checkout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(paths, machine, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(restoreStatePath(paths, progress.record.Checkout))
+	if string(before) != string(after) {
+		t.Fatal("completed native restore changed on repeat")
+	}
+}
+
+func TestExplicitRestoreRefusesDirtyNativeCheckout(t *testing.T) {
+	paths := managedTestPaths(t)
+	source := filepath.Join(t.TempDir(), "machine.git")
+	repositoryFixtureAt(t, source, machineDocumentForRepository(source))
+	if err := os.MkdirAll(filepath.Dir(paths.Root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, filepath.Dir(paths.Root), "clone", "--quiet", source, paths.Root)
+	machine, err := LoadMachine(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.InRoot("local-work"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(paths, machine, io.Discard); err == nil {
+		t.Fatal("dirty native checkout entered restoration")
+	}
+	if _, found, err := checkoutRestoreID(paths); err != nil || found {
+		t.Fatalf("refused restore established an identity: %t, %v", found, err)
+	}
+}
+
 func repositoryFixtureAt(t *testing.T, remote, machineDocument string) string {
 	t.Helper()
 	work := t.TempDir()

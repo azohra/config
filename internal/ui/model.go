@@ -39,7 +39,6 @@ type prunePlanMsg struct {
 type updatePlanMsg struct {
 	request uint64
 	plan    config.UpdatePlan
-	scope   config.UpdateScope
 	err     error
 }
 
@@ -66,12 +65,10 @@ type Model struct {
 	overviewReady    bool
 	overviewError    error
 	updatePreview    config.UpdatePlan
-	updateScope      config.UpdateScope
 	checkingOverview bool
 	checkingUpdate   bool
 	updateError      error
 	planRequest      uint64
-	planScope        config.UpdateScope
 	planPreview      bool
 	planContext      context.Context
 	planCancel       context.CancelFunc
@@ -102,7 +99,6 @@ func New(paths config.Paths, machine config.Machine, executable, version string,
 		height:           24,
 		checkingOverview: true,
 		planRequest:      1,
-		planScope:        config.UpdateSoftware,
 		planContext:      ctx,
 		planCancel:       cancel,
 		last:             loadOperationResult(paths),
@@ -127,14 +123,14 @@ func (m Model) Init() tea.Cmd {
 	if m.reopenResult {
 		return m.inspectCmd(true)
 	}
-	return tea.Batch(m.inspectCmd(), m.updatePlanCmd(m.planContext, m.planRequest, m.planScope), m.spinner.Tick)
+	return tea.Batch(m.inspectCmd(), m.updatePlanCmd(m.planContext, m.planRequest), m.spinner.Tick)
 }
 
-func (m Model) updatePlanCmd(ctx context.Context, request uint64, scope config.UpdateScope) tea.Cmd {
+func (m Model) updatePlanCmd(ctx context.Context, request uint64) tea.Cmd {
 	planner := m.updater
 	return func() tea.Msg {
-		plan, err := planner.PlanContext(ctx, scope)
-		return updatePlanMsg{request: request, plan: plan, scope: scope, err: err}
+		plan, err := planner.PlanContext(ctx)
+		return updatePlanMsg{request: request, plan: plan, err: err}
 	}
 }
 
@@ -213,7 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pruneHasWork = msg.hasWork
 		m.screen = screenPrune
 	case updatePlanMsg:
-		if msg.request != m.planRequest || msg.scope != m.planScope {
+		if msg.request != m.planRequest {
 			break
 		}
 		if m.planCancel != nil {
@@ -221,7 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.planCancel = nil
 		}
 		if m.planPreview {
-			if m.screen != screenUpdate || msg.scope != m.updateScope {
+			if m.screen != screenUpdate {
 				break
 			}
 			m.checkingUpdate = false
@@ -230,7 +226,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.overviewReady = msg.err == nil
 			m.overviewError = msg.err
 			m.updateOverview = msg.plan
-			m.updateScope = msg.scope
 			m.scroll = 0
 			m.screen = screenUpdate
 		} else {

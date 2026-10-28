@@ -194,25 +194,6 @@ func newMachineLiveRunner(paths Paths) LiveRunner {
 	return runner
 }
 
-// NewMiseRunner gives commands issued for the Mise resource the canonical
-// global configuration. Native resources and repository operations use
-// NewMachineRunner and inherit none of Mise's configuration selectors.
-func NewMiseRunner(paths Paths) OSRunner {
-	runner := NewMachineRunner(paths)
-	runner.Dir = paths.Home
-	runner.Environment = miseEnvironment(paths)
-	runner.Executables = map[string]string{"mise": misePath(paths)}
-	return runner
-}
-
-func newMiseLiveRunner(paths Paths) LiveRunner {
-	runner := newMachineLiveRunner(paths)
-	runner.Dir = paths.Home
-	runner.Environment = miseEnvironment(paths)
-	runner.Executables = map[string]string{"mise": misePath(paths)}
-	return runner
-}
-
 func (r LiveRunner) Command(name string, args ...string) error {
 	return r.CommandContext(context.Background(), name, args...)
 }

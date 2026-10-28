@@ -124,9 +124,9 @@ func TestPreflightErrorStopsOnFailuresAndUnresolvedChoices(t *testing.T) {
 // and writes nothing into the repository, so Mise needing attention
 // — a checkout behind its remote, a package not installed — must not stop a
 // backup of the Finder Favorites, the PWAs, and the saved preferences.
-func TestPreflightErrorDoesNotLetMiseBlockASnapshot(t *testing.T) {
+func TestPreflightIgnoresAuthoritativeResources(t *testing.T) {
 	report := Report{Resources: []Resource{
-		authoritativeResource(miseID, miseName, []Check{
+		authoritativeResource("external", "External", []Check{
 			no("mise bootstrap state needs attention", "repos"),
 		}),
 		{ID: finderFavoritesID, Name: finderFavoritesName, State: Current, Bidirectional: true},
@@ -138,7 +138,7 @@ func TestPreflightErrorDoesNotLetMiseBlockASnapshot(t *testing.T) {
 	// A resource that owns snapshot content still blocks: its saved artifact
 	// is what the commit would record.
 	corrupt := Report{Resources: []Resource{
-		authoritativeResource(miseID, miseName, nil),
+		authoritativeResource("external", "External", nil),
 		{ID: chromePWAsID, Name: chromePWAsName, State: Unavailable, Checks: []Check{
 			no("saved PWA backup valid", "icon digest mismatch"),
 		}},

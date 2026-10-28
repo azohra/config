@@ -8,20 +8,20 @@ Do not open a public issue containing credentials, private repository details,
 machine snapshots, or other sensitive data. Remove those values from logs and
 examples before attaching them to a report.
 
-The most sensitive boundaries are release acquisition and replacement, the
-pinned Mise download, agent-skill acquisition, repository locator validation,
-managed checkout replacement, child-process environment scoping, bidirectional
-capture, and snapshot destination enforcement. Agent-skill sources are trusted
-code and instructions: Config invokes an exact skills CLI package from its own
-npm cache, accepts only repository locators, and preserves installed content
-that no longer matches its ownership digest until Apply explicitly adopts a
-compatible same-source change. Config verifies the downloaded
-Mise bytes against the checksum embedded for its tested release before
-replacing the standalone command. Released updates use a separate cache-owned
-Mise adapter, not the machine resource, with GitHub asset digest verification.
-They resolve an exact stable version, verify the executable's version and refuse
-a downgrade before atomically replacing the permanent command. Releases are
-published by the Release workflow from a tag. Checksums detect
-corrupt or mismatched downloads; they do not establish build provenance or
-protect against replacement of both an asset and its digest on GitHub.
-Reports that cross one of those boundaries are especially useful.
+The most sensitive boundaries are release acquisition and replacement,
+repository locator validation, managed checkout replacement, child-process
+environment scoping, bidirectional capture, native restore identity, and
+snapshot destination enforcement.
+
+Config verifies the private release adapter against an embedded checksum.
+That adapter has no machine configuration and verifies GitHub's release asset
+digest. Updates resolve an exact stable version, verify the executable's
+version and refuse a downgrade before atomic replacement. Releases are
+published by the Release workflow from a tag. Checksums detect corrupt or
+mismatched downloads; they do not establish build provenance or protect against
+replacement of both an asset and its digest on GitHub.
+
+Machine tools, repositories, skills and MCP configuration are outside Config's
+ownership. Native setup remains trusted code; keep credentials and client state
+out of tracked declarations and captures. Reports crossing one of these
+boundaries are especially useful.

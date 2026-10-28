@@ -7,17 +7,38 @@ import (
 )
 
 const (
-	restoreMacOSStep        = "resource/" + macOSID
-	restoreMiseStep         = "resource/" + miseID
-	restoreMiseDefaultsStep = "resource/mise-defaults"
-	restoreAgentSkillsStep  = "resource/" + agentSkillsID
-	restoreMCPServersStep   = "resource/" + mcpServersID
+	restoreMacOSStep = "resource/" + macOSID
 )
 
 type freshRestoreStep struct {
 	id   string
 	name string
 	run  func() error
+}
+
+// Restore starts or resumes native restoration in a checkout acquired by the
+// machine's setup tool. Existing completed restores remain complete.
+func Restore(paths Paths, machine Machine, out io.Writer) error {
+	if _, err := validateMaterializedRepository(paths, machine.Repository.URL); err != nil {
+		return err
+	}
+	_, found, err := checkoutRestoreID(paths)
+	if err != nil {
+		return err
+	}
+	if !found {
+		if _, err := beginRestore(paths, paths, machine); err != nil {
+			return err
+		}
+	}
+	_, pending, err := pendingRestore(paths, machine, out)
+	if err != nil {
+		return err
+	}
+	if !pending {
+		return nil
+	}
+	return RestorePending(paths, machine, out)
 }
 
 // RestorePending resumes the restore attached to this managed checkout.
@@ -48,9 +69,6 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 		if progress.done(step.id) {
 			continue
 		}
-		if step.id == restoreMiseDefaultsStep && !progress.done(restoreMiseStep) {
-			continue
-		}
 		if err := step.run(); err != nil {
 			var advisory advisoryError
 			if errors.As(err, &advisory) {
@@ -68,8 +86,7 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 }
 
 // freshRestoreSteps is the ordered extension point for Config-owned restore
-// capabilities. Mise prepares tools first and applies defaults after native
-// resources, so declared Dock shortcuts exist before the layout is applied.
+// capabilities. A native setup driver runs these before applying dependent defaults.
 func freshRestoreSteps(applier Applier) []freshRestoreStep {
 	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+6)
 	if len(macOSFacts(applier.Machine)) > 0 {
@@ -82,33 +99,7 @@ func freshRestoreSteps(applier Applier) []freshRestoreStep {
 			},
 		})
 	}
-	if applier.Machine.Mise {
-		steps = append(steps, freshRestoreStep{
-			id: restoreMiseStep, name: miseName,
-			run: func() error {
-				applier.Log.Section(miseName)
-				return applier.prepareMise()
-			},
-		})
-	}
-	if applier.Machine.AgentSkills != nil {
-		steps = append(steps, freshRestoreStep{
-			id: restoreAgentSkillsStep, name: agentSkillsName,
-			run: func() error {
-				applier.Log.Section(agentSkillsName)
-				return applier.agentSkillManager().Reconcile()
-			},
-		})
-	}
-	if applier.Machine.MCPServers != nil {
-		steps = append(steps, freshRestoreStep{
-			id: restoreMCPServersStep, name: mcpServersName,
-			run: func() error {
-				applier.Log.Section(mcpServersName)
-				return applier.mcpServerManager().Reconcile()
-			},
-		})
-	}
+
 	if applier.Machine.FinderFavorites {
 		steps = append(steps, freshRestoreStep{
 			id:   "resource/" + finderFavoritesID,
@@ -160,14 +151,6 @@ func freshRestoreSteps(applier Applier) []freshRestoreStep {
 			},
 		})
 	}
-	if applier.Machine.Mise {
-		steps = append(steps, freshRestoreStep{
-			id: restoreMiseDefaultsStep, name: "Mise defaults",
-			run: func() error {
-				applier.Log.Section("Mise defaults")
-				return applier.finishMise()
-			},
-		})
-	}
+
 	return steps
 }

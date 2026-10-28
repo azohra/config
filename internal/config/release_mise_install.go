@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-type miseInstaller struct {
+type releaseMiseInstaller struct {
 	Destination string
 	URL         string
 	SHA256      string
@@ -21,35 +21,31 @@ type miseInstaller struct {
 	Client      *http.Client
 }
 
-func testedMiseInstaller(paths Paths) miseInstaller {
-	return testedMiseInstallerAt(misePath(paths))
-}
-
-func testedMiseInstallerAt(destination string) miseInstaller {
+func releaseMiseInstallerAt(destination string) releaseMiseInstaller {
 	asset, checksum := "", ""
 	var size int64
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "darwin/arm64":
-		asset = "mise-v" + testedMiseVersion + "-macos-arm64"
-		checksum = "d40e2fcd96fed7c70b04af282c36534d87d0318bef89c16fa00c9f98e55ade88"
-		size = 138217968
+		asset = "mise-v" + releaseMiseVersion + "-macos-arm64"
+		checksum = "b20d30788a819fade398a1cb92aee56c383e3c34324162ec39fb8567dee79ba6"
+		size = 138821904
 	case "darwin/amd64":
-		asset = "mise-v" + testedMiseVersion + "-macos-x64"
-		checksum = "72e1ced3bac89d0e0aa28b04bd22f8941c111d3b20c74a77bfb6a9486f25f7d3"
-		size = 168410640
+		asset = "mise-v" + releaseMiseVersion + "-macos-x64"
+		checksum = "5dde6e3fcda4d8a68b95cc2180dacd58e7b940f86e4579991e13540a5d009055"
+		size = 169964688
 	}
-	return miseInstaller{
+	return releaseMiseInstaller{
 		Destination: destination,
-		URL:         "https://github.com/jdx/mise/releases/download/v" + testedMiseVersion + "/" + asset,
+		URL:         "https://github.com/jdx/mise/releases/download/v" + releaseMiseVersion + "/" + asset,
 		SHA256:      checksum,
 		Size:        size,
 		Client:      &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
-func (i miseInstaller) Install() error {
+func (i releaseMiseInstaller) Install() error {
 	if i.URL == "" || i.SHA256 == "" || i.Size <= 0 {
-		return fmt.Errorf("mise %s has no release for %s/%s", testedMiseVersion, runtime.GOOS, runtime.GOARCH)
+		return fmt.Errorf("mise %s has no release for %s/%s", releaseMiseVersion, runtime.GOOS, runtime.GOARCH)
 	}
 	if !filepath.IsAbs(i.Destination) {
 		return errors.New("mise destination is not absolute")
@@ -60,14 +56,14 @@ func (i miseInstaller) Install() error {
 	}
 	response, err := client.Get(i.URL)
 	if err != nil {
-		return fmt.Errorf("download mise %s: %w", testedMiseVersion, err)
+		return fmt.Errorf("download mise %s: %w", releaseMiseVersion, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("download mise %s: %s", testedMiseVersion, response.Status)
+		return fmt.Errorf("download mise %s: %s", releaseMiseVersion, response.Status)
 	}
 	if response.ContentLength >= 0 && response.ContentLength != i.Size {
-		return fmt.Errorf("download mise %s: release size is %d bytes, want %d", testedMiseVersion, response.ContentLength, i.Size)
+		return fmt.Errorf("download mise %s: release size is %d bytes, want %d", releaseMiseVersion, response.ContentLength, i.Size)
 	}
 
 	parent := filepath.Dir(i.Destination)
@@ -100,10 +96,10 @@ func (i miseInstaller) Install() error {
 		}
 	}
 	if written != i.Size {
-		return fmt.Errorf("download mise %s: release size is %d bytes, want %d", testedMiseVersion, written, i.Size)
+		return fmt.Errorf("download mise %s: release size is %d bytes, want %d", releaseMiseVersion, written, i.Size)
 	}
 	if actual := fmt.Sprintf("%x", hash.Sum(nil)); actual != i.SHA256 {
-		return fmt.Errorf("verify mise %s: checksum is %s, want %s", testedMiseVersion, actual, i.SHA256)
+		return fmt.Errorf("verify mise %s: checksum is %s, want %s", releaseMiseVersion, actual, i.SHA256)
 	}
 	if err := os.Rename(stagedName, i.Destination); err != nil {
 		return fmt.Errorf("install mise command: %w", err)
@@ -121,20 +117,20 @@ func (i miseInstaller) Install() error {
 	return nil
 }
 
-func ensureTestedMise(runner Runner, install func() error) error {
-	return ensureTestedMiseContext(context.Background(), runner, install)
+func ensureReleaseMise(runner Runner, install func() error) error {
+	return ensureReleaseMiseContext(context.Background(), runner, install)
 }
 
-func ensureTestedMiseContext(ctx context.Context, runner Runner, install func() error) error {
+func ensureReleaseMiseContext(ctx context.Context, runner Runner, install func() error) error {
 	version, err := currentMiseVersionContext(ctx, runner)
-	if err == nil && supportsTestedMise(version) {
+	if err == nil && supportsReleaseMise(version) {
 		return nil
 	}
 	if install == nil {
 		if err != nil {
 			return err
 		}
-		return fmt.Errorf("mise %s is unsupported; install mise %s", version, testedMiseVersion)
+		return fmt.Errorf("mise %s is unsupported; install mise %s", version, releaseMiseVersion)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -146,8 +142,8 @@ func ensureTestedMiseContext(ctx context.Context, runner Runner, install func() 
 	if err != nil {
 		return err
 	}
-	if !supportsTestedMise(version) {
-		return fmt.Errorf("mise %s is unsupported; install mise %s", version, testedMiseVersion)
+	if !supportsReleaseMise(version) {
+		return fmt.Errorf("mise %s is unsupported; install mise %s", version, releaseMiseVersion)
 	}
 	return nil
 }

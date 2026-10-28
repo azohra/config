@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,23 +12,21 @@ import (
 
 const (
 	MachineKind   = "azohra.config.machine"
-	MachineSchema = 5
+	MachineSchema = 6
 	managedRemote = "origin"
 )
 
 // Machine is Config's complete contract inside config.toml.
 type Machine struct {
-	Kind            string             `toml:"kind"`
-	Schema          int                `toml:"schema"`
-	Repository      MachineRepository  `toml:"repository"`
-	Mise            bool               `toml:"mise"`
-	AgentSkills     *AgentSkills       `toml:"agent_skills"`
-	MCPServers      *MCPServers        `toml:"mcp_servers"`
-	ChromePWAs      bool               `toml:"chrome_pwas"`
-	FinderFavorites bool               `toml:"finder_favorites"`
-	RepositoryHooks []RepositoryHook   `toml:"repository_hooks"`
-	MacOS           MachineMacOS       `toml:"macos"`
-	Preferences     []PreferenceBackup `toml:"preferences"`
+	Kind       string            `toml:"kind"`
+	Schema     int               `toml:"schema"`
+	Repository MachineRepository `toml:"repository"`
+
+	ChromePWAs      bool `toml:"chrome_pwas"`
+	FinderFavorites bool `toml:"finder_favorites"`
+
+	MacOS       MachineMacOS       `toml:"macos"`
+	Preferences []PreferenceBackup `toml:"preferences"`
 }
 
 type MachineRepository struct {
@@ -49,7 +46,7 @@ type MachineMacOS struct {
 // A preference that borrowed one would collide with that capability wherever a
 // report, a selection, or a baseline is keyed by resource id.
 var reservedResourceIDs = []string{
-	miseID, agentSkillsID, mcpServersID, macOSID, chromePWAsID, finderFavoritesID, repositoryHooksID,
+	macOSID, chromePWAsID, finderFavoritesID,
 }
 
 var (
@@ -100,29 +97,7 @@ func (m Machine) Validate() error {
 	if !validGitName(m.Repository.Branch) {
 		return fmt.Errorf("repository.branch %q is invalid", m.Repository.Branch)
 	}
-	if m.AgentSkills != nil {
-		if err := m.AgentSkills.Validate(); err != nil {
-			return fmt.Errorf("agent_skills: %w", err)
-		}
-	}
-	if m.MCPServers != nil {
-		if err := m.MCPServers.Validate(); err != nil {
-			return fmt.Errorf("mcp_servers: %w", err)
-		}
-	}
-	seenHooks := map[string]bool{}
-	for _, hook := range m.RepositoryHooks {
-		if !contractIDPattern.MatchString(hook.Name) {
-			return fmt.Errorf("repository_hooks name %q is invalid", hook.Name)
-		}
-		if seenHooks[hook.Name] {
-			return fmt.Errorf("repository_hooks repeats name %q", hook.Name)
-		}
-		seenHooks[hook.Name] = true
-		if hook.Source == "" || !filepath.IsLocal(hook.Source) || filepath.Clean(hook.Source) == "." {
-			return fmt.Errorf("repository_hooks %q source must be a relative file path", hook.Name)
-		}
-	}
+
 	seenPreferences := map[string]bool{}
 	for _, preference := range m.Preferences {
 		if !contractIDPattern.MatchString(preference.ID) || preference.Name == "" {
@@ -147,9 +122,6 @@ func validGitName(value string) bool {
 		!strings.HasSuffix(value, ".") && !strings.HasSuffix(value, "/")
 }
 
-// miseEnvironment selects the canonical global Mise configuration for a
-// command issued by the Mise resource and stops discovery at the home
-// directory. The managed checkout is configuration input, not a Mise project.
 var miseLocalEnvironment = []string{
 	"MISE_AUTO_UPDATE",
 	"MISE_NO_CONFIG",
@@ -159,21 +131,4 @@ var miseLocalEnvironment = []string{
 	"MISE_GLOBAL_CONFIG_FILE",
 	"MISE_SYSTEM_CONFIG_FILE",
 	"MISE_IGNORED_CONFIG_PATHS",
-}
-
-func miseEnvironment(paths Paths) []string {
-	return []string{
-		"MISE_AUTO_UPDATE=0",
-		"MISE_CONFIG_DIR=" + miseConfigDir(paths),
-		"MISE_GLOBAL_CONFIG_ROOT=" + paths.Home,
-		"MISE_CEILING_PATHS=" + paths.Home,
-		// Naming the configuration directory is not enough. An ambient
-		// MISE_GLOBAL_CONFIG_FILE replaces the machine document, a system
-		// config file is loaded alongside it, and an ignored path erases it —
-		// each one changing what Config converges the Mac against. Empty
-		// values leave the selection to the four names above.
-		"MISE_GLOBAL_CONFIG_FILE=",
-		"MISE_SYSTEM_CONFIG_FILE=",
-		"MISE_IGNORED_CONFIG_PATHS=",
-	}
 }

@@ -52,15 +52,11 @@ func (l Logger) Version(version string) {
 }
 
 type Applier struct {
-	Paths           Paths
-	Machine         Machine
-	Runner          Runner
-	Live            LiveRunner
-	Mise            Runner
-	MiseLive        LiveRunner
-	Skills          Runner
-	SkillsLive      commandRunner
-	InstallMise     func() error
+	Paths   Paths
+	Machine Machine
+	Runner  Runner
+	Live    LiveRunner
+
 	FinderFavorites finderFavoritesStore
 	Log             Logger
 	Bidir           Bidirectional
@@ -78,23 +74,13 @@ const (
 
 func NewApplier(paths Paths, machine Machine, out io.Writer) Applier {
 	runner := NewMachineRunner(paths)
-	installer := testedMiseInstaller(paths)
 	live := newMachineLiveRunner(paths)
 	live.Stdout, live.Stderr = out, out
-	miseLive := newMiseLiveRunner(paths)
-	miseLive.Stdout, miseLive.Stderr = out, out
-	skillsLive := newAgentSkillsLiveRunner(paths)
-	skillsLive.Stdout, skillsLive.Stderr = out, out
 	return Applier{
 		Paths:           paths,
 		Machine:         machine,
 		Runner:          runner,
 		Live:            live,
-		Mise:            NewMiseRunner(paths),
-		MiseLive:        miseLive,
-		Skills:          newAgentSkillsRunner(paths),
-		SkillsLive:      skillsLive,
-		InstallMise:     installer.Install,
 		FinderFavorites: newFinderFavoritesStore(),
 		Log:             Logger{Out: out},
 		Bidir:           newBidirectional(paths),
@@ -118,33 +104,14 @@ func (e Applier) Apply(selections []Selection) error {
 		fn   func(Action) error
 	}
 	var steps []step
-	miseReady := false
-	if len(e.Machine.RepositoryHooks) > 0 {
-		steps = append(steps, step{repositoryHooksID, repositoryHooksName, e.reconcileRepositoryHooks})
-	}
+
 	if len(macOSFacts(e.Machine)) > 0 {
 		steps = append(steps, step{macOSID, macOSName, func(Action) error {
 			e.convergeMacOS()
 			return nil
 		}})
 	}
-	if e.Machine.Mise {
-		steps = append(steps, step{miseID, miseName, func(Action) error {
-			err := e.prepareMise()
-			miseReady = err == nil
-			return err
-		}})
-	}
-	if e.Machine.AgentSkills != nil {
-		steps = append(steps, step{agentSkillsID, agentSkillsName, func(Action) error {
-			return e.agentSkillManager().Reconcile()
-		}})
-	}
-	if e.Machine.MCPServers != nil {
-		steps = append(steps, step{mcpServersID, mcpServersName, func(Action) error {
-			return e.mcpServerManager().Reconcile()
-		}})
-	}
+
 	if e.Machine.FinderFavorites {
 		steps = append(steps, step{finderFavoritesID, finderFavoritesName, e.reconcileFinderFavorites})
 	}
@@ -156,14 +123,7 @@ func (e Applier) Apply(selections []Selection) error {
 	if e.Machine.ChromePWAs {
 		steps = append(steps, step{chromePWAsID, chromePWAsName, e.reconcileChromePWAs})
 	}
-	if e.Machine.Mise {
-		steps = append(steps, step{miseID, "Mise defaults", func(Action) error {
-			if !miseReady {
-				return advisoryError{"Mise setup did not finish; defaults remain pending"}
-			}
-			return e.finishMise()
-		}})
-	}
+
 	var failures []error
 	converged := make(map[string]bool)
 	for _, step := range steps {
@@ -207,13 +167,6 @@ func (e Applier) Apply(selections []Selection) error {
 		}
 	}
 	return errors.Join(failures...)
-}
-
-func (e Applier) agentSkillManager() agentSkillManager {
-	return agentSkillManager{
-		Paths: e.Paths, Skills: *e.Machine.AgentSkills, Probe: e.Skills,
-		Live: e.SkillsLive, Log: e.Log,
-	}
 }
 
 func (e Applier) reconcilePreference(preference PreferenceBackup, action Action) error {
@@ -300,40 +253,6 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 	return nil
 }
 
-func (e Applier) prepareMise() error {
-	if err := ensureTestedMise(e.Mise, e.InstallMise); err != nil {
-		return err
-	}
-	if err := ensureMiseConfigBinding(e.Paths); err != nil {
-		return err
-	}
-	if len(e.Machine.RepositoryHooks) > 0 {
-		if _, err := e.applyRepositoryHookTargets(false); err != nil {
-			return fmt.Errorf("prepare repository hook template: %w", err)
-		}
-	}
-	// Dirty declared repositories remain visible in status. Skipping them here
-	// lets independent machine resources converge without touching local work.
-	live := e.MiseLive
-	if len(e.Machine.RepositoryHooks) > 0 {
-		live.Environment = append(live.Environment, repositoryHookTemplateEnvironment(e.Paths)...)
-	}
-	if err := live.Command("mise", "bootstrap", "--yes", "--skip-dirty", "--skip", "macos-defaults,task,final-hook"); err != nil {
-		return err
-	}
-	if len(e.Machine.RepositoryHooks) > 0 {
-		changed, err := e.applyRepositoryHookTargets(true)
-		if err != nil {
-			return fmt.Errorf("reconcile repository hooks: %w", err)
-		}
-		if changed > 0 {
-			e.Log.OK(FormatCount(changed, "hook copy refreshed", "hook copies refreshed"))
-		}
-	}
-	e.Log.OK("mise tools and resources prepared")
-	return nil
-}
-
 // convergeMacOS applies the declared native settings and reports what it could
 // not do without failing the resource. macOS records nothing in the repository,
 // so one unreadable probe must not stop a restore.
@@ -345,20 +264,4 @@ func (e Applier) convergeMacOS() {
 	if err != nil {
 		e.Log.Warn(err.Error())
 	}
-}
-
-// finishMise applies defaults after native app restoration, so Dock declarations
-// can refer to Chrome PWA bundles. Keep the bootstrap task and final hook last.
-func (e Applier) finishMise() error {
-	if err := requireTestedMise(e.Mise); err != nil {
-		return err
-	}
-	if err := requireMiseConfigBinding(e.Paths); err != nil {
-		return err
-	}
-	if err := e.MiseLive.Command("mise", "bootstrap", "--yes", "--only", "macos-defaults,task,final-hook"); err != nil {
-		return err
-	}
-	e.Log.OK("mise defaults and final hooks applied")
-	return nil
 }

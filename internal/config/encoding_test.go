@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -60,14 +59,6 @@ func TestEveryTrackedArtifactDecoderIsTheStrictOne(t *testing.T) {
 		t.Error("a restore record with trailing data was accepted")
 	}
 
-	hooks := t.TempDir()
-	manifest := `{"schema":1,"hooks":{}}`
-	if err := os.WriteFile(filepath.Join(hooks, repositoryHookManifestName), trailing(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readRepositoryHookManifest(hooks); err == nil {
-		t.Error("a hook ownership manifest with trailing data was accepted")
-	}
 }
 
 func TestContentDigestIsOneSpelling(t *testing.T) {
