@@ -6,10 +6,6 @@ import (
 	"io"
 )
 
-const (
-	restoreMacOSStep = "resource/" + macOSID
-)
-
 type freshRestoreStep struct {
 	id   string
 	name string
@@ -88,17 +84,7 @@ func restorePending(applier Applier, progress *restoreProgress) error {
 // freshRestoreSteps is the ordered extension point for Config-owned restore
 // capabilities. A native setup driver runs these before applying dependent defaults.
 func freshRestoreSteps(applier Applier) []freshRestoreStep {
-	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+6)
-	if len(macOSFacts(applier.Machine)) > 0 {
-		steps = append(steps, freshRestoreStep{
-			id: restoreMacOSStep, name: macOSName,
-			run: func() error {
-				applier.Log.Section(macOSName)
-				applier.convergeMacOS()
-				return nil
-			},
-		})
-	}
+	steps := make([]freshRestoreStep, 0, len(applier.Machine.Preferences)+2)
 
 	if applier.Machine.FinderFavorites {
 		steps = append(steps, freshRestoreStep{

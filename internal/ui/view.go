@@ -169,14 +169,14 @@ func dashboardHealth(report config.Report) (string, string) {
 	if decisions > 0 {
 		parts = append(parts, config.FormatCount(decisions, "choice required", "choices required"))
 	}
-	authoritative := 0
+	fixes := 0
 	for _, choice := range plan {
 		if !choice.resource.Bidirectional {
-			authoritative++
+			fixes++
 		}
 	}
-	if authoritative > 0 {
-		parts = append(parts, config.FormatCount(authoritative, "proposed fix", "proposed fixes"))
+	if fixes > 0 {
+		parts = append(parts, config.FormatCount(fixes, "proposed fix", "proposed fixes"))
 	}
 	parts = append(parts, report.Snapshot.PendingParts()...)
 	if advisories > 0 {

@@ -45,10 +45,6 @@ type Resource struct {
 	Actions       []Action
 	ActionLabels  map[Action]string
 	Bidirectional bool
-	// Authoritative marks a resource that converges live machine settings and
-	// records nothing in the repository. Its health belongs in status, but it
-	// cannot make a snapshot wrong, so it does not gate a save.
-	Authoritative bool
 }
 
 func (r Resource) Allows(action Action) bool {
@@ -189,15 +185,11 @@ func (r Report) NeedsAttention() bool {
 	return failures > 0 || decisions > 0
 }
 
-// PreflightError is the gate Save runs before it commits. It asks only
-// whether the state this snapshot would record is describable: a resource
-// that owns no snapshot content cannot make the commit wrong.
+// PreflightError is the gate Save runs before it commits. Every resource owns
+// snapshot content, so failed reads and unresolved choices block the commit.
 func (r Report) PreflightError() error {
 	var problems []string
 	for _, resource := range r.Resources {
-		if resource.Authoritative {
-			continue
-		}
 		for _, check := range resource.Checks {
 			if !check.OK {
 				problems = append(problems, resource.Name+": "+check.Label)

@@ -59,7 +59,6 @@ func testMachine() Machine {
 			URL:    "https://github.com/example/machine.git",
 		},
 		ChromePWAs: true,
-		MacOS:      MachineMacOS{ClearUserKeyMapping: true},
 		Preferences: []PreferenceBackup{{
 			ID: "example-app", Name: "Example App", Bundle: "com.example.ExampleApp",
 			Domain: "com.example.ExampleApp",

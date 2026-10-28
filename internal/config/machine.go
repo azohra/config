@@ -12,7 +12,7 @@ import (
 
 const (
 	MachineKind   = "azohra.config.machine"
-	MachineSchema = 6
+	MachineSchema = 7
 	managedRemote = "origin"
 )
 
@@ -25,7 +25,6 @@ type Machine struct {
 	ChromePWAs      bool `toml:"chrome_pwas"`
 	FinderFavorites bool `toml:"finder_favorites"`
 
-	MacOS       MachineMacOS       `toml:"macos"`
 	Preferences []PreferenceBackup `toml:"preferences"`
 }
 
@@ -38,15 +37,11 @@ func (r MachineRepository) Destination() string {
 	return managedRemote + "/" + r.Branch
 }
 
-type MachineMacOS struct {
-	ClearUserKeyMapping bool `toml:"clear_user_key_mapping"`
-}
-
 // reservedResourceIDs are the identifiers Config's own capabilities answer to.
 // A preference that borrowed one would collide with that capability wherever a
 // report, a selection, or a baseline is keyed by resource id.
 var reservedResourceIDs = []string{
-	macOSID, chromePWAsID, finderFavoritesID,
+	chromePWAsID, finderFavoritesID,
 }
 
 var (

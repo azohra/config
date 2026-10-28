@@ -105,13 +105,6 @@ func (e Applier) Apply(selections []Selection) error {
 	}
 	var steps []step
 
-	if len(macOSFacts(e.Machine)) > 0 {
-		steps = append(steps, step{macOSID, macOSName, func(Action) error {
-			e.convergeMacOS()
-			return nil
-		}})
-	}
-
 	if e.Machine.FinderFavorites {
 		steps = append(steps, step{finderFavoritesID, finderFavoritesName, e.reconcileFinderFavorites})
 	}
@@ -251,17 +244,4 @@ func (e Applier) restorePreference(preference PreferenceBackup) error {
 		e.Log.OK(preference.Name + " relaunched")
 	}
 	return nil
-}
-
-// convergeMacOS applies the declared native settings and reports what it could
-// not do without failing the resource. macOS records nothing in the repository,
-// so one unreadable probe must not stop a restore.
-func (e Applier) convergeMacOS() {
-	changed, err := e.converge(macOSFacts(e.Machine))
-	if changed > 0 {
-		e.Log.OK("declared macOS settings applied")
-	}
-	if err != nil {
-		e.Log.Warn(err.Error())
-	}
 }

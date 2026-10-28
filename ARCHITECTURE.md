@@ -10,7 +10,7 @@ one.
 ## Ownership
 
 The machine repository owns policy and data. Its root `config.toml` is Config's
-strict schema 6 contract for native macOS capabilities and snapshot transport.
+strict schema 7 contract for native macOS capabilities and snapshot transport.
 Mise configuration belongs to mise: Config does not discover or bind it, install
 the machine executable, inspect its inventory, or coordinate upgrades/pruning.
 Skills, MCP entries and Git hook placement use native declarations. Config has
@@ -53,7 +53,7 @@ it stages, and the next run sweeps it.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
-capabilities. A capability is absent unless schema 6 declares it. The document
+capabilities. A capability is absent unless schema 7 declares it. The document
 opts into a capability and supplies personal values or payloads; Config owns
 where and how those declarations converge.
 
@@ -155,8 +155,10 @@ a fresh restore from an established checkout without matching progress.
 
 Native setup can invoke `config restore` from mise's `pre-defaults` hook.
 The hook must succeed before defaults can reference restored Chrome PWA bundles.
-Config itself no longer prepares mise or invokes its defaults phase. Hardware
-key mapping remains a small independent native resource using `hidutil`.
+Config itself does not prepare mise or invoke its defaults phase. A machine
+that clears hardware key mappings declares its `hidutil` command in native
+setup before Config restoration. A failure stops that setup phase; Config
+has no mapping parser, settings resource or restore checkpoint for it.
 
 Finder Favorites and Chrome PWAs use three-way reconciliation:
 
@@ -212,9 +214,8 @@ Save stages the entire managed tree because the repository itself is the
 snapshot. Before committing, Config verifies the repository root, declared
 branch, exact `origin/<branch>` upstream, and remote identity. It then refuses
 when a resource that owns snapshot content is unreadable or still waiting on a
-bidirectional choice. Authoritative live resources are reported in status but
-do not gate a save: they record nothing in the repository, so a package or
-checkout Mise owns cannot make a commit wrong. Config writes the
+bidirectional choice. Inspection and snapshot validation use the same retained
+resources; tools and machine settings belong to native setup. Config writes the
 fixed `Update machine snapshot` subject, commits under the repository's Git
 policy, and performs an append-only push. Push failure leaves the local commit
 intact.
