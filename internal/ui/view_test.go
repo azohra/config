@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -31,7 +33,7 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 
 		"select to check Config",
 		"Clean up",
-		"retired Config state",
+		"unused tools",
 		"Inspect configuration",
 		"Quit",
 	} {
@@ -204,6 +206,55 @@ func TestDashboardPresentsOperationResultAsBanner(t *testing.T) {
 	view := m.renderDashboard()
 	if !strings.Contains(view, "Apply complete") || !strings.Contains(view, "Save snapshot") {
 		t.Fatalf("dashboard missing result or next action:\n%s", view)
+	}
+}
+
+func TestDashboardKeepsMachineMaintenanceAvailable(t *testing.T) {
+	m := Model{report: config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}}, width: 100, height: 30}
+	view := ansi.Strip(m.renderDashboard())
+	for _, action := range []string{"Update software", "Update repositories", "Repair machine", "Clean up", "Update Config"} {
+		if !strings.Contains(view, action) {
+			t.Errorf("dashboard lost %q:\n%s", action, view)
+		}
+	}
+}
+
+func TestPreviousSessionFailureStaysInHistoryWithoutAlertingTheDashboard(t *testing.T) {
+	home := t.TempDir()
+	paths := config.Paths{Home: home, Root: filepath.Join(home, "machine"), StateDir: filepath.Join(home, "state")}
+	log := newOperationLog()
+	log.Append(config.OperationEvent{Kind: config.OperationWarn, Text: "earlier setup did not finish"})
+	result := operationResult{
+		label: "Apply", log: log, err: errors.New("provider failed"),
+		finishedAt: time.Date(2026, 9, 2, 15, 4, 5, 0, time.Local),
+	}
+	if err := saveOperationResult(paths, result); err != nil {
+		t.Fatal(err)
+	}
+	m := New(paths, config.Machine{}, "config", "v0.1.0")
+	defer m.cancelUpdatePlanning()
+	m.report = config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}}
+	view := ansi.Strip(m.renderDashboard())
+	for _, present := range []string{"Configuration matches", "View last operation", "Sep 2"} {
+		if !strings.Contains(view, present) {
+			t.Fatalf("dashboard lost %q:\n%s", present, view)
+		}
+	}
+	for _, stale := range []string{"Apply failed", "earlier setup did not finish"} {
+		if strings.Contains(view, stale) {
+			t.Fatalf("dashboard presents a previous session's failure as current:\n%s", view)
+		}
+	}
+	m.dashboardCursor = slices.Index(m.dashboardActions(), dashboardLastResult)
+	updated, _ := m.updateDashboard(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	if m.screen != screenResult || !strings.Contains(ansi.Strip(m.renderResult()), "Apply failed") {
+		t.Fatalf("previous failure is no longer available in history:\n%s", m.renderResult())
+	}
+	reopened := New(paths, config.Machine{}, "config", "v0.1.0", true)
+	defer reopened.cancelUpdatePlanning()
+	if reopened.screen != screenResult || !strings.Contains(ansi.Strip(reopened.renderResult()), "Apply failed") {
+		t.Fatalf("explicit result handoff lost the saved failure:\n%s", reopened.renderResult())
 	}
 }
 

@@ -31,9 +31,11 @@ type reportMsg struct {
 }
 
 type prunePlanMsg struct {
-	preview string
-	hasWork bool
-	err     error
+	request     uint64
+	preview     string
+	hasWork     bool
+	fingerprint string
+	err         error
 }
 
 type updatePlanMsg struct {
@@ -61,10 +63,14 @@ type Model struct {
 	choices          []planChoice
 	prunePreview     string
 	pruneHasWork     bool
+	pruneFingerprint string
+	pruneRequest     uint64
 	updateOverview   config.UpdatePlan
 	overviewReady    bool
 	overviewError    error
 	updatePreview    config.UpdatePlan
+	updateScope      config.UpdateScope
+	planScope        config.UpdateScope
 	checkingOverview bool
 	checkingUpdate   bool
 	updateError      error
@@ -128,8 +134,9 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) updatePlanCmd(ctx context.Context, request uint64) tea.Cmd {
 	planner := m.updater
+	scope := m.planScope
 	return func() tea.Msg {
-		plan, err := planner.PlanContext(ctx)
+		plan, err := planner.PlanContext(ctx, scope)
 		return updatePlanMsg{request: request, plan: plan, err: err}
 	}
 }
@@ -143,16 +150,19 @@ func (m Model) inspectCmd(passive ...bool) tea.Cmd {
 
 func (m Model) pruneCmd() tea.Cmd {
 	planner := m.pruner
+	request := m.pruneRequest
 	return func() tea.Msg {
 		plan, err := planner.Plan()
 		if err != nil {
-			return prunePlanMsg{err: err}
+			return prunePlanMsg{request: request, err: err}
 		}
 		var preview bytes.Buffer
 		config.WritePrunePlan(&preview, plan)
 		return prunePlanMsg{
-			preview: strings.TrimSpace(preview.String()),
-			hasWork: !plan.Empty(),
+			request:     request,
+			preview:     strings.TrimSpace(preview.String()),
+			hasWork:     !plan.Empty(),
+			fingerprint: plan.Fingerprint(),
 		}
 	}
 }
@@ -198,6 +208,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenDashboard
 		}
 	case prunePlanMsg:
+		if m.screen != screenPrune || msg.request != m.pruneRequest {
+			break
+		}
 		m.loading = false
 		m.scroll = 0
 		if msg.err != nil {
@@ -207,6 +220,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.prunePreview = msg.preview
 		m.pruneHasWork = msg.hasWork
+		m.pruneFingerprint = msg.fingerprint
 		m.screen = screenPrune
 	case updatePlanMsg:
 		if msg.request != m.planRequest {
@@ -223,9 +237,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.checkingUpdate = false
 			m.updateError = msg.err
 			m.updatePreview = msg.plan
-			m.overviewReady = msg.err == nil
-			m.overviewError = msg.err
-			m.updateOverview = msg.plan
+			if m.updateScope == config.UpdateConfig {
+				m.overviewReady = msg.err == nil
+				m.overviewError = msg.err
+				m.updateOverview = msg.plan
+			}
 			m.scroll = 0
 			m.screen = screenUpdate
 		} else {

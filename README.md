@@ -1,8 +1,9 @@
 # Config
 
-Config restores and backs up native Mac state from a Git repository: Finder
-Favorites, Chrome PWAs and application preferences.
-Mise owns tools, packages, repositories, dotfiles, services and their lifecycle.
+Config keeps a Mac and its Git snapshot in sync. Update apps, tools and
+repositories, repair machine setup, and back up Finder Favorites, Chrome PWAs
+and application preferences from one terminal interface. Mise runs the native
+machine operations.
 
 You choose the machine repository and keep control of its authentication.
 
@@ -38,8 +39,10 @@ mise x github:azohra/config -- \
 Bootstrap validates the repository, clones it to
 `~/Library/Application Support/Config/repository`, installs the released binary
 at `~/.local/bin/config`, and restores declared resources and existing
-snapshots. Each successful restore step is checkpointed independently. If one
-fails, rerun the same command; completed work will not repeat.
+snapshots. When the repository contains `mise/`, bootstrap prepares mise,
+installs its declared resources, restores Config snapshots, then applies native
+defaults. Each successful Config restore step is checkpointed independently.
+Rerunning bootstrap retries native setup and unfinished restoration.
 
 Authentication comes from the calling Git environment or credential helper.
 Config rejects repository URLs containing credentials.
@@ -51,7 +54,7 @@ capability is optional:
 
 ```toml
 kind = "azohra.config.machine"
-schema = 7
+schema = 8
 chrome_pwas = true
 finder_favorites = true
 
@@ -74,91 +77,86 @@ in it belongs there. Empty domains are refused.
 
 ## Native mise setup
 
-Config does not install or select the machine's mise, parse its declarations,
-or wrap its status, upgrade and prune commands. Run those commands directly:
+Put native mise configuration in the machine repository's `mise/` directory.
+Its presence enables machine maintenance in Config. Config connects it to
+`~/.config/mise`; an existing nonempty directory or a link to another location
+is preserved and reported as a conflict.
 
-```sh
-mise bootstrap status
-mise bootstrap
-mise outdated --global
-mise upgrade --global
-mise bootstrap packages upgrade
-mise bootstrap repos update
-mise prune --dry-run
-```
+Bootstrap and Repair machine install the verified mise 2026.10.21 binary when
+mise is missing or older. A newer installed version is retained. Config's own
+release transport uses a separate private adapter.
 
-With mise 2026.10.21 or newer, a repository can retain its native configuration
-under `mise/`. After verified mise acquisition, native bootstrap can clone it
-to Config's managed location and select that nested directory:
+Config asks mise for aggregate machine status and previews its own native
+commands before running them:
 
-```sh
-mise bootstrap --from https://github.com/owner/machine.git \
-  --from-dir "$HOME/Library/Application Support/Config/repository" \
-  --config-dir mise
-```
+| Config action | Native mise commands |
+| --- | --- |
+| Update software | `upgrade --global --no-prune`, `bootstrap packages upgrade` |
+| Update repositories | `bootstrap repos update --skip-dirty`, `dotfiles apply` |
+| Repair machine | `bootstrap --skip-dirty` |
+| Clean up | `prune`, supported managers' `bootstrap packages prune` |
 
-Install Config through its verified release path before its restoration hook
-runs. In the native mise declarations, restore Config's retained capabilities
-before applying defaults that depend on them:
+These operations also work directly through mise. Native declarations own tool
+pins, packages, repositories, skill links, MCP merges, Git templates, services
+and defaults. Config keeps no second ownership inventory for those resources.
+Repository updates skip local edits. Software updates respect declared versions
+and leave tool pruning to Clean up.
+
+A native repair hook can restore Config's retained capabilities before defaults
+that reference restored applications:
 
 ```toml
 [bootstrap.hooks.pre-defaults]
-run = 'config restore'
+run = '"$HOME/.local/bin/config" restore'
 
 [bootstrap.macos.dock]
 apps = ["~/Applications/Chrome Apps.localized/Example.app"]
 ```
 
-Starting or resuming `config restore` requires a clean, declared `origin/main`
-checkout. A completed restore remains complete, including after later local
-configuration changes. A failed restoration stops the hook before Dock defaults. Git
-repository acquisition, credentials, package installation and shell activation
-remain the native setup's responsibility. The genesis script remains a way to
-acquire Config and restore its capabilities; it does not install mise.
+`config bootstrap` guarantees this order even without the hook. Full native
+repair needs the hook when restoration is still pending. Native commands run
+outside Config's checkout lock so the hook can acquire it. Starting or resuming
+`config restore` requires a clean, declared `origin/main` checkout. Completed
+restores stay complete.
 
-Native Git templates must be installed before repositories are cloned. Native
-MCP fragments and source-backed skill links belong in mise's dotfiles and
-repository declarations. Mutable client settings require explicit merge or
-tracking semantics; linking a file does not make all its runtime state safe to
-commit.
+Native Git templates must be installed before repositories are cloned. Mutable
+client files need explicit merge or tracking declarations. Removing a source
+key from a native merge leaves that key in the target; remove obsolete client
+keys explicitly when changing a server's transport or retiring it.
 
-## Migrate from schema 6
+## Migrate to schema 8
 
-Install the schema-7 Config release before changing `config.toml`. Set
-`schema = 7` and remove the `[macos]` table. If `clear_user_key_mapping` was
-enabled, put its macOS command before Config restoration in the native hook:
+Schema 8 is a breaking migration. Config rejects all earlier schemas and removed
+fields with a migration error. It does not translate them or run the retired
+resource engines.
+
+Prepare the machine repository and the schema-8 Config release together. Keep a
+copy of the old executable and declarations until the migration is verified.
+A binary update alone does not migrate the repository.
+
+For schema 7, retain the existing native `mise/` declarations and snapshots and
+set `schema = 8`. For schema 5 or 6, first transfer `mise`, `agent_skills`,
+`mcp_servers`, `repository_hooks` and `[macos]` policy to native declarations,
+then remove those fields from `config.toml`. Retain repository identity,
+`chrome_pwas`, `finder_favorites` and `[[preferences]]` there. Verify existing
+skill links, MCP client state and repository-owned hooks before retiring the
+old ownership ledgers outside the snapshot tree.
+
+If hardware key mappings should be cleared, declare that command in native
+setup before Config restoration:
 
 ```toml
 [bootstrap.hooks.pre-defaults]
 run = [
   "hidutil property --set '{\"UserKeyMapping\":[]}'",
-  'config restore',
+  '"$HOME/.local/bin/config" restore',
 ]
 ```
 
-The native hook clears mappings each time full bootstrap or its
-`--only macos-defaults` phase runs. A failing command stops the phase before
-restoration and defaults. Config no longer inspects key mappings or offers a
-macOS settings resource. Snapshot validation still checks the saved native
-resources and unresolved choices.
-
-## Migrate from schema 5
-
-Remove `mise`, `agent_skills`, `mcp_servers` and `repository_hooks` from
-`config.toml` and set `schema = 7`. These fields are rejected, not ignored.
-Apply the schema-6 migration above as well.
-Before removing them, transfer their declarations to native mise and verify
-existing placements as well as cold clones. Preserve client state and unrelated
-skills and repository-owned hooks. Archive the retired ownership ledgers and
-accepted hook copies outside the snapshot tree; Config no longer reads or
-prunes them.
-
-`config update` now updates Config only. The `software` and `repositories`
-selectors are removed. Older Config releases may forward one of those
-selectors during their version-bound install handoff; that handoff completes
-without running the removed machine updater. Use native mise for subsequent
-machine operations. Config's private, checksummed release transport is separate
-from the machine's mise installation.
+Install the new release and apply the prepared repository migration before
+using machine maintenance. `config --status`, each update scope's `--dry-run`,
+and `config prune --dry-run` provide the checks after migration. Config's
+snapshot paths and append-only Git transport are unchanged.
 
 ## Native state
 
@@ -203,21 +201,30 @@ config --status
 config path
 config restore
 config update --dry-run
-config update --yes
+config update software --yes
+config update repositories --yes
+config update config --yes
+config repair --dry-run
 config prune --dry-run
 config prune --yes
 config --version
 ```
 
-Update and prune are preview-only without a terminal unless `--yes` is
-explicit. Their plans are recomputed before mutation; a changed plan requires
-a new review. Prune removes only verified Config baselines, completed restore
-records from older checkouts, and markers for capabilities no longer declared.
-Mise and retired skill/MCP/hook state remain outside that plan.
+`config update` selects everything: Config first, then software and repositories.
+Each scope can run separately. Repair runs the full declared native bootstrap,
+including its hooks and tasks.
+
+Update, repair and prune are preview-only without a terminal unless `--yes` is
+explicit. Plans bind the declarations and native preview; a change requires a
+new review. Clean up delegates unused tools, configuration records and supported
+package cleanup to mise, then removes verified obsolete Config state. It does
+not delete repositories or retired skill/MCP/hook ledgers. It does not prune
+orphaned dotfile links or remove old MCP keys from client files.
 
 Operations show typed progress and a current provider activity line. Press `d`
 for details. Failed operations open the final context, and a self-update
-reopens the persisted result from the installed binary.
+reopens the persisted result from the installed binary. Earlier sessions' results
+remain dated under View last operation and do not become current dashboard errors.
 
 Snapshot saves stage the whole managed tree, use `Update machine snapshot`,
 honor repository hooks, and push only to the declared branch and upstream.

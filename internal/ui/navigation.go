@@ -22,6 +22,9 @@ const (
 	dashboardSave
 	dashboardInspect
 	dashboardUpdateConfig
+	dashboardUpdateSoftware
+	dashboardUpdateRepositories
+	dashboardRepair
 	dashboardLastResult
 	dashboardCleanup
 	dashboardQuit
@@ -45,6 +48,9 @@ func (m Model) dashboardActions() []dashboardAction {
 	actions = append(actions,
 		dashboardInspect,
 		dashboardUpdateConfig,
+		dashboardUpdateSoftware,
+		dashboardUpdateRepositories,
+		dashboardRepair,
 	)
 	if m.last.label != "" {
 		actions = append(actions, dashboardLastResult)
@@ -97,6 +103,12 @@ func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenInventory
 		case dashboardUpdateConfig:
 			return m.beginUpdate()
+		case dashboardUpdateSoftware:
+			return m.beginUpdate(config.UpdateSoftware)
+		case dashboardUpdateRepositories:
+			return m.beginUpdate(config.UpdateRepositories)
+		case dashboardRepair:
+			return m.beginUpdate(config.UpdateRepair)
 		case dashboardLastResult:
 			m.showDiagnostics = m.last.err != nil && m.last.log.hasDiagnostics()
 			m.screen = screenResult
@@ -114,19 +126,24 @@ func (m Model) updateDashboard(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) beginUpdate() (tea.Model, tea.Cmd) {
+func (m Model) beginUpdate(selected ...config.UpdateScope) (tea.Model, tea.Cmd) {
+	scope := config.UpdateConfig
+	if len(selected) > 0 {
+		scope = selected[0]
+	}
+	m.updateScope = scope
 	m.screen = screenUpdate
 	m.updatePreview = config.UpdatePlan{}
 	m.updateError = nil
 	m.checkingUpdate = true
-	if m.overviewReady && m.overviewError == nil {
+	if m.overviewReady && m.overviewError == nil && m.updateOverview.Scope == scope {
 		m.updatePreview = m.updateOverview
 		m.checkingUpdate = false
 		m.scroll = 0
 		return m, nil
 	}
 	// Opening the preview reuses the dashboard's in-flight release check.
-	if m.planCancel != nil && m.checkingOverview {
+	if m.planCancel != nil && m.checkingOverview && m.planScope == scope {
 		m.planPreview = true
 		m.checkingOverview = false
 		m.scroll = 0
@@ -142,6 +159,7 @@ func (m *Model) startUpdatePlanning(preview bool) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.planCancel = cancel
 	m.planPreview = preview
+	m.planScope = m.updateScope
 	if preview {
 		m.checkingUpdate = true
 	} else {
@@ -179,7 +197,10 @@ func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenDashboard
 			return m, nil
 		}
-		return m.startOperation("Config update", m.executable, "--run-update", m.updatePreview.Fingerprint())
+		if m.updateScope == config.UpdateConfig {
+			return m.startOperation("Config update", m.executable, "--run-update", m.updatePreview.Fingerprint())
+		}
+		return m.startOperation(m.updateScope.Label(), m.executable, "--run-update", string(m.updateScope), m.updatePreview.Fingerprint())
 	}
 	return m, nil
 }
@@ -321,11 +342,13 @@ func (m Model) updateSnapshot(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) beginPrune() (tea.Model, tea.Cmd) {
 	m.cancelUpdatePlanning()
+	m.pruneRequest++
 	m.screen = screenPrune
 	m.loading = true
 	m.scroll = 0
 	m.prunePreview = ""
 	m.pruneHasWork = false
+	m.pruneFingerprint = ""
 	return m, tea.Batch(m.pruneCmd(), m.spinner.Tick)
 }
 
@@ -343,7 +366,7 @@ func (m Model) updatePrune(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll = min(m.scroll+10, m.scrollBound())
 	case "enter":
 		if m.pruneHasWork {
-			return m.startOperation("Cleanup", m.executable, "prune", "--yes")
+			return m.startOperation("Cleanup", m.executable, "--run-prune", m.pruneFingerprint)
 		}
 		m.screen = screenDashboard
 	}

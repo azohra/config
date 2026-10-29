@@ -45,6 +45,8 @@ type Resource struct {
 	Actions       []Action
 	ActionLabels  map[Action]string
 	Bidirectional bool
+	// Authoritative resources affect live machine health, not snapshot validity.
+	Authoritative bool
 }
 
 func (r Resource) Allows(action Action) bool {
@@ -185,11 +187,14 @@ func (r Report) NeedsAttention() bool {
 	return failures > 0 || decisions > 0
 }
 
-// PreflightError is the gate Save runs before it commits. Every resource owns
-// snapshot content, so failed reads and unresolved choices block the commit.
+// PreflightError gates Save on snapshot failures and unresolved choices.
+// Authoritative peers report live health without owning snapshot content.
 func (r Report) PreflightError() error {
 	var problems []string
 	for _, resource := range r.Resources {
+		if resource.Authoritative {
+			continue
+		}
 		for _, check := range resource.Checks {
 			if !check.OK {
 				problems = append(problems, resource.Name+": "+check.Label)

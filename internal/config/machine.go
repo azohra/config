@@ -12,7 +12,7 @@ import (
 
 const (
 	MachineKind   = "azohra.config.machine"
-	MachineSchema = 7
+	MachineSchema = 8
 	managedRemote = "origin"
 )
 
@@ -41,7 +41,7 @@ func (r MachineRepository) Destination() string {
 // A preference that borrowed one would collide with that capability wherever a
 // report, a selection, or a baseline is keyed by resource id.
 var reservedResourceIDs = []string{
-	chromePWAsID, finderFavoritesID,
+	chromePWAsID, finderFavoritesID, miseID,
 }
 
 var (
@@ -71,7 +71,7 @@ func LoadMachine(paths Paths) (Machine, error) {
 	decoder := toml.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&machine); err != nil {
-		return Machine{}, fmt.Errorf("decode %s: %w", filename, err)
+		return Machine{}, fmt.Errorf("decode %s: %w; migrate the machine declaration to schema %d and move machine resources to native mise declarations", filename, err, MachineSchema)
 	}
 	if err := machine.Validate(); err != nil {
 		return Machine{}, fmt.Errorf("%s: %w", filename, err)
@@ -84,7 +84,7 @@ func (m Machine) Validate() error {
 		return fmt.Errorf("kind is %q, want %q", m.Kind, MachineKind)
 	}
 	if m.Schema != MachineSchema {
-		return fmt.Errorf("schema is %d, want %d", m.Schema, MachineSchema)
+		return fmt.Errorf("schema is %d, want %d; migrate the machine declaration before continuing", m.Schema, MachineSchema)
 	}
 	if _, err := repositoryIdentity(m.Repository.URL); err != nil {
 		return fmt.Errorf("repository.url: %w", err)

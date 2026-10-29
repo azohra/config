@@ -35,12 +35,13 @@ type operation struct {
 }
 
 type operationResult struct {
-	label      string
-	log        operationLog
-	err        error
-	cancelled  bool
-	finishedAt time.Time
-	duration   time.Duration
+	label       string
+	log         operationLog
+	err         error
+	cancelled   bool
+	fromHistory bool
+	finishedAt  time.Time
+	duration    time.Duration
 }
 
 type operationEvent struct {

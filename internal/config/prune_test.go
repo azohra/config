@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,58 @@ func newPruneFixture(t *testing.T) pruneFixture {
 	t.Helper()
 	paths := testPaths(t)
 	return pruneFixture{Pruner{Paths: paths, Machine: Machine{}, Runner: &pruneStubRunner{}, Log: Logger{Out: io.Discard}}}
+}
+
+type nativePruneRunner struct {
+	nativeStatusRunner
+	preview string
+}
+
+func (r *nativePruneRunner) Run(ctx context.Context, name string, args ...string) Result {
+	if slices.Equal(args, []string{"bootstrap", "packages", "status", "--json"}) {
+		return Result{Stdout: `{"brew":{"available":true,"packages":[{"package":"example"}]}}`}
+	}
+	if slices.Contains(args, "prune") {
+		return Result{Stdout: r.preview}
+	}
+	return r.nativeStatusRunner.Run(ctx, name, args...)
+}
+
+func TestNativeCleanupRefusesAChangedPreviewAndRunsOnlyConfirmedScopes(t *testing.T) {
+	native, _ := nativeFixture(t)
+	gitTest(t, native.Paths.Root, "init", "--quiet")
+	runner := &nativePruneRunner{preview: "would remove unused example@1\n"}
+	native.Probe = runner
+	log := filepath.Join(t.TempDir(), "commands")
+	t.Setenv("NATIVE_PRUNE_TEST_LOG", log)
+	writeUpdateExecutable(t, native.Paths.InHome(".local", "bin", "mise"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$NATIVE_PRUNE_TEST_LOG\"\n")
+	p := newPruneFixture(t).pruner
+	p.Paths, p.Mise = native.Paths, &native
+	plan, err := p.Plan()
+	if err != nil || len(plan.native) != 2 {
+		t.Fatalf("native cleanup preview = %+v, %v", plan, err)
+	}
+	runner.preview = "would remove unused example@2\n"
+	if err := p.Apply(plan); err == nil || !strings.Contains(err.Error(), "plan changed") {
+		t.Fatalf("changed native cleanup was accepted: %v", err)
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatal("changed cleanup executed a command")
+	}
+	fresh, err := p.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Fingerprint() == plan.Fingerprint() {
+		t.Fatal("cleanup confirmation did not bind the native preview")
+	}
+	if err := p.Apply(fresh); err != nil {
+		t.Fatal(err)
+	}
+	commands, _ := os.ReadFile(log)
+	if string(commands) != "prune --yes\nbootstrap packages prune --manager brew --yes\n" {
+		t.Fatalf("native cleanup scope = %s", commands)
+	}
 }
 
 func TestPrunePreservesNativeResourcesAndRechecksConfigFiles(t *testing.T) {

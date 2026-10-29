@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,7 +47,7 @@ func fixtureHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	document := `kind = "azohra.config.machine"
-schema = 7
+schema = 8
 chrome_pwas = true
 
 [repository]
@@ -229,7 +230,7 @@ func TestUpdateRejectsAnUnknownScope(t *testing.T) {
 	}
 }
 
-func TestOlderReleaseScopeCompletesOnlyItsBoundHandoff(t *testing.T) {
+func TestConfigReleaseHandoffDoesNotRequireTheMachineSchema(t *testing.T) {
 	binary, home := buildConfigVersion(t, "v0.26.0"), fixtureHome(t)
 	canonical := filepath.Join(home, ".local", "bin", "config")
 	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
@@ -247,13 +248,11 @@ func TestOlderReleaseScopeCompletesOnlyItsBoundHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(config.UpdateReexecEnv, "v0.26.0")
-	for _, scope := range []string{"software", "repositories"} {
-		output, code := runConfig(t, canonical, home, "update", scope, "--yes")
-		if code != 0 || !strings.Contains(output, "installed for this update") {
-			t.Fatalf("older release handoff = %q (exit %d)", output, code)
-		}
+	output, code := runConfig(t, canonical, home, "update", "config", "--yes")
+	if code != 0 || !strings.Contains(output, "installed for this update") {
+		t.Fatalf("Config release handoff = %q (exit %d)", output, code)
 	}
-	output, code := runConfig(t, binary, home, "update", "software", "--yes")
+	output, code = runConfig(t, binary, home, "update", "config", "--yes")
 	if code == 0 || !strings.Contains(output, "outside the canonical command") {
 		t.Fatalf("foreign executable completed the handoff = %q (exit %d)", output, code)
 	}
@@ -265,9 +264,11 @@ func TestUpdateOptionsRequireOneExplicitApplyMode(t *testing.T) {
 		want updateOptions
 		ok   bool
 	}{
-		{nil, updateOptions{}, true},
-		{[]string{"--dry-run"}, updateOptions{dryRun: true}, true},
-		{[]string{"--yes"}, updateOptions{yes: true}, true},
+		{nil, updateOptions{scope: config.UpdateAll}, true},
+		{[]string{"--dry-run"}, updateOptions{scope: config.UpdateAll, dryRun: true}, true},
+		{[]string{"--yes"}, updateOptions{scope: config.UpdateAll, yes: true}, true},
+		{[]string{"software", "--dry-run"}, updateOptions{scope: config.UpdateSoftware, dryRun: true}, true},
+		{[]string{"repositories", "--yes"}, updateOptions{scope: config.UpdateRepositories, yes: true}, true},
 		{[]string{"--dry-run", "--yes"}, updateOptions{}, false},
 		{[]string{"software", "repositories"}, updateOptions{}, false},
 		{[]string{"--force"}, updateOptions{}, false},
@@ -282,14 +283,6 @@ func TestUpdateOptionsRequireOneExplicitApplyMode(t *testing.T) {
 func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	binary, home := buildConfig(t), fixtureHome(t)
 	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
-	document, err := os.ReadFile(filepath.Join(root, "config.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	document = bytes.Replace(document, []byte("chrome_pwas = true"), []byte("chrome_pwas = true"), 1)
-	if err := os.WriteFile(filepath.Join(root, "config.toml"), document, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Mkdir(filepath.Join(root, "mise"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -308,22 +301,26 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then printf '2026.10.21\n'; fi
+if [ "$1 $2" = "config ls" ]; then printf '[]\n'; fi
 if [ "$1" = outdated ]; then printf '{}\n'; fi
 if [ "$1 $2 $3" = "bootstrap packages status" ]; then printf '{"brew":{"packages":[{}]}}\n'; fi
+case " $* " in *" --dry-run "*) printf 'would update declared resources\n';; esac
 `
 	if err := os.WriteFile(mise, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	output, code := runConfig(t, binary, home, "update")
-	if code != 0 || !strings.Contains(output, "Config update") {
+	if code != 0 || !strings.Contains(output, "Update everything") || !strings.Contains(output, "would update declared resources") {
 		t.Fatalf("redirected update exited %d:\n%s", code, output)
 	}
 	commands, err := os.ReadFile(log)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(commands), "upgrade --yes") || strings.Contains(string(commands), "packages upgrade") {
-		t.Fatalf("preview mutated through Mise:\n%s", commands)
+	for _, command := range strings.Split(strings.TrimSpace(string(commands)), "\n") {
+		if (strings.Contains(command, "upgrade") || strings.Contains(command, " apply ") || strings.Contains(command, "repos update")) && !strings.Contains(command, "--dry-run") {
+			t.Fatalf("preview mutated through Mise:\n%s", commands)
+		}
 	}
 }
 
@@ -391,7 +388,7 @@ exit 1
 	git("config", "user.name", "Config Test")
 	git("config", "user.email", "config@example.invalid")
 	document := `kind = "azohra.config.machine"
-schema = 7
+schema = 8
 chrome_pwas = true
 
 [repository]
@@ -527,6 +524,85 @@ func TestInternalUpdateRefusesAChangedPlanBeforeApply(t *testing.T) {
 	}
 	if strings.Contains(output, "development build") {
 		t.Fatalf("changed update plan reached apply:\n%s", output)
+	}
+}
+
+func TestInternalCleanupRefusesAChangedPlanBeforeDeletion(t *testing.T) {
+	binary, home := buildConfig(t), fixtureHome(t)
+	output, code := runConfig(t, binary, home, "--run-prune", "sha256:stale")
+	if code != 1 || !strings.Contains(output, "cleanup plan changed") {
+		t.Fatalf("changed cleanup plan exited %d:\n%s", code, output)
+	}
+}
+
+func TestNativeBootstrapRestoresBeforeDefaultsAndAllowsTheRestoreHook(t *testing.T) {
+	binary := buildConfig(t)
+	for _, brokenSnapshot := range []bool{false, true} {
+		t.Run(fmt.Sprintf("broken_snapshot_%t", brokenSnapshot), func(t *testing.T) {
+			home, source := t.TempDir(), t.TempDir()
+			git := func(args ...string) {
+				t.Helper()
+				command := exec.Command("git", append([]string{"-C", source}, args...)...)
+				command.Env = append(os.Environ(), "GIT_TEMPLATE_DIR="+t.TempDir())
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, output)
+				}
+			}
+			git("init", "--quiet", "--initial-branch=main")
+			git("config", "user.name", "Config Test")
+			git("config", "user.email", "config@example.invalid")
+			git("config", "commit.gpgsign", "false")
+			document := fmt.Sprintf("kind = %q\nschema = 8\nchrome_pwas = %t\n[repository]\nbranch = 'main'\nurl = %q\n", config.MachineKind, brokenSnapshot, source)
+			if err := os.WriteFile(filepath.Join(source, "config.toml"), []byte(document), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(source, "mise"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "mise", "config.toml"), []byte("[tools]\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if brokenSnapshot {
+				if err := os.Mkdir(filepath.Join(source, "snapshots"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(source, "snapshots", "chrome-pwas.json"), []byte("unreadable"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			git("add", ".")
+			git("commit", "--quiet", "-m", "Add machine contract")
+			log := filepath.Join(home, "phases")
+			t.Setenv("NATIVE_BOOTSTRAP_TEST_LOG", log)
+			writeMainTestMise(t, home, `#!/bin/sh
+set -eu
+case "$*" in
+  --version) printf '2026.10.21\n'; exit 0;;
+  'config ls --json') printf '[]\n'; exit 0;;
+  'bootstrap status --json --missing') printf '{"tools":[]}\n'; exit 0;;
+  *--dry-run*) printf 'would apply machine setup\n'; exit 0;;
+  'bootstrap --skip-dirty --skip macos-defaults,task,final-hook --yes') printf 'setup\n' >> "$NATIVE_BOOTSTRAP_TEST_LOG"; exit 0;;
+esac
+grep -q '"status":"complete"' "$HOME/Library/Application Support/Config/restore/"*.json
+"$HOME/.local/bin/config" restore
+printf 'defaults after restore hook\n' >> "$NATIVE_BOOTSTRAP_TEST_LOG"
+`)
+			output, code := runConfig(t, binary, home, "bootstrap", source)
+			phases, _ := os.ReadFile(log)
+			if brokenSnapshot {
+				if code != 1 || string(phases) != "setup\n" || !strings.Contains(output, "Chrome PWAs") {
+					t.Fatalf("failed restoration reached defaults: exit %d, %q\n%s", code, phases, output)
+				}
+				return
+			}
+			if code != 0 || string(phases) != "setup\ndefaults after restore hook\n" {
+				t.Fatalf("bootstrap ordering or hook lock failed: exit %d, %q\n%s", code, phases, output)
+			}
+			output, code = runConfig(t, filepath.Join(home, ".local", "bin", "config"), home, "repair", "--yes")
+			if code != 0 {
+				t.Fatalf("repair hook could not call Config: exit %d\n%s", code, output)
+			}
+		})
 	}
 }
 

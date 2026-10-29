@@ -114,6 +114,64 @@ func TestUpdateRunsOnlyWhenSelected(t *testing.T) {
 	}
 }
 
+func TestMachineMaintenanceActionsConfirmTheirOwnScope(t *testing.T) {
+	for _, test := range []struct {
+		action dashboardAction
+		scope  config.UpdateScope
+	}{
+		{dashboardUpdateSoftware, config.UpdateSoftware},
+		{dashboardUpdateRepositories, config.UpdateRepositories},
+		{dashboardRepair, config.UpdateRepair},
+	} {
+		t.Run(string(test.scope), func(t *testing.T) {
+			m := Model{screen: screenDashboard, executable: "/tmp/config", overviewReady: true,
+				updateOverview: config.UpdatePlan{Groups: []config.UpdateGroup{{Name: "Config", State: config.UpdateCurrent}}},
+			}
+			m.dashboardCursor = slices.Index(m.dashboardActions(), test.action)
+			next, command := m.updateDashboard(press(tea.KeyEnter))
+			planning := next.(Model)
+			if command == nil || planning.updateScope != test.scope || !planning.checkingUpdate {
+				t.Fatalf("maintenance action reused the Config release check: %+v", planning)
+			}
+			plan := config.UpdatePlan{Scope: test.scope, Groups: []config.UpdateGroup{{Name: "Native resources", State: config.UpdatePending}}}
+			next, _ = planning.Update(updatePlanMsg{request: planning.planRequest, plan: plan})
+			preview := next.(Model)
+			if preview.screen != screenUpdate || preview.updateOverview.Scope != config.UpdateConfig {
+				t.Fatal("native preview replaced Config release availability")
+			}
+			next, command = preview.updateUpdate(press(tea.KeyEnter))
+			running := next.(Model)
+			want := []string{"--run-update", string(test.scope), plan.Fingerprint()}
+			if command == nil || running.operation.label != test.scope.Label() || !slices.Equal(running.operation.args, want) {
+				t.Fatalf("maintenance command = %q %q", running.operation.label, running.operation.args)
+			}
+		})
+	}
+}
+
+func TestNativePreviewRejectsAnOlderConfigReleaseCheck(t *testing.T) {
+	m := Model{screen: screenDashboard, checkingOverview: true, planRequest: 1, planCancel: func() {}}
+	next, _ := m.beginUpdate(config.UpdateSoftware)
+	planning := next.(Model)
+	defer planning.cancelUpdatePlanning()
+	next, _ = planning.Update(updatePlanMsg{request: 1, plan: config.UpdatePlan{Groups: []config.UpdateGroup{{State: config.UpdateAvailable}}}})
+	if got := next.(Model); !got.checkingUpdate || len(got.updatePreview.Groups) != 0 {
+		t.Fatal("an older release check replaced the software preview")
+	}
+}
+
+func TestCancelledCleanupDoesNotReplaceANewerReview(t *testing.T) {
+	first, _ := (Model{screen: screenDashboard}).beginPrune()
+	old := first.(Model)
+	left, _ := old.updatePrune(press(tea.KeyEscape))
+	second, _ := left.(Model).beginPrune()
+	planning := second.(Model)
+	next, _ := planning.Update(prunePlanMsg{request: old.pruneRequest, preview: "stale removal", hasWork: true})
+	if got := next.(Model); !got.loading || got.pruneHasWork {
+		t.Fatal("a cancelled cleanup replaced the current review")
+	}
+}
+
 func TestUpdatePreviewReusesAnInFlightDashboardCheck(t *testing.T) {
 	m := Model{screen: screenDashboard, checkingOverview: true, planRequest: 1, planCancel: func() {}}
 	next, cmd := m.beginUpdate()
@@ -183,6 +241,9 @@ func TestDashboardKeepsEveryLifecycleActionVisible(t *testing.T) {
 	want := []dashboardAction{
 		dashboardInspect,
 		dashboardUpdateConfig,
+		dashboardUpdateSoftware,
+		dashboardUpdateRepositories,
+		dashboardRepair,
 		dashboardCleanup,
 		dashboardQuit,
 	}
@@ -198,13 +259,14 @@ func TestCleanupPlansBeforeItCanRun(t *testing.T) {
 		dashboardCursor: 2,
 		executable:      "/tmp/config",
 	}
+	m.dashboardCursor = slices.Index(m.dashboardActions(), dashboardCleanup)
 	next, cmd := m.updateDashboard(press(tea.KeyEnter))
 	planning := next.(Model)
 	if cmd == nil || planning.screen != screenPrune || !planning.loading {
 		t.Fatalf("screen=%v loading=%v command=%v, want prune planning", planning.screen, planning.loading, cmd)
 	}
 
-	next, _ = planning.Update(prunePlanMsg{preview: "Prune plan\n\nMise tools\n  node@23", hasWork: true})
+	next, _ = planning.Update(prunePlanMsg{request: planning.pruneRequest, preview: "Prune plan\n\nMise tools\n  node@23", hasWork: true, fingerprint: "reviewed-plan"})
 	preview := next.(Model)
 	if preview.loading || preview.screen != screenPrune || !strings.Contains(preview.renderPrune(), "node@23") {
 		t.Fatalf("cleanup preview was not shown:\n%s", preview.render())
@@ -214,7 +276,7 @@ func TestCleanupPlansBeforeItCanRun(t *testing.T) {
 	if cmd == nil || running.screen != screenRunning || running.operation.label != "Cleanup" {
 		t.Fatalf("screen=%v label=%q command=%v", running.screen, running.operation.label, cmd)
 	}
-	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"prune", "--yes"}) {
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"--run-prune", "reviewed-plan"}) {
 		t.Fatalf("cleanup command = %q %q", running.operation.name, running.operation.args)
 	}
 }
