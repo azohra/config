@@ -127,7 +127,7 @@ func (m Model) dashboardUnsettled() ([]config.Resource, int) {
 }
 
 func (m Model) resultBanner() string {
-	if m.last.label == "" {
+	if m.last.label == "" || m.last.fromHistory {
 		return ""
 	}
 	symbol := good.Render("✓")

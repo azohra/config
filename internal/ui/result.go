@@ -86,7 +86,7 @@ func loadOperationResult(paths config.Paths) operationResult {
 	log.activity = lastNonblankLine(log.diagnostics.String())
 	result := operationResult{
 		label: stored.Label, log: log, cancelled: stored.Cancelled, finishedAt: stored.FinishedAt,
-		duration: time.Duration(stored.DurationMS) * time.Millisecond,
+		duration: time.Duration(stored.DurationMS) * time.Millisecond, fromHistory: true,
 	}
 	if stored.Error != "" {
 		result.err = errors.New(stored.Error)
