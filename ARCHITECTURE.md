@@ -10,37 +10,53 @@ one.
 ## Ownership
 
 The machine repository owns policy and data. Its root `config.toml` is Config's
-strict schema 7 contract for native macOS capabilities and snapshot transport.
-Mise configuration belongs to mise: Config does not discover or bind it, install
-the machine executable, inspect its inventory, or coordinate upgrades/pruning.
-Skills, MCP entries and Git hook placement use native declarations. Config has
-no schema or ownership engines for those resources.
+strict schema 8 contract for native macOS capabilities and snapshot transport.
+Earlier schemas and removed fields fail with migration guidance. There is no
+legacy parser, declaration compiler or alternate resource engine.
 
-`config update` resolves only Config's own release. A checksummed, private mise
-adapter in Config's release cache acquires the exact resolved executable with
-GitHub asset digest verification. It never selects the machine configuration
-or replaces the machine's mise. Downgrade refusal and executable version
-verification gate Config's atomic installation. The installed release resumes
-through a version-bound marker; old releases' forwarded machine scopes are
-accepted only at that handoff and no machine update runs.
+A physical `mise/` directory enables native machine maintenance. Bootstrap and
+repair connect it to `~/.config/mise`, replacing only a missing path or an
+empty directory. A foreign configuration is a conflict. Those operations
+install the verified minimum mise version if needed and preserve a newer
+version. Other operations only inspect that prerequisite and direct a missing
+setup to repair.
 
-The CLI and terminal interface share an update plan whose fingerprint excludes
-check time. The interface confirms that fingerprint through a locked child,
-which recomputes the release plan and refuses changed work. Applying the plan
-acquires its recorded release without repeating discovery. A generation-bound,
-cancellable background check cannot replace a newer preview. Completed
-operations invalidate cached availability and retain their result while native
-status refreshes.
+Mise owns machine tools, packages, repositories, dotfiles, services and
+defaults. Config presents its aggregate status and native dry-run plans.
+Software updates run global tool upgrades without pruning plus native package
+upgrades. Repository updates skip dirty checkouts, then apply dotfiles,
+including skill links and MCP merges. Repair runs native bootstrap, including
+declared hooks and tasks. Config maintains no second inventory for these
+resources.
+
+`config update config` resolves Config's own release. A checksummed private
+mise adapter in Config's release cache acquires the exact resolved executable
+with GitHub asset digest verification. It has no machine configuration.
+Downgrade refusal and executable version verification gate atomic installation.
+The installed release resumes through a version-bound marker at the canonical
+command. `config update` includes the native scopes after this handoff.
+
+CLI and terminal confirmation bind the selected scope, resolved release,
+declaration digest and native preview. Effective native includes outside the
+managed repository participate in the digest. Authored symlinks bind their
+target; effective configuration symlinks also bind their destination's bytes.
+Check time is excluded. The child recomputes the plan and refuses changed work,
+and native execution checks the declaration digest again. A generation-bound,
+cancellable background release check cannot replace a newer scoped preview.
+Completed operations invalidate cached availability and retain their result
+while native status refreshes. Historical results remain dated and do not show
+as new dashboard failures.
 
 Child operations use a typed JSON event stream. Provider bytes remain output
 events; the interface handles UTF-8, ANSI and carriage returns across write
 boundaries. A self-update emits its installed version, and the parent reopens
 the persisted result from that executable.
 
-Config is one writer at a time. Every command that writes takes an advisory
-lock on the managed checkout before it starts, and refuses rather than
-interleaving with another Config. The terminal interface holds no lock of its
-own, because the commands it launches take it for the work they do.
+Config's checkout writes and release installation take an advisory lock and
+refuse another writer. Bootstrap releases it before native setup and reacquires
+it for retained restoration. Native repair runs without it because a declared
+hook can call `config restore`, which takes its own lock. The terminal
+interface holds no lock; children take it for the Config work they perform.
 
 An interrupt lands between writes, not inside one. SIGINT and SIGTERM end the
 process once no file is mid-write; the staging, rename, and sync of a single
@@ -53,9 +69,9 @@ it stages, and the next run sweeps it.
 
 Config owns the managed checkout, the reconciliation model, the `snapshots/`
 storage convention, snapshot safety, the terminal interface, and its optional
-capabilities. A capability is absent unless schema 7 declares it. The document
-opts into a capability and supplies personal values or payloads; Config owns
-where and how those declarations converge.
+capabilities. A retained capability is absent unless schema 8 declares it. The
+document opts into a capability and supplies personal values or payloads;
+Config owns where and how those declarations converge.
 
 ## Genesis
 
@@ -63,8 +79,8 @@ where and how those declarations converge.
 runs in the system Bash 3.2 of a factory-fresh Mac and owns only what must
 happen before Config can read a machine repository: the Command Line Tools, a
 verified Config release, and one authenticated handoff. It installs nothing
-else. Mise, credential managers and other machine tools belong to the native setup
-that composes Config's retained restoration commands.
+else. After the handoff, Config bootstrap prepares mise when the machine
+repository declares native setup.
 
 The site serves the committed script unchanged, so it needs no deployment when
 Config is released. The script resolves the latest release once, downloads the
@@ -153,12 +169,16 @@ then establishes a restore identity only when none exists. Pending work resumes;
 a completed identity stays complete. Ordinary bootstrap still refuses to infer
 a fresh restore from an established checkout without matching progress.
 
-Native setup can invoke `config restore` from mise's `pre-defaults` hook.
-The hook must succeed before defaults can reference restored Chrome PWA bundles.
-Config itself does not prepare mise or invoke its defaults phase. A machine
-that clears hardware key mappings declares its `hidutil` command in native
-setup before Config restoration. A failure stops that setup phase; Config
-has no mapping parser, settings resource or restore checkpoint for it.
+Native setup can invoke `config restore` from mise's `pre-defaults` hook. The
+hook must succeed before defaults can reference restored Chrome PWA bundles.
+Config bootstrap first runs native setup with `macos-defaults`, `task` and
+`final-hook` skipped, then retained restoration, then only those deferred
+phases. A failed restore leaves the deferred phases pending for another run.
+The pre-defaults hook remains useful for direct native bootstrap and Repair
+machine. A machine that clears hardware key mappings declares its `hidutil`
+command in that hook before Config restoration. A failure stops that setup
+phase; Config has no mapping parser, settings resource or restore checkpoint
+for it.
 
 Finder Favorites and Chrome PWAs use three-way reconciliation:
 
@@ -214,11 +234,12 @@ Save stages the entire managed tree because the repository itself is the
 snapshot. Before committing, Config verifies the repository root, declared
 branch, exact `origin/<branch>` upstream, and remote identity. It then refuses
 when a resource that owns snapshot content is unreadable or still waiting on a
-bidirectional choice. Inspection and snapshot validation use the same retained
-resources; tools and machine settings belong to native setup. Config writes the
-fixed `Update machine snapshot` subject, commits under the repository's Git
-policy, and performs an append-only push. Push failure leaves the local commit
-intact.
+bidirectional choice. Snapshot validation checks retained snapshot resources
+independently of the native health peer; missing apps or dirty source
+repositories do not make unrelated snapshot content unreadable. Normal status
+still reports them. Config writes the fixed `Update machine snapshot` subject,
+commits under the repository's Git policy, and performs an append-only push.
+Push failure leaves the local commit intact.
 
 The repository locator is public configuration. Authentication stays in the
 caller's Git environment or credential helper, outside the document, logs, and
@@ -226,16 +247,24 @@ Config state.
 
 ## Pruning
 
-Prune considers only Config-owned artifacts. A baseline must validate its
-schema and resource identity and belong to a disabled capability. A completed
-restore record must validate and belong to a different checkout identity;
-current and pending records stay. A pending marker is eligible only after its
-capability is removed, and its bytes must match Config's marker format.
+Prune combines native dry-run cleanup with verified Config artifacts. A
+baseline must validate its schema and resource identity and belong to a
+disabled capability. A completed restore record must validate and belong to a
+different checkout identity; current and pending records stay. A pending marker
+is eligible only after its capability is removed, and its bytes must match
+Config's marker format.
 
-The CLI and terminal interface preview the exact plan. Apply recomputes it and
-refuses changed candidates, then checks each file's type and digest immediately
-before deletion. Retired skill/MCP/hook ledgers, repositories, tools, packages,
-mise registries and downloads are never discovered or removed by this plan.
+Mise previews unused tools and configuration records with `prune --dry-run`.
+Its package inventory selects configured managers for native package-prune
+previews. Unavailable providers leave their state untouched and report a
+warning. Config does not infer package ownership or use force flags.
+
+The CLI and terminal interface confirm the exact plan, including native
+previews and declaration bytes. Apply recomputes it and refuses changed work,
+then checks each Config file's type and digest immediately before deletion.
+Repositories, retired skill/MCP/hook ledgers, orphaned dotfile links and old
+merged client keys are outside this cleanup plan. Native merge key removal
+needs an explicit client migration.
 
 ## Packages
 

@@ -18,9 +18,10 @@ const (
 	UpdateAvailable   UpdateState = "available"
 	UpdateUnavailable UpdateState = "unavailable"
 	UpdateSkipped     UpdateState = "skipped"
+	UpdatePending     UpdateState = "pending"
 )
 
-// UpdateGroup describes Config's own release availability.
+// UpdateGroup describes a release or a native maintenance plan.
 type UpdateGroup struct {
 	Name    string
 	State   UpdateState
@@ -29,12 +30,14 @@ type UpdateGroup struct {
 	Count   int
 }
 
-// UpdatePlan binds confirmation to the exact Config release shown to the caller.
+// UpdatePlan binds confirmation to the release, declarations and native preview.
 type UpdatePlan struct {
 	CheckedAt       time.Time
 	Groups          []UpdateGroup
 	Blocked         bool
 	ResolvedVersion string
+	Scope           UpdateScope
+	Configuration   string
 }
 
 func (p UpdatePlan) Counts() (available, unavailable int) {
@@ -48,15 +51,28 @@ func (p UpdatePlan) Counts() (available, unavailable int) {
 	}
 	return
 }
-func (p UpdatePlan) HasWork() bool { n, _ := p.Counts(); return !p.Blocked && n > 0 }
+func (p UpdatePlan) HasWork() bool {
+	if p.Blocked {
+		return false
+	}
+	for _, group := range p.Groups {
+		if group.State == UpdateAvailable || group.State == UpdatePending {
+			return true
+		}
+	}
+	return false
+}
 func (p UpdatePlan) validate(version string) error {
 	if p.Blocked {
 		return errors.New("Config update is unavailable")
 	}
-	if len(p.Groups) != 1 || p.Groups[0].Name != "Config" {
+	if !p.Scope.valid() || len(p.Groups) == 0 {
 		return errors.New("confirmed update plan is incomplete")
 	}
-	if version != "dev" && !stableConfigVersion(p.ResolvedVersion) {
+	if (p.Scope == UpdateConfig || p.Scope == UpdateAll) && p.Groups[0].Name != "Config" {
+		return errors.New("confirmed Config release plan is incomplete")
+	}
+	if (p.Scope == UpdateConfig || p.Scope == UpdateAll) && version != "dev" && !stableConfigVersion(p.ResolvedVersion) {
 		return errors.New("confirmed plan has no resolved Config release")
 	}
 	return nil
@@ -66,14 +82,61 @@ func (p UpdatePlan) Fingerprint() string {
 		Groups          []UpdateGroup
 		Blocked         bool
 		ResolvedVersion string
-	}{p.Groups, p.Blocked, p.ResolvedVersion}
+		Scope           UpdateScope
+		Configuration   string
+	}{p.Groups, p.Blocked, p.ResolvedVersion, p.Scope, p.Configuration}
 	data, _ := json.Marshal(identity)
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
-func (u Updater) Plan() (UpdatePlan, error) { return u.PlanContext(context.Background()) }
-func (u Updater) PlanContext(ctx context.Context) (UpdatePlan, error) {
-	group, version := u.planConfigRelease(ctx)
-	return UpdatePlan{CheckedAt: time.Now(), Groups: []UpdateGroup{group}, Blocked: group.State == UpdateUnavailable, ResolvedVersion: version}, nil
+func (u Updater) Plan(scope ...UpdateScope) (UpdatePlan, error) {
+	return u.PlanContext(context.Background(), scope...)
+}
+func (u Updater) PlanContext(ctx context.Context, selected ...UpdateScope) (UpdatePlan, error) {
+	scope := UpdateConfig
+	if len(selected) > 0 {
+		scope = selected[0]
+	}
+	if !scope.valid() {
+		return UpdatePlan{}, errors.New("unknown update scope")
+	}
+	plan := UpdatePlan{CheckedAt: time.Now(), Scope: scope}
+	if scope == UpdateConfig || scope == UpdateAll {
+		group, version := u.planConfigRelease(ctx)
+		plan.Groups, plan.ResolvedVersion = []UpdateGroup{group}, version
+		if group.State == UpdateUnavailable {
+			plan.Blocked = true
+			return plan, nil
+		}
+		if group.State == UpdateAvailable && scope == UpdateAll {
+			plan.Groups = append(plan.Groups, UpdateGroup{Name: "Machine updates", State: UpdatePending, Summary: "The installed Config release will check machine updates after its verified handoff"})
+			return plan, nil
+		}
+	}
+	if scope != UpdateConfig {
+		_, err := LoadMachine(u.Paths)
+		if err != nil {
+			return UpdatePlan{}, err
+		}
+		if machineUsesMise(u.Paths) {
+			native := u.nativeMise()
+			plan.Configuration, err = native.configurationDigest(ctx)
+			if err != nil {
+				return UpdatePlan{}, err
+			}
+			if scope == UpdateAll {
+				plan.Groups = append(plan.Groups, native.plan(ctx, UpdateSoftware)...)
+				plan.Groups = append(plan.Groups, native.plan(ctx, UpdateRepositories)...)
+			} else {
+				plan.Groups = append(plan.Groups, native.plan(ctx, scope)...)
+			}
+		} else {
+			plan.Groups = append(plan.Groups, UpdateGroup{Name: scope.Label(), State: UpdateSkipped, Summary: "No native mise configuration is declared"})
+		}
+	}
+	for _, group := range plan.Groups {
+		plan.Blocked = plan.Blocked || group.State == UpdateUnavailable
+	}
+	return plan, nil
 }
 
 func (u Updater) planConfigRelease(ctx context.Context) (UpdateGroup, string) {
@@ -138,7 +201,7 @@ func (u Updater) planConfigRelease(ctx context.Context) (UpdateGroup, string) {
 }
 
 func WriteUpdatePlan(out io.Writer, plan UpdatePlan) {
-	fmt.Fprintln(out, "Config update")
+	fmt.Fprintln(out, plan.Scope.Label())
 	if plan.Blocked {
 		fmt.Fprintln(out, "  Update is unavailable")
 	}

@@ -10,7 +10,7 @@ import (
 func validMachineTOML() string {
 	return `
 kind = "azohra.config.machine"
-schema = 7
+schema = 8
 chrome_pwas = true
 finder_favorites = true
 
@@ -59,16 +59,18 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 	}{
 		{"empty contract", "", "kind is"},
 		{"wrong kind", strings.Replace(validMachineTOML(), MachineKind, "another.machine", 1), "kind is"},
-		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 7", "schema = 1", 1), "schema is 1"},
-		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 7", "schema = 2", 1), "schema is 2"},
+		{"wrong schema", strings.Replace(validMachineTOML(), "schema = 8", "schema = 1", 1), "schema is 1"},
+		{"implicit Mise schema", strings.Replace(validMachineTOML(), "schema = 8", "schema = 2", 1), "schema is 2"},
 		{"removed Mise resource", "mise = true\n" + validMachineTOML(), "strict mode"},
 		{"removed skills", validMachineTOML() + "\n[agent_skills]\nagents = [\"codex\"]\n", "strict mode"},
 		{"removed MCP", validMachineTOML() + "\n[mcp_servers]\nagents = [\"codex\"]\n", "strict mode"},
 		{"removed hooks", validMachineTOML() + "\n[[repository_hooks]]\nname = \"post-checkout\"\nsource = \"hook\"\n", "strict mode"},
 		{"removed Dock toggle", "dock = true\n" + validMachineTOML(), "strict mode"},
-		{"previous schema", strings.Replace(validMachineTOML(), "schema = 7", "schema = 6", 1), "schema is 6"},
+		{"schema 5", strings.Replace(validMachineTOML(), "schema = 8", "schema = 5", 1), "schema is 5"},
+		{"schema 6", strings.Replace(validMachineTOML(), "schema = 8", "schema = 6", 1), "schema is 6"},
+		{"schema 7", strings.Replace(validMachineTOML(), "schema = 8", "schema = 7", 1), "schema is 7"},
 		{"removed key mappings", validMachineTOML() + "\n[macos]\nclear_user_key_mapping = true\n", "strict mode"},
-		{"unknown field", strings.Replace(validMachineTOML(), "schema = 7", "schema = 7\ntyop = true", 1), "strict mode"},
+		{"unknown field", strings.Replace(validMachineTOML(), "schema = 8", "schema = 8\ntyop = true", 1), "strict mode"},
 		{"removed singular favorite", strings.Replace(validMachineTOML(), "finder_favorites = true", "[finder_favorite]\nname = \"Machine config\"", 1), "strict mode"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -82,7 +84,7 @@ func TestLoadMachineRejectsWrongIdentityAndUnknownFields(t *testing.T) {
 func TestLoadMachineAcceptsOnlyRepositoryIdentity(t *testing.T) {
 	content := `
 kind = "azohra.config.machine"
-schema = 7
+schema = 8
 
 [repository]
 branch = "main"
@@ -153,7 +155,7 @@ func TestLoadMachineRefusesAManagedRootSymlink(t *testing.T) {
 func TestMachineRefusesAPreferenceIdConfigAlreadyAnswersTo(t *testing.T) {
 	// Reports, selections, and baselines are all keyed by resource id, so a
 	// preference borrowing a capability's id collides with that capability.
-	for _, id := range []string{"chrome-pwas", "finder-favorites"} {
+	for _, id := range []string{"chrome-pwas", "finder-favorites", "mise"} {
 		machine := testMachine()
 		machine.Preferences[0].ID = id
 		if err := machine.Validate(); err == nil {

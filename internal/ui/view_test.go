@@ -33,7 +33,7 @@ func TestDashboardShowsOnlyAvailableActions(t *testing.T) {
 
 		"select to check Config",
 		"Clean up",
-		"retired Config state",
+		"unused tools",
 		"Inspect configuration",
 		"Quit",
 	} {
@@ -206,6 +206,16 @@ func TestDashboardPresentsOperationResultAsBanner(t *testing.T) {
 	view := m.renderDashboard()
 	if !strings.Contains(view, "Apply complete") || !strings.Contains(view, "Save snapshot") {
 		t.Fatalf("dashboard missing result or next action:\n%s", view)
+	}
+}
+
+func TestDashboardKeepsMachineMaintenanceAvailable(t *testing.T) {
+	m := Model{report: config.Report{Snapshot: config.SnapshotStatus{Upstream: "origin/main"}}, width: 100, height: 30}
+	view := ansi.Strip(m.renderDashboard())
+	for _, action := range []string{"Update software", "Update repositories", "Repair machine", "Clean up", "Update Config"} {
+		if !strings.Contains(view, action) {
+			t.Errorf("dashboard lost %q:\n%s", action, view)
+		}
 	}
 }
 

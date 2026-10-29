@@ -17,8 +17,6 @@ const (
 	UpdateReexecEnv      = "AZOHRA_CONFIG_UPDATE_REEXEC_VERSION"
 )
 
-const ()
-
 type Updater struct {
 	Paths            Paths
 	Version          string
@@ -37,6 +35,7 @@ type Updater struct {
 
 	Reexec          func(string, []string, []string) error
 	OperationEvents bool
+	Native          *NativeMise
 }
 
 func NewUpdater(paths Paths, out io.Writer, version string) Updater {
@@ -92,6 +91,12 @@ func (u Updater) Apply(plan UpdatePlan) error {
 	if !plan.HasWork() {
 		return nil
 	}
+	if plan.Scope != UpdateConfig && plan.Scope != UpdateAll {
+		return u.applyNative(plan)
+	}
+	if u.Version == "dev" {
+		return u.applyNative(plan)
+	}
 	if !stableConfigVersion(u.Version) {
 		return fmt.Errorf("Config build version %q cannot update itself", u.Version)
 	}
@@ -102,7 +107,10 @@ func (u Updater) Apply(plan UpdatePlan) error {
 		if err := u.requireCanonicalExecutable(); err != nil {
 			return err
 		}
-		return os.Unsetenv(UpdateReexecEnv)
+		if err := os.Unsetenv(UpdateReexecEnv); err != nil {
+			return err
+		}
+		return u.applyNative(plan)
 	}
 	u.Log.Section("Config")
 	resolvedVersion := plan.ResolvedVersion
@@ -111,8 +119,17 @@ func (u Updater) Apply(plan UpdatePlan) error {
 	}
 	if resolvedVersion == u.Version && u.requireCanonicalExecutable() == nil {
 		u.Log.OK("Config " + u.Version + " is current")
-		return nil
+		return u.applyNative(plan)
 	}
+	release, err := LockCheckout(u.Paths)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	if err := u.prepareReleaseMise(); err != nil {
 		return err
 	}
@@ -133,10 +150,52 @@ func (u Updater) Apply(plan UpdatePlan) error {
 		overrides = append(overrides, OperationEventsEnv+"=1")
 	}
 	environment := childEnvironment(overrides, nil)
-	if err := u.Reexec(u.Config, []string{u.Config, "update", "--yes"}, environment); err != nil {
+	release()
+	release = nil
+	args := []string{u.Config, "update"}
+	if plan.Scope == UpdateAll {
+		args = append(args, "all")
+	} else {
+		args = append(args, "config")
+	}
+	args = append(args, "--yes")
+	if err := u.Reexec(u.Config, args, environment); err != nil {
 		return fmt.Errorf("re-exec Config %s: %w", installedVersion, err)
 	}
 	return nil
+}
+
+func (u Updater) nativeMise() NativeMise {
+	if u.Native != nil {
+		return *u.Native
+	}
+	return NewNativeMise(u.Paths, u.Log.Out)
+}
+
+func (u Updater) applyNative(plan UpdatePlan) error {
+	scope := plan.Scope
+	if scope == UpdateConfig {
+		return nil
+	}
+	_, err := LoadMachine(u.Paths)
+	if err != nil {
+		return err
+	}
+	if !machineUsesMise(u.Paths) {
+		return nil
+	}
+	native := u.nativeMise()
+	digest, err := native.configurationDigest(context.Background())
+	if err != nil {
+		return err
+	}
+	if digest != plan.Configuration {
+		return errors.New("machine configuration changed; review the update plan again")
+	}
+	if scope != UpdateAll {
+		return native.Apply(scope)
+	}
+	return errors.Join(native.Apply(UpdateSoftware), native.Apply(UpdateRepositories))
 }
 
 func (u Updater) prepareReleaseMise() error {

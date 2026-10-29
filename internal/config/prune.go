@@ -1,10 +1,13 @@
 package config
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,24 +24,49 @@ type pruneFile struct {
 // PrunePlan is the exact work Config has previewed. Its details stay private
 // so callers can confirm or apply a plan without widening the ownership model.
 type PrunePlan struct {
-	files    []pruneFile
-	warnings []string
+	files         []pruneFile
+	warnings      []string
+	native        []nativePrune
+	configuration string
 }
 
-func (p PrunePlan) Empty() bool { return len(p.files) == 0 }
+type nativePrune struct {
+	Operation nativeOperation
+	Preview   string
+}
 
-func (p PrunePlan) sameWork(other PrunePlan) bool { return reflect.DeepEqual(p.files, other.files) }
+func (p PrunePlan) Empty() bool { return len(p.files) == 0 && len(p.native) == 0 }
 
-// Pruner removes local artifacts whose Config ownership can be verified.
+func (p PrunePlan) sameWork(other PrunePlan) bool {
+	return reflect.DeepEqual(p.files, other.files) && reflect.DeepEqual(p.native, other.native) && p.configuration == other.configuration
+}
+
+func (p PrunePlan) Fingerprint() string {
+	identity := struct {
+		Files         []pruneFile
+		Native        []nativePrune
+		Configuration string
+	}{p.files, p.native, p.configuration}
+	data, _ := json.Marshal(identity)
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+}
+
+// Pruner previews native cleanup and removes verified Config artifacts.
 type Pruner struct {
 	Paths   Paths
 	Machine Machine
 	Runner  Runner
 	Log     Logger
+	Mise    *NativeMise
 }
 
 func NewPruner(paths Paths, machine Machine, out io.Writer) Pruner {
-	return Pruner{Paths: paths, Machine: machine, Runner: NewMachineRunner(paths), Log: Logger{Out: out}}
+	p := Pruner{Paths: paths, Machine: machine, Runner: NewMachineRunner(paths), Log: Logger{Out: out}}
+	if machineUsesMise(paths) {
+		native := NewNativeMise(paths, out)
+		p.Mise = &native
+	}
+	return p
 }
 
 func (p Pruner) Plan() (PrunePlan, error) {
@@ -46,8 +74,56 @@ func (p Pruner) Plan() (PrunePlan, error) {
 	if err != nil {
 		return PrunePlan{}, err
 	}
+	plan := PrunePlan{files: files}
+	if p.Mise != nil {
+		if err := p.Mise.check(context.Background()); err != nil {
+			warnings = append(warnings, "Native cleanup unavailable; its state is preserved: "+err.Error())
+		} else {
+			digest, err := p.Mise.configurationDigest(context.Background())
+			if err != nil {
+				warnings = append(warnings, "Native cleanup unavailable: "+err.Error())
+			} else {
+				plan.configuration = digest
+				plan.native, warnings = p.planNativePrune(warnings)
+			}
+		}
+	}
 	slices.Sort(warnings)
-	return PrunePlan{files: files, warnings: slices.Compact(warnings)}, nil
+	plan.warnings = slices.Compact(warnings)
+	return plan, nil
+}
+
+func (p Pruner) planNativePrune(warnings []string) ([]nativePrune, []string) {
+	operations := []nativeOperation{{"Unused tools and configuration records", []string{"prune", "--yes"}}}
+	result := run(p.Mise.Probe, "mise", "bootstrap", "packages", "status", "--json")
+	var managers map[string]struct {
+		Available bool              `json:"available"`
+		Packages  []json.RawMessage `json:"packages"`
+	}
+	if result.Err != nil || json.Unmarshal([]byte(result.Stdout), &managers) != nil {
+		warnings = append(warnings, "Package cleanup unavailable; package inventory is unreadable")
+	} else {
+		for _, manager := range slices.Sorted(maps.Keys(managers)) {
+			if !managers[manager].Available || len(managers[manager].Packages) == 0 {
+				continue
+			}
+			operations = append(operations, nativeOperation{manager + " packages", []string{"bootstrap", "packages", "prune", "--manager", manager, "--yes"}})
+		}
+	}
+	var plans []nativePrune
+	for _, operation := range operations {
+		result := run(p.Mise.Probe, "mise", append(slices.Clone(operation.Args), "--dry-run")...)
+		if result.Err != nil {
+			warnings = append(warnings, nativeText(operation.Name+": "+result.Failure().Error()+"; left untouched"))
+			continue
+		}
+		preview := nativeText(result.Stdout + "\n" + result.Stderr)
+		if preview == "" || strings.Contains(strings.ToLower(preview), "nothing to prune") {
+			continue
+		}
+		plans = append(plans, nativePrune{Operation: operation, Preview: preview})
+	}
+	return plans, warnings
 }
 
 func (p Pruner) planConfigFiles(warnings []string) ([]pruneFile, []string, error) {
@@ -219,6 +295,12 @@ func (p Pruner) planRestoreFiles() ([]pruneFile, []string, error) {
 // deliberately preserved because its ownership could not be proved.
 func WritePrunePlan(out io.Writer, plan PrunePlan) {
 	fmt.Fprintln(out, "Prune plan")
+	for _, native := range plan.native {
+		fmt.Fprintln(out, "\n"+nativeText(native.Operation.Name))
+		for line := range strings.SplitSeq(native.Preview, "\n") {
+			fmt.Fprintln(out, "  "+line)
+		}
+	}
 
 	if len(plan.files) > 0 {
 		fmt.Fprintln(out, "\nConfig state")
@@ -230,7 +312,7 @@ func WritePrunePlan(out io.Writer, plan PrunePlan) {
 		fmt.Fprintln(out, "\n  Nothing to prune.")
 	}
 	for _, warning := range plan.warnings {
-		fmt.Fprintf(out, "  %s %s\n", GlyphWarn, warning)
+		fmt.Fprintf(out, "  %s %s\n", GlyphWarn, nativeText(warning))
 	}
 }
 
@@ -243,6 +325,12 @@ func (p Pruner) Apply(expected PrunePlan) error {
 		return errors.New("prune plan changed; run config prune again")
 	}
 	var failures []error
+	for _, native := range current.native {
+		p.Log.Section(native.Operation.Name)
+		if err := p.Mise.Live.Command("mise", native.Operation.Args...); err != nil {
+			failures = append(failures, err)
+		}
+	}
 
 	if len(current.files) > 0 {
 		p.Log.Section("Config state")

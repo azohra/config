@@ -87,7 +87,7 @@ func (m Model) renderDashboard() string {
 	headline, detail := dashboardHealth(m.report)
 	status := headline + "\n" + muted.Render(detail)
 	resources, hidden := m.dashboardUnsettled()
-	if len(resources) > 0 {
+	if len(resources) > 0 || hidden > 0 {
 		var attention []string
 		for _, resource := range resources {
 			attention = append(attention, "  "+resourceRow(resource))
@@ -216,6 +216,12 @@ func (m Model) dashboardActionText(action dashboardAction) (string, string) {
 		return "Inspect configuration", config.FormatCount(len(m.report.Resources), "resource", "resources")
 	case dashboardUpdateConfig:
 		return "Update Config", m.updateActionSummary("select to check Config")
+	case dashboardUpdateSoftware:
+		return "Update software", "preview app and tool updates"
+	case dashboardUpdateRepositories:
+		return "Update repositories", "preview repositories and linked resources"
+	case dashboardRepair:
+		return "Repair machine", "preview native setup changes"
 	case dashboardLastResult:
 		detail := m.last.label
 		if !m.last.finishedAt.IsZero() {
@@ -223,7 +229,7 @@ func (m Model) dashboardActionText(action dashboardAction) (string, string) {
 		}
 		return "View last operation", detail
 	case dashboardCleanup:
-		return "Clean up", "preview retired Config state"
+		return "Clean up", "unused tools, packages and Config state"
 	default:
 		return "Quit", ""
 	}
@@ -289,7 +295,7 @@ func (m Model) renderInventory() string {
 	if scrollable {
 		hints = append([]string{"↑/↓ scroll"}, hints...)
 	}
-	header := title.Render("MANAGED BY CONFIG") + "  " + muted.Render(config.FormatCount(len(m.report.Resources), "resource", "resources"))
+	header := title.Render("CONFIGURATION") + "  " + muted.Render(config.FormatCount(len(m.report.Resources), "resource", "resources"))
 	return frame(m.width, header, strings.Join(lines, "\n"), keyHints(hints...))
 }
 
@@ -438,13 +444,17 @@ func (m Model) renderPrune() string {
 }
 
 func (m Model) renderUpdate() string {
-	label := "CONFIG UPDATE"
+	label := strings.ToUpper(m.updateScope.Label())
+	explanation := "The selected release is verified before installation."
+	if m.updateScope != config.UpdateConfig {
+		explanation = "Review the native mise plan. Nothing changes until you run it."
+	}
 	if m.checkingUpdate {
 		return frame(
 			m.width,
 			title.Render(label),
 			m.spinner.View()+" Checking for updates…",
-			muted.Render("Checking the published Config release."),
+			muted.Render(explanation),
 			keyHints("esc back"),
 		)
 	}
@@ -466,7 +476,7 @@ func (m Model) renderUpdate() string {
 	action := "Back to dashboard"
 	hints := []string{"enter back", "r refresh", "esc back"}
 	if m.updatePreview.HasWork() {
-		action = "Update Config"
+		action = m.updateScope.Label()
 		hints[0] = "enter run"
 	}
 	if scrollable {
@@ -479,7 +489,7 @@ func (m Model) renderUpdate() string {
 	return frame(
 		m.width,
 		title.Render(label)+"  "+checked,
-		muted.Render("The selected release is verified before installation."),
+		muted.Render(explanation),
 		strings.Join(lines, "\n"),
 		focusRow(true, accent.Render(action)),
 		keyHints(hints...),

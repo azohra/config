@@ -90,7 +90,7 @@ fi
 	if _, err := os.Lstat(paths.InHome(".local", "bin", "mise")); !os.IsNotExist(err) {
 		t.Fatalf("release acquisition changed the machine Mise resource: %v", err)
 	}
-	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "--yes"}) {
+	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "config", "--yes"}) {
 		t.Fatalf("re-exec = %q %q", reexecPath, reexecArgs)
 	}
 	if environmentValue(reexecEnvironment, UpdateReexecEnv) != "v0.5.0" {

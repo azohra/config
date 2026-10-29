@@ -11,13 +11,20 @@ type Inspector struct {
 	Paths   Paths
 	Machine Machine
 	Runner  Runner
+	Mise    *NativeMise
 
 	FinderFavorites finderFavoritesStore
 }
 
 func NewInspector(paths Paths, machine Machine, runner Runner) Inspector {
+	var mise *NativeMise
+	if machineUsesMise(paths) {
+		native := NewNativeMise(paths, nil)
+		mise = &native
+	}
 	return Inspector{
 		Paths: paths, Machine: machine, Runner: runner,
+		Mise:            mise,
 		FinderFavorites: newFinderFavoritesStore(),
 	}
 }
@@ -96,13 +103,21 @@ func snapshotPolicyError(paths Paths, machine Machine, runner Runner, status Sna
 	return ""
 }
 
-func (i Inspector) Inspect() Report {
+func (i Inspector) Inspect() Report { return i.inspect(true) }
+
+func (i Inspector) InspectSnapshot() Report { return i.inspect(false) }
+
+func (i Inspector) inspect(includeMachine bool) Report {
 	bidir := newBidirectional(i.Paths)
 	var chromePWAs, finderFavorites Resource
 	preferences := make([]Resource, len(i.Machine.Preferences))
 	var snapshot SnapshotStatus
+	var mise Resource
 	tasks := []func(){
 		func() { snapshot = snapshotStatus(i.Paths, i.Machine, i.Runner) },
+	}
+	if includeMachine && i.Mise != nil {
+		tasks = append(tasks, func() { mise = i.Mise.Inspect() })
 	}
 	if i.Machine.FinderFavorites {
 		store := i.FinderFavorites
@@ -129,6 +144,9 @@ func (i Inspector) Inspect() Report {
 	}
 	wg.Wait()
 	resources := make([]Resource, 0, len(preferences)+2)
+	if includeMachine && i.Mise != nil {
+		resources = append(resources, mise)
+	}
 	resources = append(resources, preferences...)
 	if i.Machine.FinderFavorites {
 		resources = append(resources, finderFavorites)
