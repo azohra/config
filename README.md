@@ -219,7 +219,14 @@ Each scope can run separately. Repair runs the full declared native bootstrap,
 including its hooks and tasks.
 
 Update, repair and prune are preview-only without a terminal unless `--yes` is
-explicit. Plans bind the declarations and the actions in each native preview;
+explicit. A review summarizes what mise will change, such as apps to install,
+repositories to fast-forward and hooks that run; press `d` in the terminal
+interface to see mise's own commands. When a step runs as administrator, such as
+an app's package installer, the terminal interface asks for your password before
+it starts and keeps that approval while the operation runs. From the CLI, mise
+asks on the terminal itself.
+
+Plans bind the declarations and the actions in each native preview;
 a changed action requires a new review. Notes such as apps skipped while they
 run, versions kept for running processes and release-age warnings are shown but
 not bound. Clean up delegates unused tools, configuration records and supported

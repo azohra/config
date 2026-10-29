@@ -132,6 +132,7 @@ func (m Model) beginUpdate(selected ...config.UpdateScope) (tea.Model, tea.Cmd) 
 		scope = selected[0]
 	}
 	m.updateScope = scope
+	m.showCommands, m.authorizationError = false, nil
 	m.screen = screenUpdate
 	m.updatePreview = config.UpdatePlan{}
 	m.updateError = nil
@@ -189,8 +190,13 @@ func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll = max(0, m.scroll-10)
 	case "pgdown":
 		m.scroll = min(m.scroll+10, m.scrollBound())
+	case "d":
+		if m.updateScope != config.UpdateConfig && !m.checkingUpdate {
+			m.showCommands = !m.showCommands
+			m.scroll = 0
+		}
 	case "enter":
-		if m.checkingUpdate {
+		if m.checkingUpdate || m.authorizing {
 			return m, nil
 		}
 		if m.updateError != nil || !m.updatePreview.HasWork() {
@@ -200,7 +206,11 @@ func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.updateScope == config.UpdateConfig {
 			return m.startOperation("Config update", m.executable, "--run-update", m.updatePreview.Fingerprint())
 		}
-		return m.startOperation(m.updateScope.Label(), m.executable, "--run-update", string(m.updateScope), m.updatePreview.Fingerprint())
+		args := []string{"--run-update", string(m.updateScope), m.updatePreview.Fingerprint()}
+		if m.updatePreview.Elevated() {
+			return m.authorizeThen(m.updateScope.Label(), args...)
+		}
+		return m.startOperation(m.updateScope.Label(), m.executable, args...)
 	}
 	return m, nil
 }
@@ -346,9 +356,10 @@ func (m Model) beginPrune() (tea.Model, tea.Cmd) {
 	m.screen = screenPrune
 	m.loading = true
 	m.scroll = 0
-	m.prunePreview = ""
-	m.pruneHasWork = false
+	m.prunePreview, m.pruneCommands = "", ""
+	m.pruneHasWork, m.pruneElevated = false, false
 	m.pruneFingerprint = ""
+	m.showCommands, m.authorizationError = false, nil
 	return m, tea.Batch(m.pruneCmd(), m.spinner.Tick)
 }
 
@@ -364,7 +375,16 @@ func (m Model) updatePrune(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll = max(0, m.scroll-10)
 	case "pgdown":
 		m.scroll = min(m.scroll+10, m.scrollBound())
+	case "d":
+		m.showCommands = !m.showCommands
+		m.scroll = 0
 	case "enter":
+		if m.authorizing {
+			return m, nil
+		}
+		if m.pruneHasWork && m.pruneElevated {
+			return m.authorizeThen("Cleanup", "--run-prune", m.pruneFingerprint)
+		}
 		if m.pruneHasWork {
 			return m.startOperation("Cleanup", m.executable, "--run-prune", m.pruneFingerprint)
 		}

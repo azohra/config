@@ -420,34 +420,48 @@ func (m Model) renderPrunePlanning() string {
 	)
 }
 
+func (m Model) pruneLines() []string {
+	text := m.prunePreview
+	if m.showCommands {
+		text = m.pruneCommands
+	}
+	return strings.Split(strings.Trim(text, "\n"), "\n")
+}
+
 func (m Model) renderPrune() string {
-	lines := strings.Split(strings.Trim(m.prunePreview, "\n"), "\n")
+	lines := m.pruneLines()
 	available := max(5, m.height-pruneChrome)
 	scrollable := len(lines) > available
 	lines = visibleLines(lines, m.scroll, available)
 	action := "Back to dashboard"
-	hints := []string{"enter back", "esc back"}
+	hints := []string{"enter back", commandsHint(m.showCommands), "esc back"}
 	if m.pruneHasWork {
 		action = "Prune these items"
-		hints = []string{"enter prune", "esc back"}
+		hints[0] = "enter prune"
 	}
 	if scrollable {
 		hints = append([]string{"↑/↓ scroll"}, hints...)
 	}
-	return frame(
-		m.width,
-		title.Render("CLEAN UP"),
-		strings.Join(lines, "\n"),
-		focusRow(true, accent.Render(action)),
-		keyHints(hints...),
-	)
+	blocks := []string{title.Render("CLEAN UP"), strings.Join(lines, "\n")}
+	if m.authorizationError != nil {
+		blocks = append(blocks, bad.Render(m.authorizationError.Error()))
+	}
+	blocks = append(blocks, focusRow(true, accent.Render(action)), keyHints(hints...))
+	return frame(m.width, blocks...)
+}
+
+func commandsHint(showing bool) string {
+	if showing {
+		return "d summary"
+	}
+	return "d mise's commands"
 }
 
 func (m Model) renderUpdate() string {
 	label := strings.ToUpper(m.updateScope.Label())
 	explanation := "The selected release is verified before installation."
 	if m.updateScope != config.UpdateConfig {
-		explanation = "Review the native mise plan. Nothing changes until you run it."
+		explanation = "Review what mise will change. Nothing changes until you run it."
 	}
 	if m.checkingUpdate {
 		return frame(
@@ -467,9 +481,7 @@ func (m Model) renderUpdate() string {
 			keyHints("r retry", "enter back", "esc back"),
 		)
 	}
-	var preview bytes.Buffer
-	config.WriteUpdatePlan(&preview, m.updatePreview)
-	lines := strings.Split(strings.Trim(preview.String(), "\n"), "\n")
+	lines := m.updateLines()
 	available := max(5, m.height-updateChrome)
 	scrollable := len(lines) > available
 	lines = visibleLines(lines, m.scroll, available)
@@ -479,6 +491,9 @@ func (m Model) renderUpdate() string {
 		action = m.updateScope.Label()
 		hints[0] = "enter run"
 	}
+	if m.updateScope != config.UpdateConfig {
+		hints = []string{hints[0], "r refresh", commandsHint(m.showCommands), "esc back"}
+	}
 	if scrollable {
 		hints = append([]string{"↑/↓ scroll"}, hints...)
 	}
@@ -486,14 +501,22 @@ func (m Model) renderUpdate() string {
 	if !m.updatePreview.CheckedAt.IsZero() {
 		checked = muted.Render("Checked " + m.updatePreview.CheckedAt.Local().Format("3:04:05 PM"))
 	}
-	return frame(
-		m.width,
-		title.Render(label)+"  "+checked,
-		muted.Render(explanation),
-		strings.Join(lines, "\n"),
-		focusRow(true, accent.Render(action)),
-		keyHints(hints...),
-	)
+	blocks := []string{title.Render(label) + "  " + checked, muted.Render(explanation), strings.Join(lines, "\n")}
+	if m.authorizationError != nil {
+		blocks = append(blocks, bad.Render(m.authorizationError.Error()))
+	}
+	blocks = append(blocks, focusRow(true, accent.Render(action)), keyHints(hints...))
+	return frame(m.width, blocks...)
+}
+
+func (m Model) updateLines() []string {
+	var preview bytes.Buffer
+	if m.showCommands {
+		config.WriteUpdateCommands(&preview, m.updatePreview)
+	} else {
+		config.WriteUpdatePlan(&preview, m.updatePreview)
+	}
+	return strings.Split(strings.Trim(preview.String(), "\n"), "\n")
 }
 
 func (m Model) renderRunning() string {
@@ -546,15 +569,6 @@ func (m Model) resultLines() []string {
 			lines = append(lines, muted.Render("No structured progress was reported."))
 		}
 	}
-	if m.last.err != nil {
-		visibleText := m.last.log.progress.String()
-		if m.showDiagnostics {
-			visibleText = m.last.log.diagnostics.String()
-		}
-		if !strings.Contains(visibleText, m.last.err.Error()) {
-			lines = append(lines, "", bad.Render("Error: "+m.last.err.Error()))
-		}
-	}
 	return lines
 }
 
@@ -563,7 +577,7 @@ func (m Model) renderResult() string {
 	if m.last.cancelled {
 		symbol, status = caution.Render("!"), m.last.label+" cancelled"
 	} else if m.last.err != nil {
-		symbol, status = bad.Render("✗"), m.last.label+" failed"
+		symbol, status = bad.Render("✗"), m.last.label+" failed: "+m.last.err.Error()
 	}
 	lines := m.resultLines()
 	available := max(5, m.height-resultChrome)
@@ -631,13 +645,9 @@ func (m Model) scrollBound() int {
 	case screenSnapshot:
 		return max(0, len(snapshotLines(m.report.Snapshot))-max(4, m.height-snapshotChrome))
 	case screenPrune:
-		lines := strings.Split(strings.Trim(m.prunePreview, "\n"), "\n")
-		return max(0, len(lines)-max(5, m.height-pruneChrome))
+		return max(0, len(m.pruneLines())-max(5, m.height-pruneChrome))
 	case screenUpdate:
-		var preview bytes.Buffer
-		config.WriteUpdatePlan(&preview, m.updatePreview)
-		lines := strings.Split(strings.Trim(preview.String(), "\n"), "\n")
-		return max(0, len(lines)-max(5, m.height-updateChrome))
+		return max(0, len(m.updateLines())-max(5, m.height-updateChrome))
 	case screenResult:
 		return max(0, len(m.resultLines())-max(5, m.height-resultChrome))
 	}

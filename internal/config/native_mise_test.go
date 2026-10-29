@@ -156,8 +156,10 @@ func TestNativePreviewStripsTerminalControlSequences(t *testing.T) {
 	native, runner := nativeFixture(t)
 	runner.result = Result{Stdout: "\x1b[2J\x1b[31mupgrade example-app\x1b[0m\x07\n"}
 	groups := native.plan(context.Background(), UpdateSoftware)
-	if got := strings.Join(groups[0].Details, "\n"); got != "upgrade example-app" {
-		t.Fatalf("provider control bytes reached the review: %q", got)
+	for _, lines := range [][]string{groups[0].Raw, groups[0].Details} {
+		if got := strings.Join(lines, "\n"); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "upgrade example-app") {
+			t.Fatalf("provider control bytes reached the review: %q", got)
+		}
 	}
 }
 
@@ -404,7 +406,7 @@ func TestNativePlansBindChangesNotNotes(t *testing.T) {
 
 	runner.result = Result{Stdout: "Would install example@2.0\n", Stderr: notes}
 	plan, err = updater.Plan(UpdateSoftware)
-	if err != nil || !plan.HasWork() || !strings.Contains(strings.Join(plan.Groups[1].Details, "\n"), "already up to date") {
+	if err != nil || !plan.HasWork() || !strings.Contains(strings.Join(plan.Groups[1].Raw, "\n"), "already up to date") {
 		t.Fatalf("software preview = %+v, %v", plan, err)
 	}
 	runner.result.Stderr = strings.ReplaceAll(notes, "already up to date", "skipped: installed app is running and updates itself")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os/exec"
 	"strings"
 
 	"charm.land/bubbles/v2/spinner"
@@ -33,7 +34,9 @@ type reportMsg struct {
 type prunePlanMsg struct {
 	request     uint64
 	preview     string
+	commands    string
 	hasWork     bool
+	elevated    bool
 	fingerprint string
 	err         error
 }
@@ -45,45 +48,51 @@ type updatePlanMsg struct {
 }
 
 type Model struct {
-	paths            config.Paths
-	executable       string
-	version          string
-	restart          bool
-	reopenResult     bool
-	inspector        config.Inspector
-	pruner           config.Pruner
-	updater          config.Updater
-	report           config.Report
-	screen           screen
-	afterInspect     screen
-	loading          bool
-	dashboardCursor  int
-	planCursor       int
-	scroll           int
-	choices          []planChoice
-	prunePreview     string
-	pruneHasWork     bool
-	pruneFingerprint string
-	pruneRequest     uint64
-	updateOverview   config.UpdatePlan
-	overviewReady    bool
-	overviewError    error
-	updatePreview    config.UpdatePlan
-	updateScope      config.UpdateScope
-	planScope        config.UpdateScope
-	checkingOverview bool
-	checkingUpdate   bool
-	updateError      error
-	planRequest      uint64
-	planPreview      bool
-	planContext      context.Context
-	planCancel       context.CancelFunc
-	spinner          spinner.Model
-	width            int
-	height           int
-	showDiagnostics  bool
-	operation        operation
-	last             operationResult
+	paths              config.Paths
+	executable         string
+	version            string
+	restart            bool
+	reopenResult       bool
+	inspector          config.Inspector
+	pruner             config.Pruner
+	updater            config.Updater
+	report             config.Report
+	screen             screen
+	afterInspect       screen
+	loading            bool
+	dashboardCursor    int
+	planCursor         int
+	scroll             int
+	choices            []planChoice
+	prunePreview       string
+	pruneCommands      string
+	pruneHasWork       bool
+	pruneElevated      bool
+	showCommands       bool
+	authorizing        bool
+	authorizationError error
+	sudo               func(...string) *exec.Cmd
+	pruneFingerprint   string
+	pruneRequest       uint64
+	updateOverview     config.UpdatePlan
+	overviewReady      bool
+	overviewError      error
+	updatePreview      config.UpdatePlan
+	updateScope        config.UpdateScope
+	planScope          config.UpdateScope
+	checkingOverview   bool
+	checkingUpdate     bool
+	updateError        error
+	planRequest        uint64
+	planPreview        bool
+	planContext        context.Context
+	planCancel         context.CancelFunc
+	spinner            spinner.Model
+	width              int
+	height             int
+	showDiagnostics    bool
+	operation          operation
+	last               operationResult
 }
 
 func New(paths config.Paths, machine config.Machine, executable, version string, reopen ...bool) Model {
@@ -156,12 +165,15 @@ func (m Model) pruneCmd() tea.Cmd {
 		if err != nil {
 			return prunePlanMsg{request: request, err: err}
 		}
-		var preview bytes.Buffer
+		var preview, commands bytes.Buffer
 		config.WritePrunePlan(&preview, plan)
+		config.WritePruneCommands(&commands, plan)
 		return prunePlanMsg{
 			request:     request,
 			preview:     strings.TrimSpace(preview.String()),
+			commands:    strings.TrimSpace(commands.String()),
 			hasWork:     !plan.Empty(),
+			elevated:    plan.Elevated(),
 			fingerprint: plan.Fingerprint(),
 		}
 	}
@@ -218,8 +230,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = screenDashboard
 			break
 		}
-		m.prunePreview = msg.preview
-		m.pruneHasWork = msg.hasWork
+		m.prunePreview, m.pruneCommands = msg.preview, msg.commands
+		m.pruneHasWork, m.pruneElevated = msg.hasWork, msg.elevated
 		m.pruneFingerprint = msg.fingerprint
 		m.screen = screenPrune
 	case updatePlanMsg:
@@ -252,6 +264,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case operationEventsMsg:
 		return m.updateOperation(msg)
+	case authorizedMsg:
+		return m.authorized(msg)
+	case renewAuthorizationMsg:
+		return m.renewAuthorization(msg)
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			if m.screen == screenRunning {

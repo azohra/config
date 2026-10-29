@@ -29,5 +29,8 @@ overrides. Native configuration and its hooks are trusted executable policy;
 keep credentials and client state out of tracked declarations and captures.
 Confirmation binds native previews and effective declarations. Foreign global
 configuration is preserved, dirty repositories are skipped, and provider output
-is stripped of terminal controls before it appears in a review. Reports
+is stripped of terminal controls before it appears in a review. For a plan with
+root steps, the terminal interface obtains a `sudo` approval on the terminal
+before it starts and renews it only while that operation runs; Config never
+reads or stores the password. Reports
 crossing one of these boundaries are especially useful.

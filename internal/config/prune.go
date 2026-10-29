@@ -30,14 +30,25 @@ type PrunePlan struct {
 }
 
 // nativePrune binds an operation to the changes in its preview. The preview
-// itself is shown, not bound.
+// and its summary are shown, not bound.
 type nativePrune struct {
 	Operation nativeOperation
 	Changes   string
 	preview   string
+	summary   nativeSummary
 }
 
 func (p PrunePlan) Empty() bool { return len(p.files) == 0 && len(p.native) == 0 }
+
+// Elevated reports whether native cleanup runs a step as root.
+func (p PrunePlan) Elevated() bool {
+	for _, native := range p.native {
+		if native.summary.Elevated {
+			return true
+		}
+	}
+	return false
+}
 
 func (p PrunePlan) sameWork(other PrunePlan) bool { return p.Fingerprint() == other.Fingerprint() }
 
@@ -129,7 +140,7 @@ func (p Pruner) planNativePrune(warnings []string) ([]nativePrune, []string) {
 			}
 			continue
 		}
-		plans = append(plans, nativePrune{Operation: operation, Changes: changes, preview: preview})
+		plans = append(plans, nativePrune{Operation: operation, Changes: changes, preview: preview, summary: summarizeNative(changes)})
 	}
 	return plans, warnings
 }
@@ -305,7 +316,7 @@ func WritePrunePlan(out io.Writer, plan PrunePlan) {
 	fmt.Fprintln(out, "Prune plan")
 	for _, native := range plan.native {
 		fmt.Fprintln(out, "\n"+nativeText(native.Operation.Name))
-		for line := range strings.SplitSeq(native.preview, "\n") {
+		for _, line := range native.summary.Lines {
 			fmt.Fprintln(out, "  "+line)
 		}
 	}
@@ -370,4 +381,18 @@ func applyPruneFile(file pruneFile) error {
 		return errors.New("file changed after preview")
 	}
 	return os.Remove(file.Path)
+}
+
+// WritePruneCommands renders mise's own preview for each native cleanup step.
+func WritePruneCommands(out io.Writer, plan PrunePlan) {
+	fmt.Fprintln(out, "Clean up: mise's commands")
+	for _, native := range plan.native {
+		fmt.Fprintln(out, "\n"+nativeText(native.Operation.Name))
+		for line := range strings.SplitSeq(native.preview, "\n") {
+			fmt.Fprintln(out, "  "+line)
+		}
+	}
+	if len(plan.native) == 0 {
+		fmt.Fprintln(out, "\n  No native cleanup is planned.")
+	}
 }
