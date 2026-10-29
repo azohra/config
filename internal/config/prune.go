@@ -10,7 +10,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 )
@@ -30,16 +29,17 @@ type PrunePlan struct {
 	configuration string
 }
 
+// nativePrune binds an operation to the changes in its preview. The preview
+// itself is shown, not bound.
 type nativePrune struct {
 	Operation nativeOperation
-	Preview   string
+	Changes   string
+	preview   string
 }
 
 func (p PrunePlan) Empty() bool { return len(p.files) == 0 && len(p.native) == 0 }
 
-func (p PrunePlan) sameWork(other PrunePlan) bool {
-	return reflect.DeepEqual(p.files, other.files) && reflect.DeepEqual(p.native, other.native) && p.configuration == other.configuration
-}
+func (p PrunePlan) sameWork(other PrunePlan) bool { return p.Fingerprint() == other.Fingerprint() }
 
 func (p PrunePlan) Fingerprint() string {
 	identity := struct {
@@ -114,14 +114,22 @@ func (p Pruner) planNativePrune(warnings []string) ([]nativePrune, []string) {
 	for _, operation := range operations {
 		result := run(p.Mise.Probe, "mise", append(slices.Clone(operation.Args), "--dry-run")...)
 		if result.Err != nil {
-			warnings = append(warnings, nativeText(operation.Name+": "+result.Failure().Error()+"; left untouched"))
+			failure := result.Failure().Error()
+			// Only brew, brew-cask and package plugins can prune; package
+			// status does not say which managers are plugins.
+			if !strings.Contains(failure, "does not support pruning") {
+				warnings = append(warnings, nativeText(operation.Name+": "+failure+"; left untouched"))
+			}
 			continue
 		}
-		preview := nativeText(result.Stdout + "\n" + result.Stderr)
-		if preview == "" || strings.Contains(strings.ToLower(preview), "nothing to prune") {
+		preview, changes := nativePreview(result)
+		if changes == "" {
+			for _, warning := range nativeWarnings(preview) {
+				warnings = append(warnings, operation.Name+": "+warning)
+			}
 			continue
 		}
-		plans = append(plans, nativePrune{Operation: operation, Preview: preview})
+		plans = append(plans, nativePrune{Operation: operation, Changes: changes, preview: preview})
 	}
 	return plans, warnings
 }
@@ -297,7 +305,7 @@ func WritePrunePlan(out io.Writer, plan PrunePlan) {
 	fmt.Fprintln(out, "Prune plan")
 	for _, native := range plan.native {
 		fmt.Fprintln(out, "\n"+nativeText(native.Operation.Name))
-		for line := range strings.SplitSeq(native.Preview, "\n") {
+		for line := range strings.SplitSeq(native.preview, "\n") {
 			fmt.Fprintln(out, "  "+line)
 		}
 	}

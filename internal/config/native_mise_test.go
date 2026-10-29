@@ -235,6 +235,10 @@ experimental = true
 	}
 	gitTest(t, work, "commit", "--quiet", "-am", "Update source")
 	gitTest(t, work, "push", "--quiet")
+	// A remote that moved ahead of a clean checkout is maintenance, not drift.
+	if resource := native.Inspect(); resource.State != Current || !strings.Contains(strings.Join(resource.Details, "\n"), "projects/example: differs") {
+		t.Fatalf("a newer remote failed machine health: %+v\n%s", resource, output.String())
+	}
 	if err := os.WriteFile(shared, []byte(`{"managed":2}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -272,6 +276,9 @@ experimental = true
 	}
 	if err := os.WriteFile(paths.InHome("projects", "example", "config.toml"), []byte("local edit\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if resource := native.Inspect(); resource.State != Current || !strings.Contains(strings.Join(resource.Details, "\n"), "projects/example: dirty") {
+		t.Fatalf("a local edit failed machine health: %+v", resource)
 	}
 	plan, err = updater.Plan(UpdateRepositories)
 	if err != nil || plan.Blocked {
@@ -332,5 +339,82 @@ func TestNativeCommandsIgnoreTheCallingProjectsMiseContext(t *testing.T) {
 	}
 	if probe.Dir != paths.Home || environmentValue(environment, "MISE_CONFIG_DIR") != miseConfigDir(paths) {
 		t.Fatalf("wrong native machine context: %+v", probe)
+	}
+}
+
+func TestRepositoryCheckoutsAwayFromTheirRemoteDoNotFailMachineHealth(t *testing.T) {
+	native, runner := nativeFixture(t)
+	// mise reports a moved or unreachable remote as differs, and local edits
+	// as dirty, and exits 1 for either.
+	runner.result = Result{Err: errors.New("exit status 1"), Stdout: `{
+	  "repos":[
+	    {"path":"/home/projects/moved","state":"differs","reason":""},
+	    {"path":"/home/projects/edited","state":"dirty","reason":"local changes"},
+	    {"path":"/home/projects/current","state":"current"}
+	  ],
+	  "tools":[{"tool":"node","state":"installed"}]
+	}`}
+	resource := native.Inspect()
+	if resource.State != Current || resource.Failed() != 0 || resource.Symbol() != GlyphOK {
+		t.Fatalf("routine checkout state failed machine health: %+v", resource)
+	}
+	details := strings.Join(resource.Details, "\n")
+	if !strings.Contains(details, "/home/projects/moved: differs") || !strings.Contains(details, "/home/projects/edited: dirty") {
+		t.Fatalf("checkouts were hidden: %+v", resource)
+	}
+	if !strings.Contains(resource.Summary, "2 repository checkouts differ") {
+		t.Fatalf("summary = %q", resource.Summary)
+	}
+
+	for _, state := range []string{"missing", "conflict"} {
+		runner.result.Stdout = `{"repos":[{"path":"/home/projects/example","state":"` + state + `"},{"path":"/home/projects/moved","state":"differs"}]}`
+		if resource := native.Inspect(); resource.State != Drift || resource.Failed() == 0 {
+			t.Fatalf("%s checkout read as healthy: %+v", state, resource)
+		}
+	}
+	// A failed status whose cause Config cannot find stays a failure.
+	runner.result.Stdout = `{"repos":[],"tools":[]}`
+	if resource := native.Inspect(); resource.State != Drift || resource.Failed() == 0 {
+		t.Fatalf("unexplained native failure read as healthy: %+v", resource)
+	}
+}
+
+func TestNativePlansBindChangesNotNotes(t *testing.T) {
+	native, runner := nativeFixture(t)
+	machine := "kind = \"azohra.config.machine\"\nschema = 8\n[repository]\nbranch = \"main\"\nurl = \"https://example.com/machine.git\"\n"
+	if err := os.WriteFile(native.Paths.InRoot("config.toml"), []byte(machine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, native.Paths.Root, "init", "--quiet")
+	notes := "mise brew-cask:example: already up to date\n" +
+		"mise brew-cask:chat: skipped: installed app is running and updates itself\n" +
+		"mise WARN  newer example release 2.1 (eligible 2026-10-29 18:01 PDT) ignored by minimum_release_age (24h)\n" +
+		"mise brew: all formulae already poured\n" +
+		"mise All tools are up to date\n"
+	runner.result = Result{Stderr: notes}
+	updater := NewUpdater(native.Paths, io.Discard, "dev")
+	updater.Native = &native
+	plan, err := updater.Plan(UpdateSoftware)
+	if err != nil || plan.HasWork() {
+		t.Fatalf("a preview of notes offered work: %+v, %v", plan, err)
+	}
+	if got := plan.Groups[1].Details; len(got) != 1 || !strings.HasPrefix(got[0], "newer example release 2.1") {
+		t.Fatalf("an idle preview dropped its warning: %q", got)
+	}
+
+	runner.result = Result{Stdout: "Would install example@2.0\n", Stderr: notes}
+	plan, err = updater.Plan(UpdateSoftware)
+	if err != nil || !plan.HasWork() || !strings.Contains(strings.Join(plan.Groups[1].Details, "\n"), "already up to date") {
+		t.Fatalf("software preview = %+v, %v", plan, err)
+	}
+	runner.result.Stderr = strings.ReplaceAll(notes, "already up to date", "skipped: installed app is running and updates itself")
+	runner.result.Stderr = strings.ReplaceAll(runner.result.Stderr, "18:01", "18:02")
+	again, err := updater.Plan(UpdateSoftware)
+	if err != nil || again.Fingerprint() != plan.Fingerprint() {
+		t.Fatalf("changed notes invalidated a confirmed plan: %v", err)
+	}
+	runner.result.Stdout = "Would install example@2.1\n"
+	if changed, _ := updater.Plan(UpdateSoftware); changed.Fingerprint() == plan.Fingerprint() {
+		t.Fatal("a changed native action kept the confirmed plan")
 	}
 }

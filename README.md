@@ -87,7 +87,9 @@ mise is missing or older. A newer installed version is retained. Config's own
 release transport uses a separate private adapter.
 
 Config asks mise for aggregate machine status and previews its own native
-commands before running them:
+commands before running them. A declared checkout that is behind its remote,
+cannot reach it, or has local edits is listed under Machine setup without
+failing it; a missing checkout or one with another origin fails it.
 
 | Config action | Native mise commands |
 | --- | --- |
@@ -211,13 +213,18 @@ config --version
 ```
 
 `config update` selects everything: Config first, then software and repositories.
+A release before v0.28.0 that updates itself to this one installs Config alone;
+run `config update` again for the machine scopes.
 Each scope can run separately. Repair runs the full declared native bootstrap,
 including its hooks and tasks.
 
 Update, repair and prune are preview-only without a terminal unless `--yes` is
-explicit. Plans bind the declarations and native preview; a change requires a
-new review. Clean up delegates unused tools, configuration records and supported
-package cleanup to mise, then removes verified obsolete Config state. It does
+explicit. Plans bind the declarations and the actions in each native preview;
+a changed action requires a new review. Notes such as apps skipped while they
+run, versions kept for running processes and release-age warnings are shown but
+not bound. Clean up delegates unused tools, configuration records and supported
+package cleanup to mise, reports what mise leaves in place, then removes verified
+obsolete Config state. It does
 not delete repositories or retired skill/MCP/hook ledgers. It does not prune
 orphaned dotfile links or remove old MCP keys from client files.
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -233,5 +234,70 @@ func TestPruneReclaimsOnlyTheMarkersNothingWillActOn(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "unrecognised") {
 		t.Fatalf("warnings = %v", warnings)
+	}
+}
+
+type nativeManagersRunner struct {
+	nativeStatusRunner
+	previews map[string]Result
+}
+
+func (r *nativeManagersRunner) Run(ctx context.Context, name string, args ...string) Result {
+	if slices.Equal(args, []string{"bootstrap", "packages", "status", "--json"}) {
+		return Result{Stdout: `{
+		  "brew-cask":{"available":true,"packages":[{"package":"example"}]},
+		  "mas":{"available":true,"packages":[{"package":"123"}]}
+		}`}
+	}
+	if result, ok := r.previews[strings.Join(args, " ")]; ok {
+		return result
+	}
+	return r.nativeStatusRunner.Run(ctx, name, args...)
+}
+
+func TestNativeCleanupBindsActionsAndReportsWhatItLeaves(t *testing.T) {
+	native, _ := nativeFixture(t)
+	gitTest(t, native.Paths.Root, "init", "--quiet")
+	// The shape of mise 2026.10.21 dry runs: actions and notes share stderr.
+	tools := "mise pruned configuration links [dryrun]\n" +
+		"mise scanning tracked configs          ✓ done\n" +
+		"mise node@22.20.0 is kept: still running as pid 5137 (node) and 14 more\n" +
+		"mise cmake@4.4.4 is prunable: no tracked config or tool stub requires cmake\n" +
+		"mise cmake@4.4.4 [dryrun]                uninstall\n"
+	runner := &nativeManagersRunner{previews: map[string]Result{
+		"prune --yes --dry-run": {Stderr: tools},
+		"bootstrap packages prune --manager brew-cask --yes --dry-run": {Stderr: "mise WARN  brew-cask:craft: skipped: metadata-only app ownership cannot be proven safely during pruning\n" +
+			"mise brew-cask: to remove craft anyway, run again with --force\n" +
+			"mise brew-cask: nothing to prune\n"},
+		"bootstrap packages prune --manager mas --yes --dry-run": {Err: errors.New("exit status 1"), Stderr: "mise ERROR package manager 'mas' does not support pruning\n"},
+	}}
+	native.Probe = runner
+	p := newPruneFixture(t).pruner
+	p.Paths, p.Mise = native.Paths, &native
+	plan, err := p.Plan()
+	if err != nil || len(plan.native) != 1 || plan.native[0].Operation.Args[0] != "prune" {
+		t.Fatalf("native cleanup plan = %+v, %v", plan, err)
+	}
+	if !slices.Equal(plan.warnings, []string{"brew-cask packages: brew-cask:craft: skipped: metadata-only app ownership cannot be proven safely during pruning"}) {
+		t.Fatalf("cleanup warnings = %q", plan.warnings)
+	}
+	var preview strings.Builder
+	WritePrunePlan(&preview, plan)
+	if !strings.Contains(preview.String(), "is kept: still running") || strings.Contains(preview.String(), "does not support pruning") {
+		t.Fatalf("cleanup preview:\n%s", preview.String())
+	}
+
+	runner.previews["prune --yes --dry-run"] = Result{Stderr: strings.Replace(tools, "pid 5137 (node) and 14 more", "pid 6001 (node) and 15 more", 1)}
+	again, err := p.Plan()
+	if err != nil || !plan.sameWork(again) || again.Fingerprint() != plan.Fingerprint() {
+		t.Fatalf("a process change invalidated the confirmed cleanup: %v", err)
+	}
+	runner.previews["prune --yes --dry-run"] = Result{Stderr: strings.ReplaceAll(tools, "cmake@4.4.4", "cmake@4.4.5")}
+	if changed, _ := p.Plan(); changed.Fingerprint() == plan.Fingerprint() {
+		t.Fatal("a different removal kept the confirmed cleanup")
+	}
+	runner.previews["prune --yes --dry-run"] = Result{Stderr: "mise pruned configuration links [dryrun]\nmise node@22.20.0 is kept: still running as pid 5137 (node)\n"}
+	if idle, err := p.Plan(); err != nil || !idle.Empty() {
+		t.Fatalf("cleanup with nothing to remove = %+v, %v", idle, err)
 	}
 }
