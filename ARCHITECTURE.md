@@ -22,7 +22,10 @@ version. Other operations only inspect that prerequisite and direct a missing
 setup to repair.
 
 Mise owns machine tools, packages, repositories, dotfiles, services and
-defaults. Config presents its aggregate status and native dry-run plans.
+defaults. Config presents its aggregate status and native dry-run plans. A
+declared checkout that is clean but not at its remote ref, or has local edits,
+is listed without failing machine health: mise reports a remote it cannot reach
+the same way as one that moved. A missing or foreign checkout still fails it.
 Software updates run global tool upgrades without pruning plus native package
 upgrades. Repository updates skip dirty checkouts, then apply dotfiles,
 including skill links and MCP merges. Repair runs native bootstrap, including
@@ -34,10 +37,15 @@ mise adapter in Config's release cache acquires the exact resolved executable
 with GitHub asset digest verification. It has no machine configuration.
 Downgrade refusal and executable version verification gate atomic installation.
 The installed release resumes through a version-bound marker at the canonical
-command. `config update` includes the native scopes after this handoff.
+command. `config update` includes the native scopes after this handoff. A
+release before v0.28.0 resumes with a bare `update --yes`, which installs Config
+alone.
 
 CLI and terminal confirmation bind the selected scope, resolved release,
-declaration digest and native preview. Effective native includes outside the
+declaration digest and the actions in each native preview. Notes about items
+left alone, versions kept for running processes, progress and warnings change
+with the clock and running apps; they are shown but not bound, and a preview of
+only notes plans no changes. Effective native includes outside the
 managed repository participate in the digest. Authored symlinks bind their
 target; effective configuration symlinks also bind their destination's bytes.
 Check time is excluded. The child recomputes the plan and refuses changed work,
@@ -255,12 +263,15 @@ is eligible only after its capability is removed, and its bytes must match
 Config's marker format.
 
 Mise previews unused tools and configuration records with `prune --dry-run`.
+That dry run lists tool versions but not configuration records, so records are
+pruned when an unused tool version is.
 Its package inventory selects configured managers for native package-prune
 previews. Unavailable providers leave their state untouched and report a
-warning. Config does not infer package ownership or use force flags.
+warning. Managers mise cannot prune are skipped, and warnings from a manager
+with nothing to remove are reported. Config does not infer package ownership or use force flags.
 
 The CLI and terminal interface confirm the exact plan, including native
-previews and declaration bytes. Apply recomputes it and refuses changed work,
+preview actions and declaration bytes. Apply recomputes it and refuses changed work,
 then checks each Config file's type and digest immediately before deletion.
 Repositories, retired skill/MCP/hook ledgers, orphaned dotfile links and old
 merged client keys are outside this cleanup plan. Native merge key removal

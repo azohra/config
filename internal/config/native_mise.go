@@ -107,15 +107,20 @@ func (m NativeMise) Inspect() Resource {
 		resource.Checks = []Check{no("machine state unreadable", nativeText(detail))}
 		return resource
 	}
-	resource.Details = nativeStatusDetails(status, "")
-	if result.Err != nil {
+	problems, checkouts := nativeStatusFindings(status, "")
+	resource.Details = append(problems, checkouts...)
+	switch {
+	case result.Err != nil && (len(problems) > 0 || len(checkouts) == 0):
 		resource.State, resource.Summary = Drift, "native resources need attention"
 		resource.Checks = []Check{no("machine configuration differs", "Select Repair machine to review native setup; local repository edits are preserved")}
-	} else if len(resource.Details) > 0 {
+	case len(problems) > 0:
 		resource.Summary = "some native resources could not be verified"
 		resource.Checks = []Check{no("native inspection incomplete", "Review the provider details before treating the machine as current")}
-	} else {
+	default:
 		resource.State, resource.Summary = Current, "native resources match"
+		if len(checkouts) > 0 {
+			resource.Summary += "; " + FormatCount(len(checkouts), "repository checkout differs from its remote", "repository checkouts differ from their remotes")
+		}
 		resource.Checks = []Check{{Label: "native machine configuration", OK: true}}
 	}
 	return resource
@@ -131,12 +136,17 @@ func nativeStatusReadable(status map[string]any) bool {
 	return false
 }
 
-func nativeStatusDetails(value any, section string) []string {
-	var lines []string
+// nativeStatusFindings lists the entries mise reports as unhealthy. A declared
+// checkout that is clean but not at its remote ref, or that has local edits, is
+// ordinary development state: mise also reports a remote it cannot reach as a
+// difference. Those checkouts are listed apart so they show without failing
+// machine health; a missing or foreign checkout is still a problem.
+func nativeStatusFindings(value any, section string) (problems, checkouts []string) {
 	switch value := value.(type) {
 	case []any:
 		for _, item := range value {
-			lines = append(lines, nativeStatusDetails(item, section)...)
+			p, c := nativeStatusFindings(item, section)
+			problems, checkouts = append(problems, p...), append(checkouts, c...)
 		}
 	case map[string]any:
 		state, hasState := value["state"].(string)
@@ -151,19 +161,25 @@ func nativeStatusDetails(value any, section string) []string {
 					break
 				}
 			}
-			lines = append(lines, nativeText(name+": "+state))
+			line := nativeText(name + ": " + state)
+			if section == "repos" && (state == "differs" || state == "dirty") {
+				checkouts = append(checkouts, line)
+			} else {
+				problems = append(problems, line)
+			}
 		}
 		if available, ok := value["available"].(bool); ok && !available {
-			lines = append(lines, nativeText(section+": provider unavailable"))
+			problems = append(problems, nativeText(section+": provider unavailable"))
 		}
 		for _, key := range slices.Sorted(maps.Keys(value)) {
 			switch value[key].(type) {
 			case []any, map[string]any:
-				lines = append(lines, nativeStatusDetails(value[key], key)...)
+				p, c := nativeStatusFindings(value[key], key)
+				problems, checkouts = append(problems, p...), append(checkouts, c...)
 			}
 		}
 	}
-	return lines
+	return problems, checkouts
 }
 
 type nativeOperation struct {
@@ -205,13 +221,13 @@ func (m NativeMise) plan(ctx context.Context, scope UpdateScope) []UpdateGroup {
 		args := append(slices.Clone(operation.Args), "--dry-run")
 		result := runContext(ctx, m.Probe, "mise", args...)
 		group := UpdateGroup{Name: operation.Name, State: UpdatePending, Summary: "Native plan; versions and pins are checked by mise"}
-		preview := nativeText(result.Stdout + "\n" + result.Stderr)
+		preview, changes := nativePreview(result)
 		if result.Err != nil {
 			group.State, group.Summary = UpdateUnavailable, nativeText(result.Failure().Error())
-		} else if preview == "" {
-			group.State, group.Summary = UpdateCurrent, "No changes planned"
+		} else if changes == "" {
+			group.State, group.Summary, group.Details = UpdateCurrent, "No changes planned", nativeWarnings(preview)
 		} else {
-			group.Details = strings.Split(preview, "\n")
+			group.Details, group.Changes = strings.Split(preview, "\n"), changes
 		}
 		groups = append(groups, group)
 	}
@@ -335,6 +351,53 @@ func (m NativeMise) configurationDigest(ctx context.Context) (string, error) {
 		content = append(content, '\x00')
 	}
 	return contentDigest(content), nil
+}
+
+// nativePreview returns a native dry run for review and the lines in it that
+// describe changes. Notes about items left alone, versions kept for running
+// processes, progress and warnings change with the clock and the processes on
+// the Mac, so a confirmation does not bind them and they are not work. A line
+// this does not recognise counts as a change: reworded output makes a plan look
+// pending instead of hiding work.
+func nativePreview(result Result) (preview, changes string) {
+	preview = nativeText(result.Stdout + "\n" + result.Stderr)
+	var lines []string
+	for _, line := range strings.Split(preview, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !nativeNote(line) {
+			lines = append(lines, line)
+		}
+	}
+	return preview, strings.Join(lines, "\n")
+}
+
+// nativeWarnings keeps what mise warned about in a preview that plans nothing.
+func nativeWarnings(preview string) []string {
+	var warnings []string
+	for line := range strings.SplitSeq(preview, "\n") {
+		if warning, ok := strings.CutPrefix(strings.TrimSpace(line), "mise WARN"); ok {
+			warnings = append(warnings, strings.TrimSpace(warning))
+		}
+	}
+	return warnings
+}
+
+func nativeNote(line string) bool {
+	if strings.HasPrefix(line, "mise WARN") || strings.HasPrefix(line, "mise scanning tracked configs") {
+		return true
+	}
+	if strings.Contains(line, ": skipped: ") || strings.Contains(line, " is kept: ") {
+		return true
+	}
+	for _, suffix := range []string{
+		": already up to date", ": nothing to prune", ": all formulae already poured",
+		": all files are applied", "All tools are up to date", "pruned configuration links [dryrun]",
+		"anyway, run again with --force",
+	} {
+		if strings.HasSuffix(line, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func nativeText(value string) string {

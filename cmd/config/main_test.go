@@ -280,6 +280,24 @@ func TestUpdateOptionsRequireOneExplicitApplyMode(t *testing.T) {
 	}
 }
 
+func TestEarlierReleaseHandoffUpdatesOnlyConfig(t *testing.T) {
+	// Releases before v0.28.0 re-execute their successor as `update --yes`.
+	t.Setenv(config.UpdateReexecEnv, "v0.28.1")
+	for _, test := range []struct {
+		args []string
+		want config.UpdateScope
+	}{
+		{[]string{"--yes"}, config.UpdateConfig},
+		{[]string{"all", "--yes"}, config.UpdateAll},
+		{[]string{"config", "--yes"}, config.UpdateConfig},
+	} {
+		got, err := parseUpdateOptions(test.args)
+		if err != nil || got.scope != test.want {
+			t.Errorf("handoff %q selected %q, %v", test.args, got.scope, err)
+		}
+	}
+}
+
 func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 	binary, home := buildConfig(t), fixtureHome(t)
 	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")

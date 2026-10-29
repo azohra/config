@@ -245,6 +245,12 @@ type updateOptions struct {
 
 func parseUpdateOptions(args []string) (updateOptions, error) {
 	options := updateOptions{scope: config.UpdateAll}
+	// Releases before v0.28.0 resume their verified handoff as a bare
+	// `update --yes`. That handoff installs Config alone; machine updates
+	// still need their own review.
+	if _, resumed := os.LookupEnv(config.UpdateReexecEnv); resumed {
+		options.scope = config.UpdateConfig
+	}
 	scopeSeen := false
 	for _, argument := range args {
 		switch argument {

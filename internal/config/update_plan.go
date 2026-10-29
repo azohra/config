@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -28,9 +29,11 @@ type UpdateGroup struct {
 	Summary string
 	Details []string
 	Count   int
+	// Changes is the part of a native preview that confirmation binds.
+	Changes string
 }
 
-// UpdatePlan binds confirmation to the release, declarations and native preview.
+// UpdatePlan binds confirmation to the release, declarations and native changes.
 type UpdatePlan struct {
 	CheckedAt       time.Time
 	Groups          []UpdateGroup
@@ -78,13 +81,17 @@ func (p UpdatePlan) validate(version string) error {
 	return nil
 }
 func (p UpdatePlan) Fingerprint() string {
+	groups := slices.Clone(p.Groups)
+	for index := range groups {
+		groups[index].Details = nil
+	}
 	identity := struct {
 		Groups          []UpdateGroup
 		Blocked         bool
 		ResolvedVersion string
 		Scope           UpdateScope
 		Configuration   string
-	}{p.Groups, p.Blocked, p.ResolvedVersion, p.Scope, p.Configuration}
+	}{groups, p.Blocked, p.ResolvedVersion, p.Scope, p.Configuration}
 	data, _ := json.Marshal(identity)
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
