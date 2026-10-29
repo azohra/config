@@ -281,10 +281,14 @@ func TestNativeCleanupBindsActionsAndReportsWhatItLeaves(t *testing.T) {
 	if !slices.Equal(plan.warnings, []string{"brew-cask packages: brew-cask:craft: skipped: metadata-only app ownership cannot be proven safely during pruning"}) {
 		t.Fatalf("cleanup warnings = %q", plan.warnings)
 	}
-	var preview strings.Builder
+	var preview, commands strings.Builder
 	WritePrunePlan(&preview, plan)
-	if !strings.Contains(preview.String(), "is kept: still running") || strings.Contains(preview.String(), "does not support pruning") {
+	WritePruneCommands(&commands, plan)
+	if !strings.Contains(preview.String(), "Remove 1 unused tool version: cmake 4.4.4") || strings.Contains(preview.String(), "does not support pruning") {
 		t.Fatalf("cleanup preview:\n%s", preview.String())
+	}
+	if !strings.Contains(commands.String(), "is kept: still running") {
+		t.Fatalf("cleanup commands:\n%s", commands.String())
 	}
 
 	runner.previews["prune --yes --dry-run"] = Result{Stderr: strings.Replace(tools, "pid 5137 (node) and 14 more", "pid 6001 (node) and 15 more", 1)}

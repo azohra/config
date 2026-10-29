@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/term"
 )
 
 const miseID = "mise"
@@ -212,7 +214,7 @@ func (m NativeMise) plan(ctx context.Context, scope UpdateScope) []UpdateGroup {
 			if state == miseConfigBindingInvalid || state == miseConfigBindingConflict {
 				return []UpdateGroup{{Name: "Machine setup", State: UpdateUnavailable, Summary: nativeText(detail)}}
 			}
-			return []UpdateGroup{{Name: "Machine setup", State: UpdatePending, Summary: "Prepare verified mise and apply the declared machine setup", Details: []string{nativeText(err.Error()), "Repository edits are skipped; declared hooks and tasks will run"}}}
+			return []UpdateGroup{{Name: "Machine setup", State: UpdatePending, Summary: "Machine setup: install verified mise, then apply the declared setup", Details: []string{nativeText(err.Error()), "Repository edits are skipped; declared hooks and tasks will run"}}}
 		}
 		return []UpdateGroup{{Name: scope.Label(), State: UpdateUnavailable, Summary: nativeText(err.Error()), Details: []string{"Use Repair machine to prepare native mise setup"}}}
 	}
@@ -220,14 +222,16 @@ func (m NativeMise) plan(ctx context.Context, scope UpdateScope) []UpdateGroup {
 	for _, operation := range nativeOperations(scope) {
 		args := append(slices.Clone(operation.Args), "--dry-run")
 		result := runContext(ctx, m.Probe, "mise", args...)
-		group := UpdateGroup{Name: operation.Name, State: UpdatePending, Summary: "Native plan; versions and pins are checked by mise"}
+		group := UpdateGroup{Name: operation.Name, State: UpdatePending, Summary: operation.Name}
 		preview, changes := nativePreview(result)
 		if result.Err != nil {
-			group.State, group.Summary = UpdateUnavailable, nativeText(result.Failure().Error())
+			group.State, group.Summary = UpdateUnavailable, operation.Name+": "+nativeText(result.Failure().Error())
 		} else if changes == "" {
-			group.State, group.Summary, group.Details = UpdateCurrent, "No changes planned", nativeWarnings(preview)
+			group.State, group.Summary, group.Details = UpdateCurrent, operation.Name+": no changes planned", nativeWarnings(preview)
 		} else {
-			group.Details, group.Changes = strings.Split(preview, "\n"), changes
+			summary := summarizeNative(changes)
+			group.Details = append(summary.Lines, nativeWarnings(preview)...)
+			group.Raw, group.Changes, group.Elevated = strings.Split(preview, "\n"), changes, summary.Elevated
 		}
 		groups = append(groups, group)
 	}
@@ -241,13 +245,13 @@ func (m NativeMise) Bootstrap(restore func() error) error {
 	if err := m.prepare(); err != nil {
 		return err
 	}
-	if err := m.Live.Command("mise", "bootstrap", "--skip-dirty", "--skip", "macos-defaults,task,final-hook", "--yes"); err != nil {
+	if err := m.command("bootstrap", "--skip-dirty", "--skip", "macos-defaults,task,final-hook", "--yes"); err != nil {
 		return fmt.Errorf("native setup before restoration: %w", err)
 	}
 	if err := restore(); err != nil {
 		return err
 	}
-	if err := m.Live.Command("mise", "bootstrap", "--only", "macos-defaults,task,final-hook", "--yes"); err != nil {
+	if err := m.command("bootstrap", "--only", "macos-defaults,task,final-hook", "--yes"); err != nil {
 		return fmt.Errorf("native setup after restoration: %w", err)
 	}
 	return nil
@@ -266,7 +270,11 @@ func (m NativeMise) Apply(scope UpdateScope) error {
 	var failures []error
 	for _, operation := range nativeOperations(scope) {
 		Logger{Out: m.Live.Stdout}.Section(operation.Name)
-		if err := m.Live.Command("mise", operation.Args...); err != nil {
+		if err := m.command(operation.Args...); err != nil {
+			if strings.Contains(err.Error(), nativeNeedsPassword) {
+				// mise asks for the password itself when it runs on a terminal.
+				err = fmt.Errorf("%w; run `%s` in a terminal", err, scope.command())
+			}
 			failures = append(failures, fmt.Errorf("%s: %w", operation.Name, err))
 			if scope == UpdateRepositories {
 				break
@@ -274,6 +282,55 @@ func (m NativeMise) Apply(scope UpdateScope) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// command runs one native step. A failure reports mise's own error instead of
+// an exit status. A terminal is passed to mise untouched, so it can still ask
+// for a password there.
+func (m NativeMise) command(args ...string) error {
+	live := m.Live
+	var failure nativeFailure
+	if file, ok := live.Stderr.(*os.File); !ok || !term.IsTerminal(file.Fd()) {
+		stderr := io.MultiWriter(live.Stderr, &failure)
+		if live.Stdout == live.Stderr {
+			live.Stdout = stderr
+		}
+		live.Stderr = stderr
+	}
+	err := live.Command("mise", args...)
+	if err != nil && failure.reason != "" {
+		return errors.New(failure.reason)
+	}
+	return err
+}
+
+const nativeNeedsPassword = "an installer needs your administrator password, and mise had no terminal to ask for it"
+
+// nativeFailure keeps the first error mise reports in its output.
+type nativeFailure struct {
+	partial []byte
+	reason  string
+}
+
+func (f *nativeFailure) Write(data []byte) (int, error) {
+	f.partial = append(f.partial, data...)
+	for {
+		end := bytes.IndexByte(f.partial, '\n')
+		if end < 0 {
+			return len(data), nil
+		}
+		line := nativeText(string(f.partial[:end]))
+		f.partial = f.partial[end+1:]
+		message, found := strings.CutPrefix(line, "mise ERROR")
+		message = strings.TrimSpace(message)
+		if !found || f.reason != "" || strings.HasPrefix(message, "Version:") || strings.HasPrefix(message, "Run with --verbose") {
+			continue
+		}
+		f.reason = message
+		if strings.Contains(message, "requires a password but no TTY is available") {
+			f.reason = nativeNeedsPassword
+		}
+	}
 }
 
 func (m NativeMise) configurationDigest(ctx context.Context) (string, error) {
@@ -362,27 +419,73 @@ func (m NativeMise) configurationDigest(ctx context.Context) (string, error) {
 func nativePreview(result Result) (preview, changes string) {
 	preview = nativeText(result.Stdout + "\n" + result.Stderr)
 	var lines []string
+	outOfRange := false
 	for _, line := range strings.Split(preview, "\n") {
-		if line = strings.TrimSpace(line); line != "" && !nativeNote(line) {
+		line = strings.TrimSpace(line)
+		// mise upgrade lists versions outside the declared ranges as a note
+		// over several lines; it does not install them.
+		if strings.HasSuffix(line, nativeOutOfRangeHeading) {
+			outOfRange = true
+			continue
+		}
+		if outOfRange && (strings.Contains(line, " → ") || strings.HasPrefix(line, "… and ") || strings.HasPrefix(line, "Run `mise outdated --bump`")) {
+			continue
+		}
+		outOfRange = false
+		if line != "" && !nativeNote(line) {
 			lines = append(lines, line)
 		}
 	}
 	return preview, strings.Join(lines, "\n")
 }
 
-// nativeWarnings keeps what mise warned about in a preview that plans nothing.
+const nativeOutOfRangeHeading = "Newer versions are available but do not match the configured version ranges:"
+
+// nativeWarnings keeps mise's warnings and its list of versions newer than the
+// declared ranges, the notes worth reading in a preview.
 func nativeWarnings(preview string) []string {
 	var warnings []string
+	var outOfRange nativeList
+	more, inRange := 0, false
 	for line := range strings.SplitSeq(preview, "\n") {
-		if warning, ok := strings.CutPrefix(strings.TrimSpace(line), "mise WARN"); ok {
-			warnings = append(warnings, strings.TrimSpace(warning))
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasSuffix(line, nativeOutOfRangeHeading):
+			inRange = true
+		case inRange && strings.HasPrefix(line, "Run `mise outdated --bump`"):
+			inRange = false
+		case inRange && strings.Contains(line, " → "):
+			words := strings.Fields(line)
+			if len(words) >= 4 {
+				outOfRange.add(nativeToolName(words[0]) + " " + words[3])
+			}
+		case inRange && strings.HasPrefix(line, "… and "):
+			fmt.Sscanf(strings.TrimPrefix(line, "… and "), "%d", &more)
+		default:
+			warning, ok := strings.CutPrefix(line, "mise WARN")
+			warning = strings.TrimSpace(warning)
+			if ok && !strings.Contains(warning, " already ") && !strings.HasPrefix(warning, "Use --force") {
+				warnings = append(warnings, warning)
+			}
 		}
+	}
+	if len(outOfRange.items) > 0 {
+		names := strings.Join(outOfRange.items, ", ")
+		if more > 0 {
+			names += fmt.Sprintf(" and %d more", more)
+		}
+		warnings = append([]string{"Newer than the declared versions, not installed: " + names}, warnings...)
 	}
 	return warnings
 }
 
 func nativeNote(line string) bool {
-	if strings.HasPrefix(line, "mise WARN") || strings.HasPrefix(line, "mise scanning tracked configs") {
+	if strings.HasPrefix(line, "mise WARN") || strings.HasPrefix(line, "mise scanning tracked configs") ||
+		strings.HasPrefix(line, "mise bootstrap: ") {
+		return true
+	}
+	// Per-part status, such as "mise repos: 36 repo(s) already current".
+	if strings.HasPrefix(line, "mise ") && strings.Contains(line, " already ") {
 		return true
 	}
 	if strings.Contains(line, ": skipped: ") || strings.Contains(line, " is kept: ") {
@@ -390,7 +493,8 @@ func nativeNote(line string) bool {
 	}
 	for _, suffix := range []string{
 		": already up to date", ": nothing to prune", ": all formulae already poured",
-		": all files are applied", "All tools are up to date", "pruned configuration links [dryrun]",
+		": all files are applied", "All tools are up to date", "all tools are installed",
+		": already converged", "pruned configuration links [dryrun]",
 		"anyway, run again with --force",
 	} {
 		if strings.HasSuffix(line, suffix) {

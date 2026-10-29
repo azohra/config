@@ -45,7 +45,18 @@ CLI and terminal confirmation bind the selected scope, resolved release,
 declaration digest and the actions in each native preview. Notes about items
 left alone, versions kept for running processes, progress and warnings change
 with the clock and running apps; they are shown but not bound, and a preview of
-only notes plans no changes. Effective native includes outside the
+only notes plans no changes. Reviews summarize the recognized actions by kind
+and list any action Config does not recognize as it is, with mise's own preview
+one key away.
+
+mise asks for a password only when its error output is a terminal, and the
+terminal interface reaches it through pipes. When a reviewed plan contains a
+step that runs as root, the interface runs `sudo -v` on the terminal before the
+operation and renews it with `sudo -n -v` each minute while it runs. Operation
+children stay in the terminal's session, so mise can use that approval. A
+failed native step reports mise's first error rather than an exit status.
+
+Effective native includes outside the
 managed repository participate in the digest. Authored symlinks bind their
 target; effective configuration symlinks also bind their destination's bytes.
 Check time is excluded. The child recomputes the plan and refuses changed work,

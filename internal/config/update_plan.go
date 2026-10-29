@@ -29,8 +29,12 @@ type UpdateGroup struct {
 	Summary string
 	Details []string
 	Count   int
+	// Raw is mise's own preview; Details summarizes it for review.
+	Raw []string
 	// Changes is the part of a native preview that confirmation binds.
 	Changes string
+	// Elevated is true when a native step runs as root.
+	Elevated bool
 }
 
 // UpdatePlan binds confirmation to the release, declarations and native changes.
@@ -54,6 +58,17 @@ func (p UpdatePlan) Counts() (available, unavailable int) {
 	}
 	return
 }
+
+// Elevated reports whether the plan runs a native step as root.
+func (p UpdatePlan) Elevated() bool {
+	for _, group := range p.Groups {
+		if group.Elevated {
+			return true
+		}
+	}
+	return false
+}
+
 func (p UpdatePlan) HasWork() bool {
 	if p.Blocked {
 		return false
@@ -83,7 +98,7 @@ func (p UpdatePlan) validate(version string) error {
 func (p UpdatePlan) Fingerprint() string {
 	groups := slices.Clone(p.Groups)
 	for index := range groups {
-		groups[index].Details = nil
+		groups[index].Details, groups[index].Raw = nil, nil
 	}
 	identity := struct {
 		Groups          []UpdateGroup
@@ -216,6 +231,20 @@ func WriteUpdatePlan(out io.Writer, plan UpdatePlan) {
 		fmt.Fprintf(out, "  %s\n", group.Summary)
 		for _, detail := range group.Details {
 			fmt.Fprintf(out, "    %s\n", detail)
+		}
+	}
+}
+
+// WriteUpdateCommands renders mise's own preview for each native step.
+func WriteUpdateCommands(out io.Writer, plan UpdatePlan) {
+	fmt.Fprintln(out, plan.Scope.Label()+": mise's commands")
+	for _, group := range plan.Groups {
+		if len(group.Raw) == 0 {
+			continue
+		}
+		fmt.Fprintf(out, "  %s\n", group.Name)
+		for _, line := range group.Raw {
+			fmt.Fprintf(out, "    %s\n", line)
 		}
 	}
 }

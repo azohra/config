@@ -25,6 +25,18 @@ func (s UpdateScope) Label() string {
 	}
 }
 
+// command is the CLI spelling that applies the scope.
+func (s UpdateScope) command() string {
+	switch s {
+	case UpdateRepair:
+		return "config repair --yes"
+	case UpdateConfig:
+		return "config update config --yes"
+	default:
+		return "config update " + string(s) + " --yes"
+	}
+}
+
 func (s UpdateScope) valid() bool {
 	return s == UpdateConfig || s == UpdateAll || s == UpdateSoftware || s == UpdateRepositories || s == UpdateRepair
 }
