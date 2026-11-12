@@ -82,9 +82,13 @@ gitleaks dir --no-banner --redact .
 git log --all -p | gitleaks stdin --no-banner --redact
 """
 
+[tasks."check:tasks"]
+description = "Every task definition is valid"
+run = "mise tasks validate"
+
 [tasks.check]
 description = "The definition of green"
-depends = ["check:go", "check:deps", "check:secrets", "test:site"]
+depends = ["check:tasks", "check:go", "check:deps", "check:secrets", "test:site"]
 
 [tasks."check:darwin-native"]
 description = "Read Finder Favorites through the native macOS integration"
@@ -160,6 +164,7 @@ CONTRACT
 [tasks.dev]
 description = "Dev server for the site; no secrets"
 dir = "site"
+raw = true
 run = "wrangler dev --local --port 8787"
 
 [tasks.deploy]
