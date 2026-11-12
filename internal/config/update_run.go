@@ -75,14 +75,20 @@ func (r UpdateRun) Failed() bool {
 
 func updateRunDir(paths Paths) string { return filepath.Join(paths.StateDir, "updates") }
 
-func (r UpdateRun) name() string { return r.StartedAt.UTC().Format("20060102T150405.000Z") + ".json" }
+// updateRunName is a record's file name: the time its update started.
+const updateRunName = "20060102T150405.000Z.json"
+
+func (r UpdateRun) name() string { return r.StartedAt.UTC().Format(updateRunName) }
 
 // beginUpdateRun continues the record a release handoff names, or starts one.
+// The name is read as the time it encodes, never used as a path.
 func beginUpdateRun(paths Paths, scope UpdateScope) UpdateRun {
 	if name, continued := os.LookupEnv(UpdateRunEnv); continued {
 		_ = os.Unsetenv(UpdateRunEnv)
-		if run, err := readUpdateRun(filepath.Join(updateRunDir(paths), filepath.Base(name))); err == nil {
-			return run
+		if started, err := time.Parse(updateRunName, name); err == nil {
+			if run, err := readUpdateRun(filepath.Join(updateRunDir(paths), started.Format(updateRunName))); err == nil {
+				return run
+			}
 		}
 	}
 	return UpdateRun{Schema: updateRunSchema, Scope: scope.String(), StartedAt: time.Now()}
