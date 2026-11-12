@@ -15,7 +15,7 @@ func TestUpdaterDoesNotApplyAPlanWithoutWork(t *testing.T) {
 	}
 	plan := UpdatePlan{
 
-		Groups: []UpdateGroup{{Name: "Config", State: UpdateSkipped}},
+		Groups: []UpdateGroup{{ID: configStepID, Name: "Config", State: UpdateSkipped}},
 	}
 	if err := updater.Apply(plan); err != nil {
 		t.Fatal(err)
@@ -44,6 +44,9 @@ if [ "$2" = latest ]; then
 fi
 if [ "$2" = where ]; then
   printf '%s\n' "$UPDATE_TEST_RELEASE_DIR"
+fi
+if [ "$2" = install ]; then
+  mkdir -p "$MISE_DATA_DIR/installs" && printf '%s' "$MISE_DATA_DIR" > "$UPDATE_TEST_RELEASE_DIR/data-dir"
 fi
 `)
 	writeUpdateExecutable(t, releaseConfig, `#!/bin/sh
@@ -93,6 +96,13 @@ fi
 	if reexecPath != canonicalConfig || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "config", "--yes"}) {
 		t.Fatalf("re-exec = %q %q", reexecPath, reexecArgs)
 	}
+	// Machine updates that waited for this release run in the installed one.
+	waiting := testUpdatePlan("v0.5.0")
+	waiting.Scope = UpdateAll
+	waiting.Groups = append(waiting.Groups, UpdateGroup{ID: machineStepID, Name: "Machine updates", State: UpdatePending})
+	if err := updater.Apply(waiting); err != nil || !slices.Equal(reexecArgs, []string{canonicalConfig, "update", "all", "--yes"}) {
+		t.Fatalf("handoff with machine updates = %q, %v", reexecArgs, err)
+	}
 	if environmentValue(reexecEnvironment, UpdateReexecEnv) != "v0.5.0" {
 		t.Fatalf("re-exec environment does not bind %s to the installed release", UpdateReexecEnv)
 	}
@@ -101,6 +111,23 @@ fi
 	}
 	if !strings.Contains(output.String(), "Config v0.5.0 installed") {
 		t.Fatalf("output missing installed release:\n%s", output.String())
+	}
+	// The acquired release never enters the machine's own mise installs.
+	releaseData := filepath.Join(configReleaseRoot(paths), "data")
+	if used, _ := os.ReadFile(filepath.Join(releaseDirectory, "data-dir")); string(used) != releaseData {
+		t.Fatalf("release was acquired into %q, want Config's own %q", used, releaseData)
+	}
+	if _, err := os.Lstat(releaseData); !os.IsNotExist(err) {
+		t.Fatalf("the acquired release was kept after installation: %v", err)
+	}
+	// The installed release continues the record this one began.
+	run, err := LastUpdateRun(paths)
+	if err != nil || len(run.Steps) != 1 || run.Steps[0].ID != configStepID || run.Steps[0].Status != StepDone {
+		t.Fatalf("handoff record = %+v, %v", run, err)
+	}
+	t.Setenv(UpdateRunEnv, environmentValue(reexecEnvironment, UpdateRunEnv))
+	if continued := beginUpdateRun(paths, UpdateAll); !continued.StartedAt.Equal(run.StartedAt) || len(continued.Steps) != 1 {
+		t.Fatalf("the installed release began a new record: %+v", continued)
 	}
 }
 
@@ -374,7 +401,7 @@ func newUpdateTestUpdater(paths Paths, out *bytes.Buffer, version string) Update
 }
 
 func testUpdatePlan(resolvedVersion string) UpdatePlan {
-	return UpdatePlan{ResolvedVersion: resolvedVersion, Groups: []UpdateGroup{{Name: "Config", State: UpdateAvailable}}}
+	return UpdatePlan{ResolvedVersion: resolvedVersion, Groups: []UpdateGroup{{ID: configStepID, Name: "Config", State: UpdateAvailable}}}
 }
 
 func environmentValue(environment []string, name string) string {

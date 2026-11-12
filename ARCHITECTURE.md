@@ -22,19 +22,46 @@ version. Other operations only inspect that prerequisite and direct a missing
 setup to repair.
 
 Mise owns machine tools, packages, repositories, dotfiles, services and
-defaults. Config presents its aggregate status and native dry-run plans. A
+defaults. Config presents its aggregate status and its plans. A
 declared checkout that is clean but not at its remote ref, or has local edits,
 is listed without failing machine health: mise reports a remote it cannot reach
 the same way as one that moved. A missing or foreign checkout still fails it.
-Software updates run global tool upgrades without pruning plus native package
-upgrades. Repository updates skip dirty checkouts, then apply dotfiles,
-including skill links and MCP merges. Repair runs native bootstrap, including
-declared hooks and tasks. Config maintains no second inventory for these
-resources.
+Config maintains no second inventory for these resources.
+
+An update is an ordered list of steps: Config's release, then mise itself,
+global tools, packages, repositories and linked files. Each native step is one
+mise command and a probe that lists the items the command would change. The
+probes read mise's JSON state: outdated tools, installed packages, repository
+status, dotfile status and mise's own latest release. Only the version a
+package upgrade installs comes from that upgrade's dry run, one line an item.
+Lines that say nothing about whether an update exists, such as an App Store or
+plugin upgrade printed for every declared package, a dependency's pour or a
+line Config does not recognise, are listed as commands the whole step also
+runs. They are bound by confirmation and keep the step runnable, so a plan
+neither counts them as updates nor hides them. Probes are independent reads and run together. Repair remains one
+step reviewed from the native bootstrap's dry run, because hooks, tasks and
+defaults have no state to read.
+
+A selection keeps named items and passes their targets to the step's command;
+an unselected plan runs each command whole. A step's id selects that step
+alone, and a name shared by items in several steps is refused. While machine
+updates wait for a Config release, only that release can be selected. Steps run in order and a failure
+does not stop the next one, except that linked files wait for a failed
+repository update. After its command, a step is planned again. An item that
+is no longer pending was updated, one that remains failed with the command or
+was left unchanged by it, and one whose probe fails is unverified. The outcome
+therefore never depends on the wording of mise's output. Every run is recorded
+under Config's state with each step's command, item outcomes, mise's errors and
+their causes, and the bounded end of its output; the newest records are kept.
+A release handoff passes the record's name to the installed release, which
+continues it.
 
 `config update config` resolves Config's own release. A checksummed private
 mise adapter in Config's release cache acquires the exact resolved executable
-with GitHub asset digest verification. It has no machine configuration.
+with GitHub asset digest verification. It has no machine configuration, and it
+installs into its own data directory, which is removed once the canonical
+command is in place: an acquired release never appears among the machine's
+mise tools or shims.
 Downgrade refusal and executable version verification gate atomic installation.
 The installed release resumes through a version-bound marker at the canonical
 command. `config update` includes the native scopes after this handoff. A
@@ -42,12 +69,12 @@ release before v0.28.0 resumes with a bare `update --yes`, which installs Config
 alone.
 
 CLI and terminal confirmation bind the selected scope, resolved release,
-declaration digest and the actions in each native preview. Notes about items
-left alone, versions kept for running processes, progress and warnings change
-with the clock and running apps; they are shown but not bound, and a preview of
-only notes plans no changes. Reviews summarize the recognized actions by kind
-and list any action Config does not recognize as it is, with mise's own preview
-one key away.
+declaration digest, each step's items and the actions in a repair's native
+preview. Notes about items left alone, versions kept for running processes,
+progress and warnings change with the clock and running apps; they are shown
+but not bound, and a preview of only notes plans no changes. A repair review
+summarizes the recognized actions by kind and lists any action Config does not
+recognize as it is, with mise's own preview one key away.
 
 mise asks for a password only when its error output is a terminal, and the
 terminal interface reaches it through pipes. When a reviewed plan contains a

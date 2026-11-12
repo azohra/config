@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -223,10 +224,14 @@ exit 1
 	}
 }
 
-func TestUpdateRejectsAnUnknownScope(t *testing.T) {
-	output, code := runConfig(t, buildConfig(t), t.TempDir(), "update", "everything")
+func TestUpdateRejectsANameNoPendingUpdateHas(t *testing.T) {
+	output, code := runConfig(t, buildConfig(t), fixtureHome(t), "update", "everything")
+	if code != 1 || !strings.Contains(output, `no pending update is named "everything"`) {
+		t.Fatalf("unknown update name exited %d:\n%s", code, output)
+	}
+	output, code = runConfig(t, buildConfig(t), t.TempDir(), "update", "--force")
 	if code != 1 || !strings.Contains(output, "usage: config update") {
-		t.Fatalf("unknown update scope exited %d:\n%s", code, output)
+		t.Fatalf("unknown update option exited %d:\n%s", code, output)
 	}
 }
 
@@ -269,12 +274,20 @@ func TestUpdateOptionsRequireOneExplicitApplyMode(t *testing.T) {
 		{[]string{"--yes"}, updateOptions{scope: config.UpdateAll, yes: true}, true},
 		{[]string{"software", "--dry-run"}, updateOptions{scope: config.UpdateSoftware, dryRun: true}, true},
 		{[]string{"repositories", "--yes"}, updateOptions{scope: config.UpdateRepositories, yes: true}, true},
+		{[]string{"tools", "node", "example", "--dry-run"}, updateOptions{scope: config.UpdateTools, items: []string{"node", "example"}, dryRun: true}, true},
+		{[]string{"node"}, updateOptions{scope: config.UpdateAll, items: []string{"node"}}, true},
+		{[]string{"all", "tools", "apps"}, updateOptions{scope: config.UpdateAll, items: []string{"tools", "apps"}}, true},
+		{[]string{"--json"}, updateOptions{scope: config.UpdateAll, json: true}, true},
+		{[]string{"--last", "--json"}, updateOptions{scope: config.UpdateAll, last: true, json: true}, true},
 		{[]string{"--dry-run", "--yes"}, updateOptions{}, false},
-		{[]string{"software", "repositories"}, updateOptions{}, false},
+		{[]string{"--yes", "--json"}, updateOptions{}, false},
+		{[]string{"--last", "--yes"}, updateOptions{}, false},
+		{[]string{"--last", "tools"}, updateOptions{}, false},
+		{[]string{"repair", "node"}, updateOptions{}, false},
 		{[]string{"--force"}, updateOptions{}, false},
 	} {
 		got, err := parseUpdateOptions(test.args)
-		if (err == nil) != test.ok || got != test.want {
+		if (err == nil) != test.ok || !reflect.DeepEqual(got, test.want) {
 			t.Errorf("parseUpdateOptions(%q) = %+v, %v", test.args, got, err)
 		}
 	}
@@ -320,15 +333,19 @@ func TestRedirectedUpdatePreviewsWithoutChangingTheMac(t *testing.T) {
 printf '%s\n' "$*" >> "$UPDATE_TEST_LOG"
 if [ "$1" = --version ]; then printf '2026.10.21\n'; fi
 if [ "$1 $2" = "config ls" ]; then printf '[]\n'; fi
-if [ "$1" = outdated ]; then printf '{}\n'; fi
-if [ "$1 $2 $3" = "bootstrap packages status" ]; then printf '{"brew":{"packages":[{}]}}\n'; fi
-case " $* " in *" --dry-run "*) printf 'would update declared resources\n';; esac
+if [ "$1" = outdated ]; then printf '{"example-tool":{"current":"1.0","latest":"1.1"}}\n'; fi
+if [ "$1 $2" = "version --json" ]; then printf '{"version":"2026.10.21","latest":"2026.10.21"}\n'; fi
+if [ "$1 $2 $3" = "bootstrap packages status" ]; then printf '{"brew-cask":{"packages":[{"package":"example-app","installed_version":"1.0"}]}}\n'; fi
+if [ "$1 $2 $3" = "bootstrap repos status" ]; then printf '{"repos":[]}\n'; fi
+if [ "$1 $2" = "dotfiles status" ]; then printf '{"files":[],"edits":[]}\n'; fi
+case " $* " in *" --dry-run "*) printf 'install cask example-app/2.0\n';; esac
 `
 	if err := os.WriteFile(mise, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	output, code := runConfig(t, binary, home, "update")
-	if code != 0 || !strings.Contains(output, "Update everything") || !strings.Contains(output, "would update declared resources") {
+	if code != 0 || !strings.Contains(output, "Update everything") || !strings.Contains(output, "example-app 1.0 → 2.0") ||
+		!strings.Contains(output, "example-tool 1.0 → 1.1") || !strings.Contains(output, "config update all --yes") {
 		t.Fatalf("redirected update exited %d:\n%s", code, output)
 	}
 	commands, err := os.ReadFile(log)
@@ -336,9 +353,68 @@ case " $* " in *" --dry-run "*) printf 'would update declared resources\n';; esa
 		t.Fatal(err)
 	}
 	for _, command := range strings.Split(strings.TrimSpace(string(commands)), "\n") {
-		if (strings.Contains(command, "upgrade") || strings.Contains(command, " apply ") || strings.Contains(command, "repos update")) && !strings.Contains(command, "--dry-run") {
+		if (strings.Contains(command, "upgrade") || strings.Contains(command, " apply ") || strings.Contains(command, "repos update") || strings.Contains(command, "self-update")) && !strings.Contains(command, "--dry-run") {
 			t.Fatalf("preview mutated through Mise:\n%s", commands)
 		}
+	}
+}
+
+// A selection runs only its items; the record then says what each one did.
+func TestUpdateRunsASelectionAndRecordsEachItem(t *testing.T) {
+	binary, home := buildConfig(t), fixtureHome(t)
+	root := filepath.Join(home, "Library", "Application Support", "Config", "repository")
+	if err := os.Mkdir(filepath.Join(root, "mise"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "mise"), filepath.Join(home, ".config", "mise")); err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	t.Setenv("UPDATE_TEST_STATE", state)
+	mise := filepath.Join(home, ".local", "bin", "mise")
+	if err := os.MkdirAll(filepath.Dir(mise), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// example-tool upgrades; broken-tool fails and stays outdated.
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$UPDATE_TEST_STATE/commands"
+if [ "$1" = --version ]; then printf '2026.10.21\n'; fi
+if [ "$1 $2" = "config ls" ]; then printf '[]\n'; fi
+if [ "$1" = outdated ]; then
+  printf '{"broken-tool":{"current":"1.0","latest":"1.1"},"other-tool":{"current":"3.0","latest":"3.1"}'
+  [ -e "$UPDATE_TEST_STATE/upgraded" ] || printf ',"example-tool":{"current":"1.0","latest":"1.1"}'
+  printf '}\n'
+fi
+if [ "$1" = upgrade ]; then
+  touch "$UPDATE_TEST_STATE/upgraded"
+  echo "mise ERROR broken-tool: checksum mismatch" >&2
+  exit 1
+fi
+`
+	if err := os.WriteFile(mise, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output, code := runConfig(t, binary, home, "update", "tools", "example-tool", "broken-tool", "--yes")
+	if code != 1 || !strings.Contains(output, "Tools: broken-tool: checksum mismatch") || !strings.Contains(output, "config update --last") {
+		t.Fatalf("selected update exited %d:\n%s", code, output)
+	}
+	commands, _ := os.ReadFile(filepath.Join(state, "commands"))
+	if !strings.Contains(string(commands), "upgrade --global --no-prune --yes broken-tool example-tool\n") {
+		t.Fatalf("the selection did not reach mise as its targets:\n%s", commands)
+	}
+	output, code = runConfig(t, binary, home, "update", "--last")
+	for _, want := range []string{"Tools: 1 of 2 updated", "example-tool 1.0 → 1.1", "broken-tool 1.0 → 1.1: failed", "error: broken-tool: checksum mismatch"} {
+		if code != 0 || !strings.Contains(output, want) || strings.Contains(output, "other-tool") {
+			t.Fatalf("last update report is missing %q (exit %d):\n%s", want, code, output)
+		}
+	}
+	output, _ = runConfig(t, binary, home, "update", "--last", "--json")
+	var run config.UpdateRun
+	if err := json.Unmarshal([]byte(output), &run); err != nil || len(run.Steps) != 1 || run.Steps[0].Status != config.StepFailed || !strings.Contains(run.Steps[0].Output, "checksum mismatch") {
+		t.Fatalf("last update record = %+v, %v\n%s", run, err, output)
 	}
 }
 
@@ -467,7 +543,7 @@ func TestArgumentErrorsDoNotWaitForTheMachineDocument(t *testing.T) {
 		{"--status", "extra"},
 		{"--apply"},
 		{"bootstrap"},
-		{"update", "everything"},
+		{"update", "--everything"},
 	} {
 		output, code := runConfig(t, binary, home, invocation...)
 		if code != 1 {
@@ -536,7 +612,7 @@ func TestOperationEventModeFramesCommandErrors(t *testing.T) {
 
 func TestInternalUpdateRefusesAChangedPlanBeforeApply(t *testing.T) {
 	binary, home := buildConfig(t), fixtureHome(t)
-	output, code := runConfig(t, binary, home, "--run-update", "sha256:stale")
+	output, code := runConfig(t, binary, home, "--run-update", "config", "sha256:stale")
 	if code != 1 || !strings.Contains(output, "update plan changed") {
 		t.Fatalf("changed update plan exited %d:\n%s", code, output)
 	}

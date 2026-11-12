@@ -487,14 +487,22 @@ func (m Model) renderUpdate() string {
 	lines = visibleLines(lines, m.scroll, available)
 	action := "Back to dashboard"
 	hints := []string{"enter back", "r refresh", "esc back"}
+	selectable := len(m.updateKeys()) > 1 && !m.showCommands
 	if m.updatePreview.HasWork() {
 		action = m.updateScope.Label()
 		hints[0] = "enter run"
+		if plan, keys, err := m.selectedUpdate(); err != nil || !plan.HasWork() {
+			action, hints[0] = "Nothing selected", "space select"
+		} else if keys != nil {
+			action += ": " + config.FormatCount(len(keys), "selected item", "selected items")
+		}
 	}
 	if m.updateScope != config.UpdateConfig {
 		hints = []string{hints[0], "r refresh", commandsHint(m.showCommands), "esc back"}
 	}
-	if scrollable {
+	if selectable {
+		hints = append([]string{"↑/↓ move", "space select", "a all"}, hints...)
+	} else if scrollable {
 		hints = append([]string{"↑/↓ scroll"}, hints...)
 	}
 	checked := ""
@@ -509,14 +517,38 @@ func (m Model) renderUpdate() string {
 	return frame(m.width, blocks...)
 }
 
+// updateLines renders the review: each step, then its items with a mark the
+// person toggles, then its notes. mise's own commands replace it on request.
 func (m Model) updateLines() []string {
-	var preview bytes.Buffer
 	if m.showCommands {
+		var preview bytes.Buffer
 		config.WriteUpdateCommands(&preview, m.updatePreview)
-	} else {
-		config.WriteUpdatePlan(&preview, m.updatePreview)
+		return strings.Split(strings.Trim(preview.String(), "\n"), "\n")
 	}
-	return strings.Split(strings.Trim(preview.String(), "\n"), "\n")
+	lines := []string{m.updatePreview.Scope.Label()}
+	if m.updatePreview.Blocked {
+		lines = append(lines, "  Update is unavailable")
+	}
+	keys := m.updateKeys()
+	focused := ""
+	if len(keys) > 1 && m.updateCursor < len(keys) {
+		focused = keys[m.updateCursor]
+	}
+	for _, row := range m.updateRows() {
+		text := strings.TrimLeft(row.text, " ")
+		indent := row.text[:len(row.text)-len(text)]
+		switch {
+		case row.note:
+			lines = append(lines, "  "+indent+muted.Render(text))
+		case row.key == "" || len(keys) < 2:
+			lines = append(lines, "  "+row.text)
+		case m.updateSkipped[row.key]:
+			lines = append(lines, focusRow(row.key == focused, indent+muted.Render("○ "+text)))
+		default:
+			lines = append(lines, focusRow(row.key == focused, indent+accent.Render("●")+" "+text))
+		}
+	}
+	return lines
 }
 
 func (m Model) renderRunning() string {

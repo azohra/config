@@ -10,18 +10,28 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
+// nativeStatusRunner answers mise's probes. A reply is keyed by the command's
+// arguments; any other command gets result.
 type nativeStatusRunner struct {
+	mu          sync.Mutex
 	result      Result
+	replies     map[string]Result
 	calls       []string
 	configFiles string
 }
 
 func (r *nativeStatusRunner) Exists(string) bool { return true }
 func (r *nativeStatusRunner) Run(_ context.Context, _ string, args ...string) Result {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, strings.Join(args, " "))
+	if reply, ok := r.replies[strings.Join(args, " ")]; ok {
+		return reply
+	}
 	if slices.Equal(args, []string{"--version"}) {
 		return Result{Stdout: releaseMiseVersion}
 	}
@@ -141,11 +151,12 @@ func TestNativeRepairPreservesForeignGlobalConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	native.Install = func() error { t.Fatal("repair installed before checking the binding"); return nil }
-	if plan := native.plan(context.Background(), UpdateRepair); plan[0].State != UpdateUnavailable {
+	plan := native.plan(context.Background(), UpdateRepair)
+	if plan[0].State != UpdateUnavailable {
 		t.Fatalf("conflicting global configuration can be overwritten: %+v", plan)
 	}
-	if err := native.Apply(UpdateRepair); err == nil {
-		t.Fatal("repair accepted a conflicting configuration")
+	if step := native.run(plan[0], UpdateRepair); step.Status != StepFailed {
+		t.Fatalf("repair accepted a conflicting configuration: %+v", step)
 	}
 	if data, err := os.ReadFile(foreign); err != nil || string(data) != "# private configuration\n" {
 		t.Fatalf("foreign configuration changed: %q, %v", data, err)
@@ -154,10 +165,13 @@ func TestNativeRepairPreservesForeignGlobalConfiguration(t *testing.T) {
 
 func TestNativePreviewStripsTerminalControlSequences(t *testing.T) {
 	native, runner := nativeFixture(t)
-	runner.result = Result{Stdout: "\x1b[2J\x1b[31mupgrade example-app\x1b[0m\x07\n"}
-	groups := native.plan(context.Background(), UpdateSoftware)
-	for _, lines := range [][]string{groups[0].Raw, groups[0].Details} {
-		if got := strings.Join(lines, "\n"); strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "upgrade example-app") {
+	runner.replies = map[string]Result{
+		"bootstrap packages status --json":           {Stdout: "{}"},
+		"bootstrap packages upgrade --yes --dry-run": {Stdout: "\x1b[2J\x1b[31minstall cask example-app/2.0\x1b[0m\x07\n"},
+	}
+	group := native.planApps(context.Background())
+	for _, got := range []string{strings.Join(group.Raw, "\n"), strings.Join(itemLabels(group), "\n")} {
+		if strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "example-app") {
 			t.Fatalf("provider control bytes reached the review: %q", got)
 		}
 	}
@@ -294,40 +308,6 @@ experimental = true
 	}
 }
 
-func TestNativeMaintenancePreviewsAndAppliesTheSameScope(t *testing.T) {
-	native, runner := nativeFixture(t)
-	runner.result = Result{Stdout: "upgrade example-app to 2.0\n"}
-	groups := native.plan(context.Background(), UpdateSoftware)
-	if len(groups) != 2 || groups[0].State != UpdatePending {
-		t.Fatalf("native software preview = %+v", groups)
-	}
-	for _, command := range runner.calls {
-		if command != "--version" && !strings.Contains(command, "--dry-run") {
-			t.Fatalf("preview executed a mutation: %s", command)
-		}
-	}
-	log := filepath.Join(t.TempDir(), "commands")
-	t.Setenv("NATIVE_MISE_TEST_LOG", log)
-	writeUpdateExecutable(t, native.Paths.InHome(".local", "bin", "mise"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$NATIVE_MISE_TEST_LOG\"\n")
-	if err := native.Apply(UpdateSoftware); err != nil {
-		t.Fatal(err)
-	}
-	commands, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(commands) != "upgrade --global --no-prune --yes\nbootstrap packages upgrade --yes\n" {
-		t.Fatalf("software scope = %s", commands)
-	}
-	if err := native.Apply(UpdateRepositories); err != nil {
-		t.Fatal(err)
-	}
-	commands, _ = os.ReadFile(log)
-	if !strings.Contains(string(commands), "bootstrap repos update --skip-dirty --yes\ndotfiles apply --yes\n") {
-		t.Fatalf("repository scope lost linked resources: %s", commands)
-	}
-}
-
 func TestNativeCommandsIgnoreTheCallingProjectsMiseContext(t *testing.T) {
 	paths := testPaths(t)
 	t.Setenv("MISE_ENV", "project")
@@ -378,45 +358,5 @@ func TestRepositoryCheckoutsAwayFromTheirRemoteDoNotFailMachineHealth(t *testing
 	runner.result.Stdout = `{"repos":[],"tools":[]}`
 	if resource := native.Inspect(); resource.State != Drift || resource.Failed() == 0 {
 		t.Fatalf("unexplained native failure read as healthy: %+v", resource)
-	}
-}
-
-func TestNativePlansBindChangesNotNotes(t *testing.T) {
-	native, runner := nativeFixture(t)
-	machine := "kind = \"azohra.config.machine\"\nschema = 8\n[repository]\nbranch = \"main\"\nurl = \"https://example.com/machine.git\"\n"
-	if err := os.WriteFile(native.Paths.InRoot("config.toml"), []byte(machine), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	gitTest(t, native.Paths.Root, "init", "--quiet")
-	notes := "mise brew-cask:example: already up to date\n" +
-		"mise brew-cask:chat: skipped: installed app is running and updates itself\n" +
-		"mise WARN  newer example release 2.1 (eligible 2026-10-29 18:01 PDT) ignored by minimum_release_age (24h)\n" +
-		"mise brew: all formulae already poured\n" +
-		"mise All tools are up to date\n"
-	runner.result = Result{Stderr: notes}
-	updater := NewUpdater(native.Paths, io.Discard, "dev")
-	updater.Native = &native
-	plan, err := updater.Plan(UpdateSoftware)
-	if err != nil || plan.HasWork() {
-		t.Fatalf("a preview of notes offered work: %+v, %v", plan, err)
-	}
-	if got := plan.Groups[1].Details; len(got) != 1 || !strings.HasPrefix(got[0], "newer example release 2.1") {
-		t.Fatalf("an idle preview dropped its warning: %q", got)
-	}
-
-	runner.result = Result{Stdout: "Would install example@2.0\n", Stderr: notes}
-	plan, err = updater.Plan(UpdateSoftware)
-	if err != nil || !plan.HasWork() || !strings.Contains(strings.Join(plan.Groups[1].Raw, "\n"), "already up to date") {
-		t.Fatalf("software preview = %+v, %v", plan, err)
-	}
-	runner.result.Stderr = strings.ReplaceAll(notes, "already up to date", "skipped: installed app is running and updates itself")
-	runner.result.Stderr = strings.ReplaceAll(runner.result.Stderr, "18:01", "18:02")
-	again, err := updater.Plan(UpdateSoftware)
-	if err != nil || again.Fingerprint() != plan.Fingerprint() {
-		t.Fatalf("changed notes invalidated a confirmed plan: %v", err)
-	}
-	runner.result.Stdout = "Would install example@2.1\n"
-	if changed, _ := updater.Plan(UpdateSoftware); changed.Fingerprint() == plan.Fingerprint() {
-		t.Fatal("a changed native action kept the confirmed plan")
 	}
 }

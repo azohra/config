@@ -78,6 +78,8 @@ type Model struct {
 	overviewReady      bool
 	overviewError      error
 	updatePreview      config.UpdatePlan
+	updateCursor       int
+	updateSkipped      map[string]bool
 	updateScope        config.UpdateScope
 	planScope          config.UpdateScope
 	checkingOverview   bool
@@ -249,6 +251,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.checkingUpdate = false
 			m.updateError = msg.err
 			m.updatePreview = msg.plan
+			m.updateCursor, m.updateSkipped = 0, nil
 			if m.updateScope == config.UpdateConfig {
 				m.overviewReady = msg.err == nil
 				m.overviewError = msg.err

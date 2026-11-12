@@ -91,12 +91,25 @@ commands before running them. A declared checkout that is behind its remote,
 cannot reach it, or has local edits is listed under Machine setup without
 failing it; a missing checkout or one with another origin fails it.
 
-| Config action | Native mise commands |
-| --- | --- |
-| Update software | `upgrade --global --no-prune`, `bootstrap packages upgrade` |
-| Update repositories | `bootstrap repos update --skip-dirty`, `dotfiles apply` |
-| Repair machine | `bootstrap --skip-dirty` |
-| Clean up | `prune`, supported managers' `bootstrap packages prune` |
+An update is a list of steps. Each step is one mise command, and its items come
+from the state mise reports as JSON:
+
+| Step | Items come from | Native mise command |
+| --- | --- | --- |
+| `mise` | `version --json` | `self-update --no-plugins` |
+| `tools` | `outdated --global --json` | `upgrade --global --no-prune` |
+| `apps` | `bootstrap packages status --json` and the upgrade's dry run | `bootstrap packages upgrade` |
+| `repositories` | `bootstrap repos status --json` | `bootstrap repos update --skip-dirty` |
+| `files` | `dotfiles status --json` | `dotfiles apply` |
+
+Update software runs `mise`, `tools` and `apps`; Update repositories runs
+`repositories` and `files`. Repair machine runs `bootstrap --skip-dirty`, and
+Clean up runs `prune` and the supported managers' `bootstrap packages prune`.
+A selection passes its items to the step's command as arguments.
+
+mise reports a checkout current when its declaration has no `ref`, so Config
+lists those checkouts as not checked. Updating every repository still pulls
+them; declare a `ref` to see when they are behind.
 
 These operations also work directly through mise. Native declarations own tool
 pins, packages, repositories, skill links, MCP merges, Git templates, services
@@ -204,8 +217,11 @@ config path
 config restore
 config update --dry-run
 config update software --yes
+config update tools node ripgrep --yes
+config update apps --json
 config update repositories --yes
 config update config --yes
+config update --last
 config repair --dry-run
 config prune --dry-run
 config prune --yes
@@ -215,21 +231,41 @@ config --version
 `config update` selects everything: Config first, then software and repositories.
 A release before v0.28.0 that updates itself to this one installs Config alone;
 run `config update` again for the machine scopes.
-Each scope can run separately. Repair runs the full declared native bootstrap,
-including its hooks and tasks.
+The first word may name a scope: `all`, `config`, `software`, `repositories`,
+`mise`, `tools` or `apps`. Any further word selects a step or an item by name,
+so `config update tools node` upgrades one tool. Repair runs the full declared
+native bootstrap, including its hooks and tasks.
 
 Update, repair and prune are preview-only without a terminal unless `--yes` is
-explicit. A review summarizes what mise will change, such as apps to install,
-repositories to fast-forward and hooks that run; press `d` in the terminal
-interface to see mise's own commands. When a step runs as administrator, such as
-an app's package installer, the terminal interface asks for your password before
-it starts and keeps that approval while the operation runs. From the CLI, mise
+explicit. An update review lists each step's items with the versions they move
+between, and notes what mise leaves alone and why: apps that update themselves
+while running, pinned tools with newer releases, checkouts with local edits. In
+the terminal interface, move to an item and press space to leave it out, `a` to
+toggle them all, and `d` to see mise's own commands. A name that items in two
+steps share is refused; use the key the error lists, such as `tools:node`.
+`--json` prints the plan.
+
+mise prints some package commands whether or not anything is newer: an App
+Store upgrade for every declared app, a package plugin's upgrade, a formula's
+dependencies. Config does not count those as updates. It lists them as commands
+the whole step also runs, and a step with only such commands can still be run. When a step runs as administrator, such as an app's
+package installer, the terminal interface asks for your password before it
+starts and keeps that approval while the operation runs. From the CLI, mise
 asks on the terminal itself.
 
-Plans bind the declarations and the actions in each native preview;
-a changed action requires a new review. Notes such as apps skipped while they
-run, versions kept for running processes and release-age warnings are shown but
-not bound. Clean up delegates unused tools, configuration records and supported
+A failed step does not stop the steps after it; only linked files wait for a
+repository update that failed. After a step runs, Config plans it again: an
+item that is no longer pending was updated, and one that remains was not,
+whatever the command printed. Each run is recorded with every item's outcome,
+the step's command, mise's error with its cause, and the end of its output.
+From the CLI on a terminal mise writes to the terminal itself, so it can ask
+for a password there; that output is not recorded.
+`config update --last` prints the most recent record and `--last --json` the
+whole of it. Running the update again plans only what is left.
+
+Plans bind the declarations and each step's items; a changed item requires a
+new review. A repair binds the actions in its native preview. Notes such as
+apps skipped while they run and release-age warnings are shown but not bound. Clean up delegates unused tools, configuration records and supported
 package cleanup to mise, reports what mise leaves in place, then removes verified
 obsolete Config state. It does
 not delete repositories or retired skill/MCP/hook ledgers. It does not prune
