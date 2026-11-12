@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +25,9 @@ Usage:
   config --status
   config --version
   config path
-  config update [all | config | software | repositories] [--dry-run | --yes]
+  config update [all | config | software | repositories | mise | tools | apps] [item...]
+                [--dry-run | --yes | --json]
+  config update --last [--json]
   config repair [--dry-run | --yes]
   config prune [--dry-run | --yes]
   config bootstrap <repository>
@@ -40,9 +43,12 @@ step has completed. Path prints the managed repository's canonical location.
 Restore starts or resumes native restoration in a clean managed checkout
 acquired by another setup tool. Completed restores are not repeated.
 
-Update previews Config, app, tool and repository updates. Select a scope to
-update it separately. Repair reviews the full native mise bootstrap.
-Without a terminal both commands are preview-only; --yes applies the plan.
+Update previews Config, mise, tool, app and repository updates as steps, each
+listing the items it changes. Select a scope, a step or items by name to update
+them alone. Every step is checked after it runs and recorded with each item's
+outcome, mise's error and its output; --last prints the most recent record.
+Repair reviews the full native mise bootstrap. Without a terminal both commands
+are preview-only; --yes applies the plan. --json prints the plan or the record.
 
 Prune previews unused native tools and packages plus Config-owned local state.
 Without a terminal it is preview-only; --yes applies the plan after rechecking it.`
@@ -237,10 +243,15 @@ func appendWithoutEnvironment(environment []string, name string) []string {
 	return filtered
 }
 
+const updateUsage = "usage: config update [scope] [item...] [--dry-run | --yes | --json], or config update --last [--json]"
+
 type updateOptions struct {
 	scope  config.UpdateScope
+	items  []string
 	dryRun bool
 	yes    bool
+	json   bool
+	last   bool
 }
 
 func parseUpdateOptions(args []string) (updateOptions, error) {
@@ -251,34 +262,34 @@ func parseUpdateOptions(args []string) (updateOptions, error) {
 	if _, resumed := os.LookupEnv(config.UpdateReexecEnv); resumed {
 		options.scope = config.UpdateConfig
 	}
-	scopeSeen := false
+	positional := 0
 	for _, argument := range args {
-		switch argument {
-		case "software", "repositories", "all", "config", "repair":
-			if scopeSeen {
-				return updateOptions{}, errors.New("choose only one update scope")
+		flag := map[string]*bool{"--dry-run": &options.dryRun, "--yes": &options.yes, "--json": &options.json, "--last": &options.last}[argument]
+		switch {
+		case flag != nil:
+			if *flag {
+				return updateOptions{}, errors.New(updateUsage)
 			}
-			scopeSeen = true
-			options.scope = config.UpdateScope(argument)
-			if argument == "config" {
-				options.scope = config.UpdateConfig
-			}
-		case "--dry-run":
-			if options.dryRun {
-				return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
-			}
-			options.dryRun = true
-		case "--yes":
-			if options.yes {
-				return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
-			}
-			options.yes = true
+			*flag = true
+		case strings.HasPrefix(argument, "-"):
+			return updateOptions{}, errors.New(updateUsage)
 		default:
-			return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
+			// The first word may name a scope; every other word names a step
+			// or an item within it.
+			scope, isScope := config.ParseUpdateScope(argument)
+			if positional == 0 && isScope {
+				options.scope = scope
+			} else {
+				options.items = append(options.items, argument)
+			}
+			positional++
 		}
 	}
-	if options.dryRun && options.yes {
-		return updateOptions{}, errors.New("usage: config update [--dry-run | --yes]")
+	if options.yes && (options.dryRun || options.json) || options.last && (options.yes || options.dryRun || positional > 0) {
+		return updateOptions{}, errors.New(updateUsage)
+	}
+	if options.scope == config.UpdateRepair && (len(options.items) > 0 || options.json || options.last) {
+		return updateOptions{}, errors.New("usage: config repair [--dry-run | --yes]")
 	}
 	return options, nil
 }
@@ -288,10 +299,24 @@ func update(paths config.Paths, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if options.last {
+		run, err := config.LastUpdateRun(paths)
+		if err != nil {
+			return err
+		}
+		if options.json {
+			return writeJSON(out, run)
+		}
+		config.WriteUpdateRun(out, run)
+		return nil
+	}
 	updater := config.NewUpdater(paths, out, version)
-	plan, err := updater.Plan(options.scope)
+	plan, err := selectedUpdatePlan(updater, options.scope, options.items)
 	if err != nil {
 		return err
+	}
+	if options.json {
+		return writeJSON(out, plan)
 	}
 	config.WriteUpdatePlan(out, plan)
 	if plan.Blocked {
@@ -300,14 +325,9 @@ func update(paths config.Paths, args []string, out io.Writer) error {
 	if !plan.HasWork() || options.dryRun {
 		return nil
 	}
+	command := strings.TrimSuffix(strings.Join(append([]string{options.scope.Command()}, options.items...), " "), " ")
 	if !options.yes {
 		if !terminal(os.Stdin) || !terminal(os.Stdout) {
-			command := "config update " + string(options.scope)
-			if options.scope == config.UpdateConfig {
-				command = "config update config"
-			} else if options.scope == config.UpdateRepair {
-				command = "config repair"
-			}
 			fmt.Fprintf(out, "\nNo changes made; run %s --yes to apply this plan.\n", command)
 			return nil
 		}
@@ -320,33 +340,51 @@ func update(paths config.Paths, args []string, out io.Writer) error {
 			return nil
 		}
 	}
-	fresh, err := updater.Plan(options.scope)
+	fresh, err := selectedUpdatePlan(updater, options.scope, options.items)
 	if err != nil {
 		return err
 	}
 	if fresh.Fingerprint() != plan.Fingerprint() {
 		return errors.New("update plan changed; review it again")
 	}
-	return updater.Apply(fresh)
+	if err := updater.Apply(fresh); err != nil {
+		return fmt.Errorf("%w\nconfig update --last shows each step, its items and mise's output", err)
+	}
+	return nil
 }
 
+func selectedUpdatePlan(updater config.Updater, scope config.UpdateScope, items []string) (config.UpdatePlan, error) {
+	plan, err := updater.Plan(scope)
+	if err != nil {
+		return config.UpdatePlan{}, err
+	}
+	return plan.Select(items)
+}
+
+func writeJSON(out io.Writer, value any) error {
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
+}
+
+// runConfirmedUpdate applies the plan the terminal interface displayed: a
+// scope, the plan's fingerprint, and the keys of the selected items.
 func runConfirmedUpdate(paths config.Paths, args []string, out io.Writer) error {
-	if len(args) < 1 || len(args) > 2 {
+	if len(args) < 2 {
 		return errors.New("invalid internal update request")
 	}
-	scope := config.UpdateConfig
-	if len(args) == 2 {
-		scope = config.UpdateScope(args[0])
-		if !scope.Valid() {
-			return errors.New("invalid internal update scope")
-		}
+	scope, ok := config.ParseUpdateScope(args[0])
+	if !ok {
+		return errors.New("invalid internal update scope")
 	}
 	updater := config.NewUpdater(paths, out, version)
 	plan, err := updater.Plan(scope)
 	if err != nil {
 		return err
 	}
-	if plan.Fingerprint() != args[len(args)-1] {
+	// A selected item that is no longer pending is a changed plan too.
+	plan, err = plan.Select(args[2:])
+	if err != nil || plan.Fingerprint() != args[1] {
 		return errors.New("update plan changed; return to the review screen and check again")
 	}
 	return updater.Apply(plan)
@@ -475,7 +513,7 @@ func checkArguments(args []string) error {
 			return errors.New("usage: config --apply <plan>")
 		}
 	case "--run-update":
-		if len(args) < 2 || len(args) > 3 {
+		if len(args) < 3 {
 			return errors.New("invalid internal update request")
 		}
 	case "--run-prune":

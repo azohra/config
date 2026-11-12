@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	config "github.com/azohra/config/internal/config"
 )
@@ -109,7 +110,7 @@ func TestUpdateRunsOnlyWhenSelected(t *testing.T) {
 	if running.screen != screenRunning || running.operation.label != "Config update" || cmd == nil {
 		t.Fatalf("screen=%v label=%q command=%v, want running software update", running.screen, running.operation.label, cmd)
 	}
-	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"--run-update", plan.Fingerprint()}) {
+	if running.operation.name != "/tmp/config" || !slices.Equal(running.operation.args, []string{"--run-update", "config", plan.Fingerprint()}) {
 		t.Fatalf("software update command = %q %q", running.operation.name, running.operation.args)
 	}
 }
@@ -377,5 +378,56 @@ func TestScrollStopsWhereTheContentDoes(t *testing.T) {
 	}
 	if m.scroll > bound {
 		t.Fatalf("scroll ran to %d past the bound %d", m.scroll, bound)
+	}
+}
+
+func TestUpdateReviewRunsOnlyTheItemsLeftSelected(t *testing.T) {
+	plan := config.UpdatePlan{Scope: config.UpdateSoftware, Groups: []config.UpdateGroup{
+		{ID: "mise", Name: "mise", State: config.UpdateAvailable, Count: 1, Summary: "mise: 1.0 → 1.1",
+			Items: []config.UpdateItem{{Name: "mise", From: "1.0", To: "1.1", Target: "mise"}}},
+		{ID: "tools", Name: "Tools", State: config.UpdateAvailable, Count: 2, Summary: "Tools: 2 updates",
+			Items: []config.UpdateItem{
+				{Name: "node", From: "24.1.0", To: "24.2.0", Target: "node"},
+				{Name: "example-cli", From: "1.0.0", To: "1.1.0", Target: "npm:example-cli"},
+			},
+			Details: []string{"Newer than the declared versions, not installed: python 3.15"}},
+	}}
+	m := Model{screen: screenUpdate, executable: "/tmp/config", updateScope: config.UpdateSoftware, updatePreview: plan, width: 80, height: 30}
+	next, _ := m.updateUpdate(press(tea.KeyEnter))
+	if whole := next.(Model).operation.args; !slices.Equal(whole, []string{"--run-update", "software", plan.Fingerprint()}) {
+		t.Fatalf("an untouched review did not run the whole plan: %q", whole)
+	}
+
+	// Leave mise and example-cli out.
+	next, _ = m.updateUpdate(press(' '))
+	next, _ = next.(Model).updateUpdate(press(tea.KeyDown))
+	next, _ = next.(Model).updateUpdate(press(tea.KeyDown))
+	next, _ = next.(Model).updateUpdate(press(' '))
+	chosen := next.(Model)
+	view := ansi.Strip(chosen.renderUpdate())
+	for _, want := range []string{"○ mise: 1.0 → 1.1", "● node 24.1.0 → 24.2.0", "○ example-cli 1.0.0 → 1.1.0", "not installed: python 3.15", "1 selected item", "space select"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("review is missing %q:\n%s", want, view)
+		}
+	}
+	selected, err := plan.Select([]string{"tools:node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, command := chosen.updateUpdate(press(tea.KeyEnter))
+	if got := next.(Model).operation.args; command == nil || !slices.Equal(got, []string{"--run-update", "software", selected.Fingerprint(), "tools:node"}) {
+		t.Fatalf("selection ran %q", got)
+	}
+
+	// With every item left out there is nothing to run.
+	next, _ = chosen.updateUpdate(press('a'))
+	next, _ = next.(Model).updateUpdate(press('a'))
+	next, _ = next.(Model).updateUpdate(press('a'))
+	none := next.(Model)
+	if after, command := none.updateUpdate(press(tea.KeyEnter)); command != nil || after.(Model).screen != screenUpdate {
+		t.Fatal("an empty selection started an update")
+	}
+	if view := ansi.Strip(none.renderUpdate()); !strings.Contains(view, "Nothing selected") {
+		t.Fatalf("an empty selection still offers to run:\n%s", view)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
@@ -184,60 +185,6 @@ func nativeStatusFindings(value any, section string) (problems, checkouts []stri
 	return problems, checkouts
 }
 
-type nativeOperation struct {
-	Name string
-	Args []string
-}
-
-func nativeOperations(scope UpdateScope) []nativeOperation {
-	switch scope {
-	case UpdateSoftware:
-		return []nativeOperation{
-			{"Tools", []string{"upgrade", "--global", "--no-prune", "--yes"}},
-			{"Apps and packages", []string{"bootstrap", "packages", "upgrade", "--yes"}},
-		}
-	case UpdateRepositories:
-		return []nativeOperation{
-			{"Repositories", []string{"bootstrap", "repos", "update", "--skip-dirty", "--yes"}},
-			{"Skills, MCP and dotfiles", []string{"dotfiles", "apply", "--yes"}},
-		}
-	case UpdateRepair:
-		return []nativeOperation{{"Machine setup", []string{"bootstrap", "--skip-dirty", "--yes"}}}
-	}
-	return nil
-}
-
-func (m NativeMise) plan(ctx context.Context, scope UpdateScope) []UpdateGroup {
-	if err := m.check(ctx); err != nil {
-		if scope == UpdateRepair {
-			state, detail := inspectMiseConfigBinding(m.Paths)
-			if state == miseConfigBindingInvalid || state == miseConfigBindingConflict {
-				return []UpdateGroup{{Name: "Machine setup", State: UpdateUnavailable, Summary: nativeText(detail)}}
-			}
-			return []UpdateGroup{{Name: "Machine setup", State: UpdatePending, Summary: "Machine setup: install verified mise, then apply the declared setup", Details: []string{nativeText(err.Error()), "Repository edits are skipped; declared hooks and tasks will run"}}}
-		}
-		return []UpdateGroup{{Name: scope.Label(), State: UpdateUnavailable, Summary: nativeText(err.Error()), Details: []string{"Use Repair machine to prepare native mise setup"}}}
-	}
-	var groups []UpdateGroup
-	for _, operation := range nativeOperations(scope) {
-		args := append(slices.Clone(operation.Args), "--dry-run")
-		result := runContext(ctx, m.Probe, "mise", args...)
-		group := UpdateGroup{Name: operation.Name, State: UpdatePending, Summary: operation.Name}
-		preview, changes := nativePreview(result)
-		if result.Err != nil {
-			group.State, group.Summary = UpdateUnavailable, operation.Name+": "+nativeText(result.Failure().Error())
-		} else if changes == "" {
-			group.State, group.Summary, group.Details = UpdateCurrent, operation.Name+": no changes planned", nativeWarnings(preview)
-		} else {
-			summary := summarizeNative(changes)
-			group.Details = append(summary.Lines, nativeWarnings(preview)...)
-			group.Raw, group.Changes, group.Elevated = strings.Split(preview, "\n"), changes, summary.Elevated
-		}
-		groups = append(groups, group)
-	}
-	return groups
-}
-
 // Bootstrap installs native resources before restoring Config snapshots, then
 // applies defaults that can depend on restored applications. Native hooks run
 // without Config's checkout lock, including hooks that invoke config restore.
@@ -245,92 +192,163 @@ func (m NativeMise) Bootstrap(restore func() error) error {
 	if err := m.prepare(); err != nil {
 		return err
 	}
-	if err := m.command("bootstrap", "--skip-dirty", "--skip", "macos-defaults,task,final-hook", "--yes"); err != nil {
+	if _, _, err := m.command("bootstrap", "--skip-dirty", "--skip", "macos-defaults,task,final-hook", "--yes"); err != nil {
 		return fmt.Errorf("native setup before restoration: %w", err)
 	}
 	if err := restore(); err != nil {
 		return err
 	}
-	if err := m.command("bootstrap", "--only", "macos-defaults,task,final-hook", "--yes"); err != nil {
+	if _, _, err := m.command("bootstrap", "--only", "macos-defaults,task,final-hook", "--yes"); err != nil {
 		return fmt.Errorf("native setup after restoration: %w", err)
 	}
 	return nil
 }
 
-// Apply runs outside Config's checkout lock: a native pre-defaults hook may
-// call config restore, which takes that lock for its own retained resources.
-func (m NativeMise) Apply(scope UpdateScope) error {
-	if scope == UpdateRepair {
-		if err := m.prepare(); err != nil {
-			return err
-		}
-	} else if err := m.check(context.Background()); err != nil {
-		return err
+// run executes one planned step and reports what it changed. It runs outside
+// Config's checkout lock: a native pre-defaults hook may call config restore,
+// which takes that lock for its own retained resources. Planning the step
+// again afterwards separates the items that changed from the ones left behind,
+// whatever mise printed along the way.
+func (m NativeMise) run(group UpdateGroup, scope UpdateScope) StepResult {
+	step := nativeStepFor(group.ID)
+	log := Logger{Out: m.Live.Stdout}
+	result := StepResult{ID: group.ID, Name: group.Name, Status: StepDone, Command: "mise " + strings.Join(step.command(group), " ")}
+	started := time.Now()
+	log.Section(group.Name)
+	var err error
+	if group.ID == setupStepID {
+		err = m.prepare()
+	} else {
+		err = m.check(context.Background())
 	}
-	var failures []error
-	for _, operation := range nativeOperations(scope) {
-		Logger{Out: m.Live.Stdout}.Section(operation.Name)
-		if err := m.command(operation.Args...); err != nil {
-			if strings.Contains(err.Error(), nativeNeedsPassword) {
-				// mise asks for the password itself when it runs on a terminal.
-				err = fmt.Errorf("%w; run `%s` in a terminal", err, scope.command())
+	captured := true
+	if err == nil {
+		result.Output, captured, err = m.command(step.command(group)...)
+	}
+	result.Duration = time.Since(started).Round(time.Millisecond)
+	if err != nil {
+		result.Status, result.Error = StepFailed, nativeText(err.Error())
+		if !captured {
+			result.Error += "; mise's output was shown on the terminal and is not recorded"
+		}
+		if strings.Contains(result.Error, nativeNeedsPassword) {
+			// mise asks for the password itself when it runs on a terminal.
+			result.Error += "; run `" + scope.Command() + " --yes` in a terminal"
+		}
+	}
+	if len(group.Items) > 0 {
+		remaining := map[string]bool{}
+		fresh := step.plan(m, context.Background())
+		for _, item := range fresh.Items {
+			remaining[fresh.Key(item)] = true
+		}
+		for _, item := range group.Items {
+			outcome := ItemResult{UpdateItem: item, Status: ItemUpdated}
+			switch {
+			case fresh.State == UpdateUnavailable:
+				outcome.Status = ItemUnknown
+			case remaining[group.Key(item)] && err != nil:
+				outcome.Status = ItemFailed
+			case remaining[group.Key(item)]:
+				outcome.Status = ItemUnchanged
 			}
-			failures = append(failures, fmt.Errorf("%s: %w", operation.Name, err))
-			if scope == UpdateRepositories {
-				break
+			result.Items = append(result.Items, outcome)
+			switch outcome.Status {
+			case ItemUpdated:
+				log.OK(item.Label())
+			case ItemFailed:
+				log.Error(item.Label() + ": not updated")
+			default:
+				log.Warn(item.Label() + ": " + string(outcome.Status))
 			}
 		}
 	}
-	return errors.Join(failures...)
+	if err != nil {
+		log.Error(group.Name + ": " + result.Error)
+	} else if len(group.Items) == 0 {
+		log.OK(group.Name + " finished")
+	}
+	return result
 }
 
-// command runs one native step. A failure reports mise's own error instead of
-// an exit status. A terminal is passed to mise untouched, so it can still ask
-// for a password there.
-func (m NativeMise) command(args ...string) error {
+// command runs one native step and returns the end of its output. A failure
+// reports mise's own errors instead of an exit status. A terminal is passed to
+// mise untouched, so it can still ask for a password there; that output is the
+// person's to read, and captured is false.
+func (m NativeMise) command(args ...string) (output string, captured bool, err error) {
 	live := m.Live
-	var failure nativeFailure
+	var capture nativeCapture
 	if file, ok := live.Stderr.(*os.File); !ok || !term.IsTerminal(file.Fd()) {
-		stderr := io.MultiWriter(live.Stderr, &failure)
+		captured = true
+		stderr := io.MultiWriter(live.Stderr, &capture)
 		if live.Stdout == live.Stderr {
 			live.Stdout = stderr
+		} else {
+			live.Stdout = io.MultiWriter(live.Stdout, &capture)
 		}
 		live.Stderr = stderr
 	}
-	err := live.Command("mise", args...)
-	if err != nil && failure.reason != "" {
-		return errors.New(failure.reason)
+	err = live.Command("mise", args...)
+	if err != nil && len(capture.errors) > 0 {
+		err = errors.New(strings.Join(capture.errors, "; "))
 	}
-	return err
+	return capture.tail(), captured, err
 }
 
 const nativeNeedsPassword = "an installer needs your administrator password, and mise had no terminal to ask for it"
 
-// nativeFailure keeps the first error mise reports in its output.
-type nativeFailure struct {
+// maxNativeOutput bounds the output kept for a step's record.
+const maxNativeOutput = 64 << 10
+
+// nativeCapture keeps the errors mise reports and the end of its output.
+type nativeCapture struct {
 	partial []byte
-	reason  string
+	output  []byte
+	errors  []string
 }
 
-func (f *nativeFailure) Write(data []byte) (int, error) {
-	f.partial = append(f.partial, data...)
+func (c *nativeCapture) Write(data []byte) (int, error) {
+	c.output = append(c.output, data...)
+	if len(c.output) > 2*maxNativeOutput {
+		c.output = append(c.output[:0], c.output[len(c.output)-maxNativeOutput:]...)
+	}
+	c.partial = append(c.partial, data...)
 	for {
-		end := bytes.IndexByte(f.partial, '\n')
+		end := bytes.IndexByte(c.partial, '\n')
 		if end < 0 {
+			// Progress redrawn without a newline is not an error line.
+			if len(c.partial) > maxNativeOutput {
+				c.partial = c.partial[:0]
+			}
 			return len(data), nil
 		}
-		line := nativeText(string(f.partial[:end]))
-		f.partial = f.partial[end+1:]
-		message, found := strings.CutPrefix(line, "mise ERROR")
-		message = strings.TrimSpace(message)
-		if !found || f.reason != "" || strings.HasPrefix(message, "Version:") || strings.HasPrefix(message, "Run with --verbose") {
+		line := nativeText(string(c.partial[:end]))
+		c.partial = c.partial[end+1:]
+		// mise names the underlying cause on the line after its error.
+		if cause, found := strings.CutPrefix(line, "caused by:"); found && len(c.errors) > 0 && !strings.Contains(c.errors[len(c.errors)-1], cause) {
+			c.errors[len(c.errors)-1] += ":" + cause
 			continue
 		}
-		f.reason = message
+		message, found := strings.CutPrefix(line, "mise ERROR")
+		message = strings.TrimSpace(message)
+		if !found || message == "" || strings.HasPrefix(message, "Version:") || strings.HasPrefix(message, "Run with --verbose") {
+			continue
+		}
 		if strings.Contains(message, "requires a password but no TTY is available") {
-			f.reason = nativeNeedsPassword
+			message = nativeNeedsPassword
+		}
+		if !slices.Contains(c.errors, message) {
+			c.errors = append(c.errors, message)
 		}
 	}
+}
+
+func (c *nativeCapture) tail() string {
+	output := c.output
+	if len(output) > maxNativeOutput {
+		output = output[len(output)-maxNativeOutput:]
+	}
+	return nativeText(string(output))
 }
 
 func (m NativeMise) configurationDigest(ctx context.Context) (string, error) {
@@ -419,62 +437,23 @@ func (m NativeMise) configurationDigest(ctx context.Context) (string, error) {
 func nativePreview(result Result) (preview, changes string) {
 	preview = nativeText(result.Stdout + "\n" + result.Stderr)
 	var lines []string
-	outOfRange := false
 	for _, line := range strings.Split(preview, "\n") {
-		line = strings.TrimSpace(line)
-		// mise upgrade lists versions outside the declared ranges as a note
-		// over several lines; it does not install them.
-		if strings.HasSuffix(line, nativeOutOfRangeHeading) {
-			outOfRange = true
-			continue
-		}
-		if outOfRange && (strings.Contains(line, " → ") || strings.HasPrefix(line, "… and ") || strings.HasPrefix(line, "Run `mise outdated --bump`")) {
-			continue
-		}
-		outOfRange = false
-		if line != "" && !nativeNote(line) {
+		if line = strings.TrimSpace(line); line != "" && !nativeNote(line) {
 			lines = append(lines, line)
 		}
 	}
 	return preview, strings.Join(lines, "\n")
 }
 
-const nativeOutOfRangeHeading = "Newer versions are available but do not match the configured version ranges:"
-
-// nativeWarnings keeps mise's warnings and its list of versions newer than the
-// declared ranges, the notes worth reading in a preview.
-func nativeWarnings(preview string) []string {
+// nativeWarnings keeps the warnings mise prints, the notes worth reading.
+func nativeWarnings(output string) []string {
 	var warnings []string
-	var outOfRange nativeList
-	more, inRange := 0, false
-	for line := range strings.SplitSeq(preview, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasSuffix(line, nativeOutOfRangeHeading):
-			inRange = true
-		case inRange && strings.HasPrefix(line, "Run `mise outdated --bump`"):
-			inRange = false
-		case inRange && strings.Contains(line, " → "):
-			words := strings.Fields(line)
-			if len(words) >= 4 {
-				outOfRange.add(nativeToolName(words[0]) + " " + words[3])
-			}
-		case inRange && strings.HasPrefix(line, "… and "):
-			fmt.Sscanf(strings.TrimPrefix(line, "… and "), "%d", &more)
-		default:
-			warning, ok := strings.CutPrefix(line, "mise WARN")
-			warning = strings.TrimSpace(warning)
-			if ok && !strings.Contains(warning, " already ") && !strings.HasPrefix(warning, "Use --force") {
-				warnings = append(warnings, warning)
-			}
+	for line := range strings.SplitSeq(output, "\n") {
+		warning, ok := strings.CutPrefix(strings.TrimSpace(line), "mise WARN")
+		warning = strings.TrimSpace(warning)
+		if ok && !strings.Contains(warning, " already ") && !strings.HasPrefix(warning, "Use --force") {
+			warnings = append(warnings, warning)
 		}
-	}
-	if len(outOfRange.items) > 0 {
-		names := strings.Join(outOfRange.items, ", ")
-		if more > 0 {
-			names += fmt.Sprintf(" and %d more", more)
-		}
-		warnings = append([]string{"Newer than the declared versions, not installed: " + names}, warnings...)
 	}
 	return warnings
 }

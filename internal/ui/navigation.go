@@ -135,6 +135,7 @@ func (m Model) beginUpdate(selected ...config.UpdateScope) (tea.Model, tea.Cmd) 
 	m.showCommands, m.authorizationError = false, nil
 	m.screen = screenUpdate
 	m.updatePreview = config.UpdatePlan{}
+	m.updateCursor, m.updateSkipped = 0, nil
 	m.updateError = nil
 	m.checkingUpdate = true
 	if m.overviewReady && m.overviewError == nil && m.updateOverview.Scope == scope {
@@ -183,13 +184,21 @@ func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.updateError = nil
 		return m, tea.Batch(m.startUpdatePlanning(true), m.spinner.Tick)
 	case "up", "k":
-		m.scroll = max(0, m.scroll-1)
+		m.moveUpdateCursor(-1)
 	case "down", "j":
-		m.scroll = min(m.scroll+1, m.scrollBound())
+		m.moveUpdateCursor(1)
 	case "pgup":
 		m.scroll = max(0, m.scroll-10)
 	case "pgdown":
 		m.scroll = min(m.scroll+10, m.scrollBound())
+	case "space", " ":
+		if keys := m.updateKeys(); !m.showCommands && len(keys) > 1 && m.updateCursor < len(keys) {
+			m.toggleUpdateItems(keys[m.updateCursor : m.updateCursor+1])
+		}
+	case "a":
+		if keys := m.updateKeys(); !m.showCommands && len(keys) > 1 {
+			m.toggleUpdateItems(keys)
+		}
 	case "d":
 		if m.updateScope != config.UpdateConfig && !m.checkingUpdate {
 			m.showCommands = !m.showCommands
@@ -203,16 +212,125 @@ func (m Model) updateUpdate(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenDashboard
 			return m, nil
 		}
+		plan, keys, err := m.selectedUpdate()
+		if err != nil || !plan.HasWork() {
+			return m, nil
+		}
+		label := m.updateScope.Label()
 		if m.updateScope == config.UpdateConfig {
-			return m.startOperation("Config update", m.executable, "--run-update", m.updatePreview.Fingerprint())
+			label = "Config update"
 		}
-		args := []string{"--run-update", string(m.updateScope), m.updatePreview.Fingerprint()}
-		if m.updatePreview.Elevated() {
-			return m.authorizeThen(m.updateScope.Label(), args...)
+		args := append([]string{"--run-update", m.updateScope.String(), plan.Fingerprint()}, keys...)
+		if plan.Elevated() {
+			return m.authorizeThen(label, args...)
 		}
-		return m.startOperation(m.updateScope.Label(), m.executable, args...)
+		return m.startOperation(label, m.executable, args...)
 	}
 	return m, nil
+}
+
+// updateRow is one line of an update review. A row with a key is an item the
+// person can leave out of the run; a note is a step's remark.
+type updateRow struct {
+	text string
+	key  string
+	note bool
+}
+
+func (m Model) updateRows() []updateRow {
+	var rows []updateRow
+	for _, group := range m.updatePreview.Groups {
+		summary := updateRow{text: group.Summary}
+		// A step that is its own single item is selected on its summary line.
+		own := len(group.Items) == 1 && group.Items[0].Name == group.Name
+		if own {
+			summary.key = group.Key(group.Items[0])
+		}
+		rows = append(rows, summary)
+		for _, item := range group.Items {
+			if own {
+				break
+			}
+			rows = append(rows, updateRow{text: "  " + item.Label(), key: group.Key(item)})
+		}
+		for _, detail := range group.Details {
+			rows = append(rows, updateRow{text: "  " + detail, note: true})
+		}
+	}
+	return rows
+}
+
+func (m Model) updateKeys() []string {
+	var keys []string
+	for _, row := range m.updateRows() {
+		if row.key != "" {
+			keys = append(keys, row.key)
+		}
+	}
+	return keys
+}
+
+// moveUpdateCursor moves between items and keeps the focused one on screen.
+// A review with nothing to select scrolls instead.
+func (m *Model) moveUpdateCursor(delta int) {
+	keys := m.updateKeys()
+	if m.showCommands || len(keys) == 0 {
+		m.scroll = min(max(0, m.scroll+delta), m.scrollBound())
+		return
+	}
+	m.updateCursor = min(max(0, m.updateCursor+delta), len(keys)-1)
+	line := 1 // the scope heading
+	for _, row := range m.updateRows() {
+		if row.key == keys[m.updateCursor] {
+			break
+		}
+		line++
+	}
+	available := max(5, m.height-updateChrome)
+	m.scroll = min(max(m.scroll, line-available+1), line)
+	if m.updateCursor == 0 {
+		m.scroll = 0
+	}
+}
+
+// toggleUpdateItems leaves the items out when any of them is selected, and
+// selects them all otherwise.
+func (m *Model) toggleUpdateItems(keys []string) {
+	if m.updateSkipped == nil {
+		m.updateSkipped = make(map[string]bool)
+	}
+	skip := slices.ContainsFunc(keys, func(key string) bool { return !m.updateSkipped[key] })
+	for _, key := range keys {
+		m.updateSkipped[key] = skip
+	}
+}
+
+// selectedUpdate is the plan the person confirmed and the keys that select it.
+// Leaving nothing out runs every step whole.
+func (m Model) selectedUpdate() (config.UpdatePlan, []string, error) {
+	var keys []string
+	skipped := false
+	for _, key := range m.updateKeys() {
+		if m.updateSkipped[key] {
+			skipped = true
+		} else {
+			keys = append(keys, key)
+		}
+	}
+	if !skipped {
+		return m.updatePreview, nil, nil
+	}
+	if len(keys) == 0 {
+		return config.UpdatePlan{}, nil, nil
+	}
+	// A step with work but no items of its own runs alongside any selection.
+	for _, group := range m.updatePreview.Groups {
+		if len(group.Items) == 0 && (group.State == config.UpdateAvailable || group.State == config.UpdatePending) {
+			keys = append(keys, group.ID)
+		}
+	}
+	plan, err := m.updatePreview.Select(keys)
+	return plan, keys, err
 }
 
 func (m Model) updateResult(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {

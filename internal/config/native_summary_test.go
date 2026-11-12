@@ -85,46 +85,30 @@ exit 1
 `)
 	var output strings.Builder
 	native.Live.Stdout, native.Live.Stderr = &output, &output
-	err := native.Apply(UpdateSoftware)
-	if err == nil || !strings.Contains(err.Error(), "Tools: an installer needs your administrator password, and mise had no terminal to ask for it; run `config update software --yes` in a terminal") {
-		t.Fatalf("native failure = %v", err)
+	step := native.run(UpdateGroup{ID: appsStepID, Name: "Apps and packages"}, UpdateSoftware)
+	if step.Status != StepFailed || step.Error != "an installer needs your administrator password, and mise had no terminal to ask for it; run `config update software --yes` in a terminal" {
+		t.Fatalf("native failure = %+v", step)
 	}
-	if !strings.Contains(output.String(), "sudo installer -pkg") {
-		t.Fatalf("provider output was not kept:\n%s", output.String())
+	if !strings.Contains(output.String(), "sudo installer -pkg") || !strings.Contains(step.Output, "sudo installer -pkg") {
+		t.Fatalf("provider output was not kept:\n%s\n%s", output.String(), step.Output)
 	}
 
 	writeUpdateExecutable(t, native.Paths.InHome(".local", "bin", "mise"), "#!/bin/sh\nexit 3\n")
-	if err := native.Apply(UpdateRepositories); err == nil || !strings.Contains(err.Error(), "exit status 3") {
-		t.Fatalf("a failure without a mise error lost its status: %v", err)
+	if step := native.run(UpdateGroup{ID: repositoriesStepID, Name: "Repositories"}, UpdateRepositories); !strings.Contains(step.Error, "exit status 3") {
+		t.Fatalf("a failure without a mise error lost its status: %+v", step)
 	}
 }
 
-func TestVersionsOutsideTheDeclaredRangesAreANoteNotWork(t *testing.T) {
-	preview := "mise Newer versions are available but do not match the configured version ranges:\n" +
-		"  github:example/agent 0.1.2 → 0.1.3 (~/.config/mise/conf.d/tools.toml)\n" +
-		"  node 24.22.2 → 26.13.0 (~/.config/mise/conf.d/tools.toml)\n" +
-		"  … and 4 more\n" +
-		"Run `mise outdated --bump` to view all, or `mise upgrade --bump` to update the configuration and upgrade.\n" +
-		"mise WARN  Plugin gh-extension already installed\n" +
+func TestWarningsAreNotesNotWork(t *testing.T) {
+	preview := "mise WARN  Plugin gh-extension already installed\n" +
 		"mise WARN  Use --force to install anyway\n" +
 		"mise WARN  newer example release 2.1 ignored by minimum_release_age (24h)\n"
 	shown, changes := nativePreview(Result{Stderr: preview})
 	if changes != "" {
 		t.Fatalf("a note was planned as work: %q", changes)
 	}
-	want := []string{
-		"Newer than the declared versions, not installed: agent 0.1.3, node 26.13.0 and 4 more",
-		"newer example release 2.1 ignored by minimum_release_age (24h)",
-	}
-	if got := nativeWarnings(shown); !slices.Equal(got, want) {
+	if got := nativeWarnings(shown); !slices.Equal(got, []string{"newer example release 2.1 ignored by minimum_release_age (24h)"}) {
 		t.Fatalf("notes = %q", got)
-	}
-}
-
-func TestAnUnexpectedLineEndsTheVersionNote(t *testing.T) {
-	_, changes := nativePreview(Result{Stderr: "mise Newer versions are available but do not match the configured version ranges:\n  node 24 → 26 (x)\nWould install uv@0.13.6\n"})
-	if changes != "Would install uv@0.13.6" {
-		t.Fatalf("work after the note was hidden: %q", changes)
 	}
 }
 

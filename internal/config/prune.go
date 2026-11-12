@@ -29,6 +29,12 @@ type PrunePlan struct {
 	configuration string
 }
 
+// nativeOperation is one native cleanup command.
+type nativeOperation struct {
+	Name string
+	Args []string
+}
+
 // nativePrune binds an operation to the changes in its preview. The preview
 // and its summary are shown, not bound.
 type nativePrune struct {

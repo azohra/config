@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -23,6 +24,7 @@ type Updater struct {
 	Config           string
 	ReleaseCache     string
 	ReleaseState     string
+	ReleaseData      string
 	ReleaseMiseProbe Runner
 
 	Installed   Runner
@@ -56,6 +58,7 @@ func NewUpdater(paths Paths, out io.Writer, version string) Updater {
 		Config:       command,
 		ReleaseCache: filepath.Join(releaseRoot, "cache"),
 		ReleaseState: filepath.Join(releaseRoot, "state"),
+		ReleaseData:  filepath.Join(releaseRoot, "data"),
 		ReleaseMiseProbe: OSRunner{
 			Dir:         paths.Home,
 			Environment: releaseEnvironment,
@@ -82,8 +85,9 @@ func releaseMisePath(paths Paths) string {
 	return filepath.Join(configReleaseRoot(paths), "mise")
 }
 
-// Apply executes the immutable plan the caller displayed. Config release
-// discovery is not repeated; a newer release is acquired by its exact version.
+// Apply executes the plan the caller displayed and records what each step
+// did. Config release discovery is not repeated; a newer release is acquired
+// by its exact version.
 func (u Updater) Apply(plan UpdatePlan) error {
 	if err := plan.validate(u.Version); err != nil {
 		return err
@@ -91,11 +95,27 @@ func (u Updater) Apply(plan UpdatePlan) error {
 	if !plan.HasWork() {
 		return nil
 	}
-	if plan.Scope != UpdateConfig && plan.Scope != UpdateAll {
-		return u.applyNative(plan)
+	run := beginUpdateRun(u.Paths, plan.Scope)
+	err := u.apply(plan, &run)
+	if err != nil && !run.Failed() {
+		// The update stopped before a step could fail.
+		run.Error = err.Error()
 	}
-	if u.Version == "dev" {
-		return u.applyNative(plan)
+	u.record(&run)
+	return err
+}
+
+func (u Updater) record(run *UpdateRun) {
+	run.FinishedAt = time.Now()
+	if err := run.save(u.Paths); err != nil {
+		u.Log.Warn("This update was not recorded: " + err.Error())
+	}
+}
+
+func (u Updater) apply(plan UpdatePlan, run *UpdateRun) error {
+	release := plan.Groups[0]
+	if !plan.Scope.includesConfig() || u.Version == "dev" || release.State == UpdateSkipped {
+		return u.applyNative(plan, run)
 	}
 	if !stableConfigVersion(u.Version) {
 		return fmt.Errorf("Config build version %q cannot update itself", u.Version)
@@ -110,7 +130,7 @@ func (u Updater) Apply(plan UpdatePlan) error {
 		if err := os.Unsetenv(UpdateReexecEnv); err != nil {
 			return err
 		}
-		return u.applyNative(plan)
+		return u.applyNative(plan, run)
 	}
 	u.Log.Section("Config")
 	resolvedVersion := plan.ResolvedVersion
@@ -119,50 +139,75 @@ func (u Updater) Apply(plan UpdatePlan) error {
 	}
 	if resolvedVersion == u.Version && u.requireCanonicalExecutable() == nil {
 		u.Log.OK("Config " + u.Version + " is current")
-		return u.applyNative(plan)
+		return u.applyNative(plan, run)
 	}
-	release, err := LockCheckout(u.Paths)
+	started := time.Now()
+	step := StepResult{ID: configStepID, Name: "Config", Status: StepDone}
+	for _, item := range release.Items {
+		step.Items = append(step.Items, ItemResult{UpdateItem: item, Status: ItemUpdated})
+	}
+	installedVersion, unlock, err := u.acquireRelease(resolvedVersion)
+	step.Duration = time.Since(started).Round(time.Millisecond)
 	if err != nil {
-		return err
-	}
-	defer func() {
-		if release != nil {
-			release()
+		step.Status, step.Error = StepFailed, err.Error()
+		for index := range step.Items {
+			step.Items[index].Status = ItemFailed
 		}
-	}()
-	if err := u.prepareReleaseMise(); err != nil {
+		run.Steps = append(run.Steps, step)
 		return err
 	}
-	if err := u.installRelease(resolvedVersion); err != nil {
-		return fmt.Errorf("Config: %w", err)
-	}
-	installedVersion, err := u.installedVersion()
-	if err != nil {
-		return fmt.Errorf("Config: %w", err)
-	}
-	if installedVersion != resolvedVersion {
-		return fmt.Errorf("installed Config is %s, want resolved release %s", installedVersion, resolvedVersion)
-	}
+	run.Steps = append(run.Steps, step)
 	u.Log.OK("Config " + installedVersion + " installed")
 	u.Log.Version(installedVersion)
-	overrides := []string{UpdateReexecEnv + "=" + installedVersion}
+	// The installed release continues this record after the handoff.
+	u.record(run)
+	overrides := []string{UpdateReexecEnv + "=" + installedVersion, UpdateRunEnv + "=" + run.name()}
 	if u.OperationEvents {
 		overrides = append(overrides, OperationEventsEnv+"=1")
 	}
 	environment := childEnvironment(overrides, nil)
-	release()
-	release = nil
-	args := []string{u.Config, "update"}
-	if plan.Scope == UpdateAll {
-		args = append(args, "all")
-	} else {
-		args = append(args, "config")
+	unlock()
+	scope := UpdateConfig
+	if plan.awaitsHandoff() {
+		scope = UpdateAll
 	}
-	args = append(args, "--yes")
+	args := []string{u.Config, "update", scope.String(), "--yes"}
 	if err := u.Reexec(u.Config, args, environment); err != nil {
 		return fmt.Errorf("re-exec Config %s: %w", installedVersion, err)
 	}
 	return nil
+}
+
+// acquireRelease installs the resolved release at the canonical command under
+// the checkout lock, and returns the lock's release for the handoff.
+func (u Updater) acquireRelease(version string) (string, func(), error) {
+	unlock, err := LockCheckout(u.Paths)
+	if err != nil {
+		return "", nil, err
+	}
+	installed, err := u.installAndVerify(version)
+	if err != nil {
+		unlock()
+		return "", nil, err
+	}
+	return installed, unlock, nil
+}
+
+func (u Updater) installAndVerify(version string) (string, error) {
+	if err := u.prepareReleaseMise(); err != nil {
+		return "", err
+	}
+	if err := u.installRelease(version); err != nil {
+		return "", fmt.Errorf("Config: %w", err)
+	}
+	installed, err := u.installedVersion()
+	if err != nil {
+		return "", fmt.Errorf("Config: %w", err)
+	}
+	if installed != version {
+		return "", fmt.Errorf("installed Config is %s, want resolved release %s", installed, version)
+	}
+	return installed, nil
 }
 
 func (u Updater) nativeMise() NativeMise {
@@ -172,9 +217,11 @@ func (u Updater) nativeMise() NativeMise {
 	return NewNativeMise(u.Paths, u.Log.Out)
 }
 
-func (u Updater) applyNative(plan UpdatePlan) error {
-	scope := plan.Scope
-	if scope == UpdateConfig {
+// applyNative runs each planned native step and records it. A failed step does
+// not stop the ones after it, except that linked files wait for a repository
+// update that failed: their sources may be stale.
+func (u Updater) applyNative(plan UpdatePlan, run *UpdateRun) error {
+	if plan.Scope == UpdateConfig {
 		return nil
 	}
 	_, err := LoadMachine(u.Paths)
@@ -192,10 +239,25 @@ func (u Updater) applyNative(plan UpdatePlan) error {
 	if digest != plan.Configuration {
 		return errors.New("machine configuration changed; review the update plan again")
 	}
-	if scope != UpdateAll {
-		return native.Apply(scope)
+	var failures []error
+	repositoriesFailed := false
+	for _, group := range plan.Groups {
+		if nativeStepFor(group.ID).id == "" || group.State != UpdateAvailable && group.State != UpdatePending {
+			continue
+		}
+		if group.ID == filesStepID && repositoriesFailed {
+			run.Steps = append(run.Steps, StepResult{ID: group.ID, Name: group.Name, Status: StepSkipped, Error: "the repository update failed"})
+			u.Log.Warn(group.Name + ": skipped because the repository update failed")
+			continue
+		}
+		step := native.run(group, plan.Scope)
+		run.Steps = append(run.Steps, step)
+		if step.Status == StepFailed {
+			failures = append(failures, fmt.Errorf("%s: %s", step.Name, step.Error))
+			repositoriesFailed = repositoriesFailed || group.ID == repositoriesStepID
+		}
 	}
-	return errors.Join(native.Apply(UpdateSoftware), native.Apply(UpdateRepositories))
+	return errors.Join(failures...)
 }
 
 func (u Updater) prepareReleaseMise() error {
@@ -224,8 +286,7 @@ func (u Updater) installedVersion() (string, error) {
 }
 
 func (u Updater) resolveReleaseContext(ctx context.Context) (string, error) {
-	if u.ReleaseCache == "" || !filepath.IsAbs(u.ReleaseCache) ||
-		u.ReleaseState == "" || !filepath.IsAbs(u.ReleaseState) {
+	if !filepath.IsAbs(u.ReleaseCache) || !filepath.IsAbs(u.ReleaseState) || !filepath.IsAbs(u.ReleaseData) {
 		return "", errors.New("Config release cache paths are invalid")
 	}
 	if _, err := u.releaseOutputContext(ctx, "mise", "--no-config", "cache", "clear"); err != nil {
@@ -282,6 +343,8 @@ func (u Updater) installRelease(version string) error {
 	if err := releaseRunner.Command(executable, "install"); err != nil {
 		return fmt.Errorf("install Config release %s command: %w", version, err)
 	}
+	// The canonical command is installed; the acquired copy has done its work.
+	_ = os.RemoveAll(u.ReleaseData)
 	return nil
 }
 
@@ -312,6 +375,9 @@ func (u Updater) releaseRunner() LiveRunner {
 		"MISE_MINIMUM_RELEASE_AGE=0s",
 		"MISE_CACHE_DIR="+u.ReleaseCache,
 		"MISE_STATE_DIR="+u.ReleaseState,
+		// The acquired release stays out of the machine's own mise installs
+		// and shims.
+		"MISE_DATA_DIR="+u.ReleaseData,
 		"MISE_USE_VERSIONS_HOST=0",
 	)
 	return runner
