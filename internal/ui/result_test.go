@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +87,66 @@ func TestUnreadableOperationResultIsIgnored(t *testing.T) {
 	}
 	if got := loadOperationResult(paths); got.label != "" {
 		t.Fatalf("unsupported result loaded as %+v", got)
+	}
+}
+
+func writeUpdateRun(t *testing.T, paths config.Paths, run config.UpdateRun) {
+	t.Helper()
+	data, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(paths.StateDir, "updates")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	name := run.StartedAt.UTC().Format("20060102T150405.000Z.json")
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLastResultIsALaterCommandLineUpdate(t *testing.T) {
+	paths := config.Paths{StateDir: filepath.Join(t.TempDir(), "state")}
+	saved := time.Date(2026, 11, 11, 20, 30, 0, 0, time.UTC)
+	if err := saveOperationResult(paths, operationResult{label: "Save", log: newOperationLog(), finishedAt: saved}); err != nil {
+		t.Fatal(err)
+	}
+	run := config.UpdateRun{
+		Schema: 1, Scope: "tools", StartedAt: saved.Add(-2 * time.Hour), FinishedAt: saved.Add(-time.Hour),
+		Steps: []config.StepResult{{ID: "tools", Name: "Tools", Status: config.StepFailed, Error: "registry refused", Items: []config.ItemResult{
+			{Name: "node", From: "24.22.2", To: "24.22.3", Status: config.ItemUpdated},
+			{Name: "vercel", From: "65.5.0", To: "65.14.0", Status: config.ItemFailed},
+		}}},
+	}
+	writeUpdateRun(t, paths, run)
+	if got := loadLastResult(paths); got.label != "Save" {
+		t.Fatalf("an earlier update replaced the stored result: %q", got.label)
+	}
+
+	run.StartedAt, run.FinishedAt = saved.Add(time.Hour), saved.Add(time.Hour+90*time.Second)
+	writeUpdateRun(t, paths, run)
+	got := loadLastResult(paths)
+	progress := got.log.progress.String()
+	if got.label != "Update tools" || !got.fromHistory || !got.finishedAt.Equal(run.FinishedAt) || got.duration != 90*time.Second || got.err == nil {
+		t.Fatalf("last result = %+v", got)
+	}
+	for _, want := range []string{"node 24.22.2 → 24.22.3", "vercel 65.5.0 → 65.14.0: failed", "registry refused"} {
+		if !strings.Contains(progress, want) {
+			t.Fatalf("progress lacks %q:\n%s", want, progress)
+		}
+	}
+}
+
+func TestRefreshingShowsOnlyThisSessionsOperation(t *testing.T) {
+	log := newOperationLog()
+	log.Append(config.OperationEvent{Kind: config.OperationOK, Text: "pushed to origin/main"})
+	m := Model{loading: true, width: 80, height: 24, last: operationResult{label: "Save", log: log, fromHistory: true}}
+	if view := m.renderInspecting(); strings.Contains(view, "pushed to origin/main") || !strings.Contains(view, "Inspecting this Mac") {
+		t.Fatalf("a stored result was shown while inspecting:\n%s", view)
+	}
+	m.last.fromHistory = false
+	if view := m.renderInspecting(); !strings.Contains(view, "pushed to origin/main") || !strings.Contains(view, "Refreshing status") {
+		t.Fatalf("this session's result was not shown while refreshing:\n%s", view)
 	}
 }

@@ -73,6 +73,12 @@ func (r UpdateRun) Failed() bool {
 	return r.Error != "" || slices.ContainsFunc(r.Steps, func(step StepResult) bool { return step.Status == StepFailed })
 }
 
+// Label names the update the record is of.
+func (r UpdateRun) Label() string {
+	scope, _ := ParseUpdateScope(r.Scope)
+	return scope.Label()
+}
+
 func updateRunDir(paths Paths) string { return filepath.Join(paths.StateDir, "updates") }
 
 // updateRunName is a record's file name: the time its update started.
@@ -154,12 +160,16 @@ func LastUpdateRun(paths Paths) (UpdateRun, error) {
 // WriteUpdateRun renders a record: each step, each item's outcome, and for a
 // failed step mise's error, its command and the end of its output.
 func WriteUpdateRun(out io.Writer, run UpdateRun) {
-	scope, _ := ParseUpdateScope(run.Scope)
-	heading := scope.Label() + " · " + run.StartedAt.Local().Format("Jan 2, 2006 at 3:04 PM")
+	heading := run.Label() + " · " + run.StartedAt.Local().Format("Jan 2, 2006 at 3:04 PM")
 	if !run.FinishedAt.IsZero() {
 		heading += " · " + run.FinishedAt.Sub(run.StartedAt).Round(time.Second).String()
 	}
 	fmt.Fprintln(out, heading)
+	WriteUpdateSteps(out, run)
+}
+
+// WriteUpdateSteps renders a record without its heading.
+func WriteUpdateSteps(out io.Writer, run UpdateRun) {
 	if run.Error != "" {
 		fmt.Fprintf(out, "  %s %s\n", GlyphError, run.Error)
 	}

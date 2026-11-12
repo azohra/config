@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -361,5 +362,20 @@ func TestSnapshotDoesNotCommitWhatAKilledCaptureStranded(t *testing.T) {
 		if strandedWrite(filepath.Base(tracked)) {
 			t.Fatalf("a staging file reached the snapshot: %s", tracked)
 		}
+	}
+}
+
+// Git's status columns are positional: trimming the first line shifted its
+// path one column left of the rest.
+func TestSnapshotStatusKeepsGitStatusColumns(t *testing.T) {
+	snapshotter, root, _ := snapshotFixture(t)
+	for _, name := range []string{"settings", "other"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("changed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := snapshotStatus(snapshotter.Paths, snapshotter.Machine, snapshotter.Runner)
+	if want := []string{" M settings", "?? other"}; !slices.Equal(status.Changes, want) {
+		t.Fatalf("changes = %q, want %q", status.Changes, want)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/azohra/config/internal/config"
@@ -35,6 +36,31 @@ type storedOperationResult struct {
 
 func operationResultPath(paths config.Paths) string {
 	return filepath.Join(paths.StateDir, "last-operation.json")
+}
+
+// loadLastResult is the most recent operation on this Mac: the one this
+// interface stored, or a later update run from the command line.
+func loadLastResult(paths config.Paths) operationResult {
+	stored := loadOperationResult(paths)
+	run, err := config.LastUpdateRun(paths)
+	if err != nil || run.FinishedAt.IsZero() || !run.FinishedAt.After(stored.finishedAt) {
+		return stored
+	}
+	var steps strings.Builder
+	config.WriteUpdateSteps(&steps, run)
+	log := newOperationLog()
+	log.progress.appendText(config.OperationOutput, steps.String())
+	log.progress.bound()
+	result := operationResult{
+		label: run.Label(), log: log, finishedAt: run.FinishedAt,
+		duration: run.FinishedAt.Sub(run.StartedAt), fromHistory: true,
+	}
+	if run.Error != "" {
+		result.err = errors.New(run.Error)
+	} else if run.Failed() {
+		result.err = errors.New("a step failed")
+	}
+	return result
 }
 
 func loadOperationResult(paths config.Paths) operationResult {
