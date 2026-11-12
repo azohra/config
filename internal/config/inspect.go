@@ -51,7 +51,7 @@ func snapshotStatus(paths Paths, machine Machine, runner Runner) SnapshotStatus 
 	if porcelain.Err != nil {
 		unreadable = "working tree state is unreadable"
 	}
-	for _, line := range strings.Split(strings.TrimSpace(porcelain.Stdout), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(porcelain.Stdout, "\n"), "\n") {
 		if line != "" {
 			status.Changes = append(status.Changes, line)
 		}

@@ -64,7 +64,7 @@ func (m Model) render() string {
 
 func (m Model) renderInspecting() string {
 	blocks := []string{title.Render("CONFIG")}
-	if m.last.label != "" {
+	if m.last.label != "" && !m.last.fromHistory {
 		if output := m.operationTail(m.last.log.progress, max(4, m.height-inspectingChrome)); output != "" {
 			blocks = append(blocks, output)
 		}

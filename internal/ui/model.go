@@ -118,7 +118,7 @@ func New(paths config.Paths, machine config.Machine, executable, version string,
 		planRequest:      1,
 		planContext:      ctx,
 		planCancel:       cancel,
-		last:             loadOperationResult(paths),
+		last:             loadLastResult(paths),
 	}
 	if len(reopen) > 0 && reopen[0] && m.last.label != "" {
 		m.planCancel()
